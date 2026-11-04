@@ -1,6 +1,7 @@
 #include "reader.h"
 
 #include "bookloader.h"
+#include "exporter.h"
 #include "filepicker.h"
 #include "library.h"
 #include "narrator.h"
@@ -65,6 +66,31 @@ double Reader::progress() const {
     if (!m_book || m_book->sentenceCount() < 2)
         return 0;
     return qBound(0.0, double(m_sentence) / (m_book->sentenceCount() - 1), 1.0);
+}
+
+int Reader::audioMinutes(double speed) const {
+    if (!m_book)
+        return 0;
+    // Kokoro speaks about 160 words a minute at normal speed.
+    return int(std::ceil(m_book->wordCount() / (160.0 * qBound(0.5, speed, 2.0))));
+}
+
+void Reader::exportAudio() {
+    if (!m_book || !m_exporter || m_exporter->running())
+        return;
+    Exporter::Options options;
+    if (m_narrator) {
+        m_narrator->refreshSetup();
+        options.setup = m_narrator->kokoroSetup();
+        options.voice = m_narrator->voice();
+        options.speed = m_narrator->speed();
+    } else {
+        options.setup = KokoroSetup::find();
+    }
+    options.layout = Exporter::Layout(m_exporter->layout());
+    options.format = Exporter::Format(m_exporter->format());
+    options.folder = m_exporter->folder();
+    m_exporter->start(m_book, options);
 }
 
 int Reader::minutesLeftInChapter() const {

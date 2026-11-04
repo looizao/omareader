@@ -50,6 +50,7 @@ public:
     bool available() const { return m_setup.ready(); }
     QString problem() const { return m_setup.problem(); }
     QVariantMap setupInfo() const;
+    KokoroSetup kokoroSetup() const { return m_setup; }
     QString error() const { return m_error; }
     int sentence() const { return m_sentence; }
     int chapter() const;

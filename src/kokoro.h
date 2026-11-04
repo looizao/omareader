@@ -56,6 +56,10 @@ public:
         KokoroSetup setup;
         QString voice;
         double speed = 1.0;
+        // Runs Kokoros at a lower CPU priority, for work nobody is waiting
+        // to hear right away (exports), so live narration and the desktop
+        // stay responsive.
+        bool background = false;
     };
 
     explicit KokoroRunner(QObject *parent = nullptr);

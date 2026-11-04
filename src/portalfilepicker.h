@@ -15,6 +15,7 @@ public:
     explicit PortalFilePicker(QObject *parent = nullptr);
 
     void openBook() override;
+    void chooseFolder(const QString &current) override;
 
 private slots:
     void handleResponse(uint response, const QVariantMap &results);
@@ -27,6 +28,7 @@ private:
     void closePendingRequest();
 
     QString m_pendingPath;
+    bool m_pendingFolder = false; // the pending request picks a folder
     bool m_pending = false;
     // Bumped per request, so a late reply for a replaced request is ignored.
     int m_pendingGeneration = 0;

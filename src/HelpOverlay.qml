@@ -19,6 +19,7 @@ Rectangle {
         ["↑ ↓ PgUp PgDn", qsTr("Scroll")],
         ["T", qsTr("Contents")],
         ["A", qsTr("Voice and appearance")],
+        ["E", qsTr("Export as audio")],
         ["+ / −", qsTr("Bigger / smaller text")],
         ["O", qsTr("Open a book")],
         ["B", qsTr("Back to the library")],

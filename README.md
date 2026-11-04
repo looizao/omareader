@@ -59,6 +59,22 @@ Voices cover American and British English, Spanish, French, Hindi, Italian,
 Japanese, Brazilian Portuguese and Mandarin. Pick one that matches the book's
 language.
 
+## Exporting audio
+
+Press E (or the ⤓ button) to turn the whole book into audio for your phone, a
+podcast app or an audiobook player. Choose one file with chapter markers or a
+folder with one file per chapter, as MP3 (plays everywhere) or M4B (an AAC
+audiobook). The files use the voice and speed you read with, carry the title,
+author, track numbers and cover, and land in `~/Music/Audiobooks` unless you
+pick another folder.
+
+Kokoros reads the whole book first, which takes a while for a long book (it
+runs several times faster than real time on a recent CPU). The export keeps
+going after you close the dialog, at a lower priority so reading aloud stays
+smooth. It is built in a hidden folder and renamed into place at the end, so
+a cancelled export leaves nothing behind and an earlier export is never
+replaced. Exports need `ffmpeg`.
+
 ## Keyboard
 
 | Key | Action |
@@ -73,6 +89,7 @@ language.
 | ↑ ↓ (or K / J), PgUp, PgDn | Scroll |
 | T | Contents |
 | A | Voice and appearance |
+| E | Export as audio |
 | + / − | Bigger / smaller text |
 | O | Open a book |
 | B or Backspace | Back to the library |
@@ -89,6 +106,8 @@ exits 0 or 1 with errors on stderr, and `--json` prints one JSON object.
 ```sh
 omareader info book.epub --json          # metadata and chapters
 omareader text book.epub --chapter 3     # the text as omareader reads it
+omareader export book.epub --split       # audio, one MP3 per chapter
+omareader export book.epub --format m4b  # one M4B audiobook with chapters
 omareader doctor --json                  # is read-aloud ready?
 omareader skill install                  # agent skill for ~/.claude/skills
 ```
@@ -106,6 +125,9 @@ omareader skill install                  # agent skill for ~/.claude/skills
   maps the playback position to the word being heard.
 - `src/highlight.cpp` colours that word inside the paragraph without changing
   its layout.
+- `src/exporter.cpp` runs Kokoros once per chapter for exports and pipes the
+  samples into `ffmpeg`, then joins the chapters into one file with chapter
+  markers, or keeps them as a folder of tracks.
 
 ## Development
 

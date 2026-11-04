@@ -8,6 +8,7 @@
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <csignal>
+#include <unistd.h>
 
 namespace {
 const char *ModelFile = "kokoro-v1.0.onnx";
@@ -196,6 +197,10 @@ bool KokoroRunner::start(const Options &options, const QList<Line> &lines) {
 
     m_held = false;
     m_process.setWorkingDirectory(m_directory->path());
+    if (options.background)
+        m_process.setChildProcessModifier([] { (void)::nice(10); });
+    else
+        m_process.setChildProcessModifier({});
     m_process.start(options.setup.binary,
                     arguments(options, input.fileName(), m_directory->filePath("s_{line}.wav")));
     return true;

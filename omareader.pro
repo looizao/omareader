@@ -17,6 +17,7 @@ HEADERS += \
     src/book.h \
     src/bookloader.h \
     src/cli.h \
+    src/exporter.h \
     src/filepicker.h \
     src/highlight.h \
     src/kokoro.h \
@@ -34,6 +35,7 @@ SOURCES += \
     src/book.cpp \
     src/bookloader.cpp \
     src/cli.cpp \
+    src/exporter.cpp \
     src/highlight.cpp \
     src/kokoro.cpp \
     src/library.cpp \

@@ -10,6 +10,7 @@
 #include <QtQml>
 
 #include "cli.h"
+#include "exporter.h"
 #include "highlight.h"
 #include "library.h"
 #include "narrator.h"
@@ -54,9 +55,13 @@ int main(int argc, char *argv[]) {
     Narrator narrator;
     PortalFilePicker picker;
     Reader reader(&library, &narrator, &picker);
+    Exporter exporter;
+    exporter.setPicker(&picker);
+    reader.setExporter(&exporter);
 
     qmlRegisterType<ReadingHighlight>("Omareader", 1, 0, "ReadingHighlight");
     qmlRegisterUncreatableType<Narrator>("Omareader", 1, 0, "Narrator", "Use the narrator context property.");
+    qmlRegisterUncreatableType<Exporter>("Omareader", 1, 0, "Exporter", "Use the exporter context property.");
 
     QQmlApplicationEngine engine;
     QObject::connect(&translator, &Translator::changed, &engine, &QQmlEngine::retranslate);
@@ -65,6 +70,7 @@ int main(int argc, char *argv[]) {
     engine.rootContext()->setContextProperty("library", &library);
     engine.rootContext()->setContextProperty("narrator", &narrator);
     engine.rootContext()->setContextProperty("reader", &reader);
+    engine.rootContext()->setContextProperty("exporter", &exporter);
     engine.load(QUrl("qrc:/Main.qml"));
     if (engine.rootObjects().isEmpty())
         return 1;
@@ -76,6 +82,7 @@ int main(int argc, char *argv[]) {
 
     const int status = app.exec();
     narrator.stop();
+    exporter.cancel();
     reader.saveNow();
     return status;
 }

@@ -109,7 +109,25 @@ void PortalFilePicker::openBook() {
     options.insert(QStringLiteral("filters"), QVariant::fromValue(bookFilters()));
     options.insert(QStringLiteral("current_filter"), QVariant::fromValue(bookFilter()));
 
+    m_pendingFolder = false;
     requestFile(QStringLiteral("OpenFile"), tr("Open Book"), options);
+}
+
+void PortalFilePicker::chooseFolder(const QString &current) {
+    QVariantMap options;
+    options.insert(QStringLiteral("accept_label"), tr("Choose"));
+    options.insert(QStringLiteral("modal"), true);
+    options.insert(QStringLiteral("multiple"), false);
+    options.insert(QStringLiteral("directory"), true);
+    // The current folder may not exist until the first export makes it.
+    QString folder = QDir::cleanPath(current);
+    while (!folder.isEmpty() && folder != "/" && !QFileInfo(folder).isDir())
+        folder = QFileInfo(folder).path();
+    options.insert(QStringLiteral("current_folder"),
+                   portalPathBytes(QFileInfo(folder).isDir() ? folder : QDir::homePath()));
+
+    requestFile(QStringLiteral("OpenFile"), tr("Export Audio To"), options);
+    m_pendingFolder = true;
 }
 
 bool PortalFilePicker::connectToRequestPath(const QString &path) {
@@ -204,12 +222,17 @@ void PortalFilePicker::requestFile(const QString &method, const QString &title, 
 }
 
 void PortalFilePicker::handleResponse(uint response, const QVariantMap &results) {
+    const bool folder = m_pendingFolder;
     clearPending();
     if (response != 0)
         return;
 
     const QStringList uris = results.value(QStringLiteral("uris")).toStringList();
-    if (!uris.isEmpty())
+    if (uris.isEmpty())
+        return;
+    if (folder)
+        emit folderSelected(QUrl(uris.first()));
+    else
         emit openSelected(QUrl(uris.first()));
 }
 

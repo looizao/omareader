@@ -8,6 +8,7 @@
 #include <QTimer>
 #include <QVariantList>
 
+class Exporter;
 class FilePicker;
 class Library;
 class Narrator;
@@ -78,6 +79,12 @@ public:
     Q_INVOKABLE void readFrom(int paragraph, int offset);
     Q_INVOKABLE void togglePlay();
     Q_INVOKABLE void clearError();
+    // Exports the open book as audio with the narrator's voice and speed and
+    // the exporter's remembered layout, format and folder.
+    void setExporter(Exporter *exporter) { m_exporter = exporter; }
+    Q_INVOKABLE void exportAudio();
+    // Roughly how long the whole book takes to hear at this speed.
+    Q_INVOKABLE int audioMinutes(double speed) const;
     Q_INVOKABLE static bool isUrlOrPath(const QString &text);
 
     void openBook(BookPtr book); // for tests and the loader
@@ -99,6 +106,7 @@ private:
     Library *m_library;
     Narrator *m_narrator;
     FilePicker *m_picker;
+    Exporter *m_exporter = nullptr;
     BookPtr m_book;
     QFutureWatcher<std::pair<std::shared_ptr<Book>, QString>> m_loader;
     QString m_loadingPath;

@@ -9,6 +9,9 @@ import Omareader
 FocusScope {
     id: root
 
+    // Main owns the export dialog, so its progress shows from the library too.
+    signal exportRequested()
+
     // The view keeps the spoken word in sight until the user scrolls away.
     property bool following: true
     // Reading keys step aside while a panel has the keyboard.
@@ -95,6 +98,7 @@ FocusScope {
     Shortcut { sequence: "T"; enabled: root.visible && !settings.opened; onActivated: contents.opened ? contents.close() : contents.open() }
     Shortcut { sequence: "Ctrl+,"; enabled: root.visible && !contents.opened; onActivated: settings.opened ? settings.close() : settings.open() }
     Shortcut { sequence: "A"; enabled: root.visible && !contents.opened; onActivated: settings.opened ? settings.close() : settings.open() }
+    Shortcut { sequence: "E"; enabled: root.keysEnabled; onActivated: root.exportRequested() }
     Shortcut { sequences: ["Backspace", "B"]; enabled: root.keysEnabled; onActivated: { root.closePanels(); reader.closeBook() } }
 
     ColumnLayout {
@@ -132,6 +136,13 @@ FocusScope {
                     elide: Text.ElideRight
                     color: Colors.muted
                     font.pixelSize: 13
+                }
+                ToolButton {
+                    text: exporter.running ? qsTr("%1%").arg(Math.floor(exporter.progress * 100)) : "⤓"
+                    font.pixelSize: exporter.running ? 12 : 18
+                    onClicked: root.exportRequested()
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Export as audio (E)")
                 }
                 ToolButton {
                     text: "Aa"

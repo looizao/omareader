@@ -3,7 +3,7 @@
 #include <QObject>
 #include <QUrl>
 
-// The open dialog behind an interface, so tests can inject a fake picker.
+// The open and folder dialogs behind an interface, so tests can inject a fake picker.
 // Follows Omacut (MIT, David Heinemeier Hansson).
 class FilePicker : public QObject {
     Q_OBJECT
@@ -13,8 +13,11 @@ public:
     virtual ~FilePicker() = default;
 
     virtual void openBook() = 0;
+    // Asks for a folder, such as where audio exports go.
+    virtual void chooseFolder(const QString &current) { Q_UNUSED(current); }
 
 signals:
     void openSelected(const QUrl &url);
+    void folderSelected(const QUrl &url);
     void failed(const QString &message);
 };

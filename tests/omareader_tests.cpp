@@ -1,6 +1,9 @@
 #include <QDir>
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
+#include <QProcess>
 #include <QPainter>
 #include <QPdfWriter>
 #include <QSettings>
@@ -12,6 +15,7 @@
 
 #include "book.h"
 #include "bookloader.h"
+#include "exporter.h"
 #include "filepicker.h"
 #include "fixtures.h"
 #include "kokoro.h"
@@ -496,6 +500,212 @@ private slots:
         QCOMPARE(narrator.state(), Narrator::Stopped);
         QVERIFY(narrator.error().contains("koko"));
         narrator.setOverrides({}, {});
+    }
+
+    // Exporting the book as audio.
+
+    void exportPlanSkipsChaptersWithNothingToSay() {
+        Book book;
+        book.chapters = {{"Cover", {}}, {"", {{"Hello there. Again.", 0}}}, {"Two", {{"Bye.", 0}}}};
+        book.segment();
+        const QList<Exporter::Track> tracks = Exporter::plan(book);
+        QCOMPARE(tracks.size(), 2);
+        QCOMPARE(tracks.at(0).chapter, 1);
+        QCOMPARE(tracks.at(0).title, QString("Chapter 2"));
+        QCOMPARE(tracks.at(0).sentences.size(), 2);
+        QCOMPARE(tracks.at(0).words, 3);
+        QCOMPARE(Exporter::plan(book, 2, 2).size(), 1);
+        QCOMPARE(Exporter::plan(book, 2, 2).first().title, QString("Two"));
+    }
+
+    void exportNamesAreSafeForPhones() {
+        QCOMPARE(Exporter::safeName("Step One: To Get Started / Evaluated?"), QString("Step One To Get Started Evaluated"));
+        QCOMPARE(Exporter::safeName("...hidden. "), QString("hidden"));
+        QCOMPARE(Exporter::safeName("  "), QString("Audiobook"));
+        QVERIFY(Exporter::safeName(QString(200, 'a')).size() <= 80);
+        QCOMPARE(Exporter::trackFileName(3, 12, "Down the Rabbit-Hole", "mp3"), QString("03 Down the Rabbit-Hole.mp3"));
+        QCOMPARE(Exporter::trackFileName(7, 120, "", "m4a"), QString("007 Chapter 7.m4a"));
+        QCOMPARE(Exporter::extension(Exporter::M4b, Exporter::SingleFile), QString("m4b"));
+        QCOMPARE(Exporter::extension(Exporter::M4b, Exporter::ChapterFiles), QString("m4a"));
+    }
+
+    void exportNeverReplacesExistingFiles() {
+        QTemporaryDir dir;
+        const QString file = dir.filePath("Book.mp3");
+        QCOMPARE(Exporter::uniquePath(file, false), file);
+        write(file, "x");
+        QCOMPARE(Exporter::uniquePath(file, false), dir.filePath("Book (2).mp3"));
+        write(dir.filePath("Book (2).mp3"), "x");
+        QCOMPARE(Exporter::uniquePath(file, false), dir.filePath("Book (3).mp3"));
+        QVERIFY(QDir(dir.path()).mkdir("Book"));
+        QCOMPARE(Exporter::uniquePath(dir.filePath("Book"), true), dir.filePath("Book (2)"));
+    }
+
+    void exportChapterMetadataMarksEveryChapter() {
+        const QString metadata = Exporter::chapterMetadata("A = B; #1", "Ann", {"One", "Two\\Three"}, {24000, 12000}, 24000);
+        QVERIFY(metadata.startsWith(";FFMETADATA1\n"));
+        QVERIFY(metadata.contains("title=A \\= B\\; \\#1\n"));
+        QVERIFY(metadata.contains("artist=Ann\n"));
+        QVERIFY(metadata.contains("TIMEBASE=1/24000\nSTART=0\nEND=24000\ntitle=One\n"));
+        QVERIFY(metadata.contains("START=24000\nEND=36000\ntitle=Two\\\\Three\n"));
+        QCOMPARE(metadata.count("[CHAPTER]"), 2);
+    }
+
+    void exportArgumentsFollowTheFormat() {
+        const QStringList mp3 = Exporter::encodeArguments(Exporter::Mp3, 24000, "cover.jpg", {{"title", "One"}, {"album", "Book"}}, "out.mp3");
+        QCOMPARE(mp3.at(mp3.indexOf("-ar") + 1), QString("24000"));
+        QCOMPARE(mp3.at(mp3.indexOf("-c:a") + 1), QString("libmp3lame"));
+        QVERIFY(mp3.contains("attached_pic"));
+        QVERIFY(mp3.indexOf("album=Book") < mp3.indexOf("title=One"));
+        QVERIFY(mp3.contains("-n")); // never overwrite
+        QCOMPARE(mp3.last(), QString("out.mp3"));
+        const QStringList m4b = Exporter::joinArguments(Exporter::M4b, "parts.txt", "chapters.txt", {}, "book.m4b");
+        QCOMPARE(m4b.at(m4b.indexOf("-c:a") + 1), QString("copy"));
+        QCOMPARE(m4b.at(m4b.indexOf("-map_chapters") + 1), QString("1"));
+        QCOMPARE(m4b.at(m4b.indexOf("-f", m4b.indexOf("-map_chapters")) + 1), QString("mp4"));
+        QVERIFY(!m4b.contains("attached_pic"));
+    }
+
+    void exportSaysWhatIsMissing() {
+        QTemporaryDir dir;
+        Exporter exporter;
+        QSignalSpy finished(&exporter, &Exporter::finished);
+        Exporter::Options options;
+        options.folder = dir.filePath("out");
+        options.ffmpeg = dir.filePath("no-ffmpeg");
+        auto book = std::make_shared<Book>(sampleBook(dir.filePath("a.txt")));
+
+        QVERIFY(!exporter.start(book, options));
+        QVERIFY(exporter.error().contains("omareader setup"));
+        options.setup = fakeKoko(dir);
+        QVERIFY(!exporter.start(book, options));
+        QVERIFY(exporter.error().contains("ffmpeg"));
+        QVERIFY(!exporter.start(std::make_shared<Book>(), options));
+        QVERIFY(exporter.error().contains("nothing to read"));
+        QCOMPARE(finished.size(), 3);
+        QVERIFY(!exporter.running());
+    }
+
+    void exportReportsAnEncoderFailureAndCleansUp() {
+        QTemporaryDir dir;
+        const QString ffmpeg = dir.filePath("ffmpeg");
+        write(ffmpeg, "#!/bin/sh\ncat > /dev/null\necho 'no encoder here' >&2\nexit 1\n");
+        QFile::setPermissions(ffmpeg, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+        Exporter exporter;
+        QSignalSpy finished(&exporter, &Exporter::finished);
+        Exporter::Options options;
+        options.setup = fakeKoko(dir);
+        options.ffmpeg = ffmpeg;
+        options.folder = dir.filePath("out");
+        QVERIFY(exporter.start(std::make_shared<Book>(sampleBook(dir.filePath("a.txt"))), options));
+        QTRY_COMPARE(finished.size(), 1);
+        QVERIFY(!finished.first().at(0).toBool());
+        QVERIFY(exporter.error().contains("no encoder here"));
+        QVERIFY(QDir(options.folder).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden).isEmpty());
+    }
+
+    void exportWritesOneFileWithChapters() {
+        if (Exporter::findFfmpeg().isEmpty())
+            QSKIP("ffmpeg is not installed");
+        QTemporaryDir dir;
+        Exporter exporter;
+        QSignalSpy finished(&exporter, &Exporter::finished);
+        QSignalSpy progress(&exporter, &Exporter::progressChanged);
+        Exporter::Options options;
+        options.setup = fakeKoko(dir);
+        options.folder = dir.filePath("out");
+        options.format = Exporter::M4b;
+        QVERIFY(exporter.start(std::make_shared<Book>(sampleBook(dir.filePath("a.txt"))), options));
+        QVERIFY(exporter.running());
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 20000);
+        QVERIFY2(finished.first().at(0).toBool(), qPrintable(finished.first().at(1).toString()));
+        QCOMPARE(exporter.result(), dir.filePath("out/Sample.m4b"));
+        QCOMPARE(exporter.progress(), 1.0);
+        QVERIFY(progress.size() > 2);
+        QCOMPARE(QDir(options.folder).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden),
+                 QStringList{"Sample.m4b"});
+
+        const QString ffprobe = QStandardPaths::findExecutable("ffprobe");
+        if (!ffprobe.isEmpty()) {
+            QProcess probe;
+            probe.start(ffprobe, {"-v", "error", "-show_chapters", "-of", "json", exporter.result()});
+            QVERIFY(probe.waitForFinished());
+            const QJsonArray chapters = QJsonDocument::fromJson(probe.readAllStandardOutput()).object().value("chapters").toArray();
+            QCOMPARE(chapters.size(), 2);
+            QCOMPARE(chapters.at(1).toObject().value("tags").toObject().value("title").toString(), QString("Two"));
+        }
+
+        // A second export never replaces the first.
+        QVERIFY(exporter.start(std::make_shared<Book>(sampleBook(dir.filePath("a.txt"))), options));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 2, 20000);
+        QCOMPARE(exporter.result(), dir.filePath("out/Sample (2).m4b"));
+    }
+
+    void exportWritesAFolderWithAFilePerChapter() {
+        if (Exporter::findFfmpeg().isEmpty())
+            QSKIP("ffmpeg is not installed");
+        QTemporaryDir dir;
+        Exporter exporter;
+        QSignalSpy finished(&exporter, &Exporter::finished);
+        Exporter::Options options;
+        options.setup = fakeKoko(dir);
+        options.folder = dir.filePath("out");
+        options.layout = Exporter::ChapterFiles;
+        QVERIFY(exporter.start(std::make_shared<Book>(sampleBook(dir.filePath("a.txt"))), options));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 20000);
+        QVERIFY2(finished.first().at(0).toBool(), qPrintable(finished.first().at(1).toString()));
+        QCOMPARE(exporter.result(), dir.filePath("out/Sample"));
+        QCOMPARE(QDir(exporter.result()).entryList(QDir::Files), (QStringList{"01 One.mp3", "02 Two.mp3"}));
+        QCOMPARE(QDir(options.folder).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden),
+                 QStringList{"Sample"});
+        QVERIFY(QFileInfo(exporter.result()).permissions() & QFile::ReadOther);
+    }
+
+    void exportCancelLeavesNothingBehind() {
+        QTemporaryDir dir;
+        Exporter exporter;
+        QSignalSpy finished(&exporter, &Exporter::finished);
+        Exporter::Options options;
+        options.setup = fakeKoko(dir);
+        options.ffmpeg = QStandardPaths::findExecutable("sh"); // never reached
+        options.folder = dir.filePath("out");
+        QVERIFY(exporter.start(std::make_shared<Book>(sampleBook(dir.filePath("a.txt"))), options));
+        exporter.cancel();
+        QVERIFY(!exporter.running());
+        QCOMPARE(finished.size(), 1);
+        QVERIFY(exporter.error().isEmpty()); // cancelling is not an error
+        QVERIFY(QDir(options.folder).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden).isEmpty());
+    }
+
+    void exportRemembersItsChoices() {
+        {
+            Exporter exporter;
+            QVERIFY(exporter.folder().endsWith("Audiobooks"));
+            exporter.setLayout(Exporter::ChapterFiles);
+            exporter.setFormat(Exporter::M4b);
+            exporter.setFolder("/tmp/somewhere");
+        }
+        Exporter exporter;
+        QCOMPARE(exporter.layout(), int(Exporter::ChapterFiles));
+        QCOMPARE(exporter.format(), int(Exporter::M4b));
+        QCOMPARE(exporter.folder(), QString("/tmp/somewhere"));
+        exporter.setFormat(42);
+        QCOMPARE(exporter.format(), int(Exporter::M4b));
+    }
+
+    void readerExportsTheOpenBook() {
+        QTemporaryDir dir;
+        Library library(dir.filePath("library.json"), dir.filePath("covers"));
+        Reader reader(&library, nullptr, nullptr);
+        Exporter exporter;
+        reader.setExporter(&exporter);
+        reader.exportAudio(); // no book: nothing happens
+        QVERIFY(!exporter.running());
+        QVERIFY(exporter.error().isEmpty());
+        reader.openBook(std::make_shared<Book>(sampleBook(dir.filePath("a.txt"))));
+        QCOMPARE(reader.audioMinutes(1.0), 1);
+        reader.exportAudio(); // the tests' home has no model, so it says so
+        QVERIFY(exporter.error().contains("omareader setup"));
     }
 
     // The library and the reading position.
