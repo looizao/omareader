@@ -1,0 +1,21 @@
+<RCC>
+    <qresource prefix="/">
+        <file alias="Main.qml">Main.qml</file>
+        <file alias="qmldir">qmldir</file>
+        <file alias="Colors.qml">Colors.qml</file>
+        <file alias="LibraryView.qml">LibraryView.qml</file>
+        <file alias="BookCover.qml">BookCover.qml</file>
+        <file alias="ReaderView.qml">ReaderView.qml</file>
+        <file alias="BookParagraph.qml">BookParagraph.qml</file>
+        <file alias="NarrationBar.qml">NarrationBar.qml</file>
+        <file alias="ContentsPanel.qml">ContentsPanel.qml</file>
+        <file alias="SettingsPanel.qml">SettingsPanel.qml</file>
+        <file alias="HelpOverlay.qml">HelpOverlay.qml</file>
+        <file alias="MediaIcon.qml">MediaIcon.qml</file>
+        <file alias="AccentButton.qml">AccentButton.qml</file>
+        <file alias="skill.md">skill.md</file>
+        <file alias="setup-kokoros.sh">setup-kokoros.sh</file>
+        <file alias="i18n/en.json">i18n/en.json</file>
+        <file alias="i18n/pt-BR.json">i18n/pt-BR.json</file>
+    </qresource>
+</RCC>

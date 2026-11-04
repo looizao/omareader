@@ -1,0 +1,36 @@
+# Builds omareader from this checkout; bin/install runs it with makepkg -fsi.
+# Releases attach a PKGBUILD that builds from the release tarball instead.
+pkgname=omareader
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Offline ebook reader that reads books aloud with Kokoro and highlights each word'
+arch=('x86_64' 'aarch64')
+url='https://github.com/looizao/omareader'
+license=('MIT')
+depends=('qt6-base' 'qt6-declarative' 'qt6-multimedia' 'qt6-wayland' 'xdg-desktop-portal' 'poppler')
+makedepends=('gcc' 'make')
+options=('!debug')
+optdepends=('calibre: open Kindle (MOBI, AZW3) and other formats'
+            'rust: build Kokoros with omareader setup'
+            'opus: build Kokoros with omareader setup'
+            'pkgconf: build Kokoros with omareader setup')
+source=()
+sha256sums=()
+
+build() {
+  cd "$startdir/.."
+  ./bin/build
+}
+
+check() {
+  cd "$startdir/.."
+  ./bin/test
+}
+
+package() {
+  cd "$startdir/.."
+  install -Dm755 build/omareader "$pkgdir/usr/bin/omareader"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 "$startdir/omareader.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/omareader.svg"
+  install -Dm644 "$startdir/omareader.desktop" "$pkgdir/usr/share/applications/omareader.desktop"
+}

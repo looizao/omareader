@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=omareader
+Comment=Read books and listen along, word by word, fully offline
+Comment[pt_BR]=Leia livros e acompanhe a leitura em voz alta, palavra por palavra, totalmente offline
+GenericName=Ebook Reader
+GenericName[pt_BR]=Leitor de e-books
+Exec=omareader %f
+Icon=omareader
+Terminal=false
+Categories=Office;Viewer;Literature;
+Keywords=ebook;epub;book;reader;tts;read aloud;audiobook;
+MimeType=application/epub+zip;application/x-fictionbook+xml;application/x-mobipocket-ebook;application/vnd.amazon.mobi8-ebook;
+StartupWMClass=omareader

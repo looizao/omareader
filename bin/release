@@ -1,0 +1,49 @@
+#!/bin/sh
+# Bumps the version for a release: writes VERSION and the PKGBUILD, commits,
+# and pushes main. CI then builds, tags v<version>, and publishes the release.
+#
+#   bin/release 0.2.0            bump, commit, push
+#   bin/release 0.2.0 --dry-run  show what would change
+set -eu
+
+ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
+cd "$ROOT"
+
+version="${1:-}"
+dry_run=0
+[ "${2:-}" = "--dry-run" ] && dry_run=1
+
+if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+  echo "Use: bin/release <major.minor.patch> [--dry-run]" >&2
+  exit 1
+fi
+current="$(cat VERSION)"
+if [ "$version" = "$current" ]; then
+  echo "VERSION is already $version." >&2
+  exit 1
+fi
+if git rev-parse -q --verify "refs/tags/v$version" > /dev/null; then
+  echo "Tag v$version already exists." >&2
+  exit 1
+fi
+if [ "$(git branch --show-current)" != main ]; then
+  echo "Release from main." >&2
+  exit 1
+fi
+if [ -n "$(git status --porcelain)" ]; then
+  echo "Commit or stash your changes first." >&2
+  exit 1
+fi
+
+echo "Releasing $current -> $version"
+if [ "$dry_run" = 1 ]; then
+  echo "would write VERSION and pkgbuild/PKGBUILD, commit \"Release v$version\", and push main"
+  exit 0
+fi
+
+printf '%s\n' "$version" > VERSION
+sed -i -e "s/^pkgver=.*/pkgver=$version/" -e "s/^pkgrel=.*/pkgrel=1/" pkgbuild/PKGBUILD
+git add VERSION pkgbuild/PKGBUILD
+git commit -m "Release v$version"
+git push origin main
+echo "Pushed. CI tags v$version and publishes the release once the build passes."

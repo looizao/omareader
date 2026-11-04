@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <rect width="64" height="64" rx="14" fill="#FFD60A"/>
+  <!-- An open book -->
+  <path d="M12 20c6-2.5 12-2.5 18 1v26c-6-3.5-12-3.5-18-1z" fill="#16161a"/>
+  <path d="M34 21c6-3.5 12-3.5 18-1v26c-6-2.5-12-2.5-18 1z" fill="#16161a"/>
+  <!-- The word being read -->
+  <rect x="15" y="27" width="11" height="3.2" rx="1" fill="#FFD60A"/>
+  <rect x="15" y="33" width="8" height="2" rx="1" fill="#FFD60A" opacity=".45"/>
+  <rect x="37" y="27" width="11" height="2" rx="1" fill="#FFD60A" opacity=".45"/>
+  <rect x="37" y="33" width="9" height="2" rx="1" fill="#FFD60A" opacity=".45"/>
+  <!-- Sound -->
+  <path d="M27 11.5a7 7 0 0 1 10 0" fill="none" stroke="#16161a" stroke-width="2.6" stroke-linecap="round"/>
+  <path d="M23.5 8a12 12 0 0 1 17 0" fill="none" stroke="#16161a" stroke-width="2.6" stroke-linecap="round" opacity=".55"/>
+</svg>

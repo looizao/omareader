@@ -1,0 +1,36 @@
+# Builds omareader from a GitHub release tarball. CI fills in the version and
+# checksum and attaches the result to each release, ready for omarchy-pkgs.
+pkgname=omareader
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc='Offline ebook reader that reads books aloud with Kokoro and highlights each word'
+arch=('x86_64' 'aarch64')
+url='https://github.com/looizao/omareader'
+license=('MIT')
+depends=('qt6-base' 'qt6-declarative' 'qt6-multimedia' 'qt6-wayland' 'xdg-desktop-portal' 'poppler')
+makedepends=('gcc' 'make')
+options=('!debug')
+optdepends=('calibre: open Kindle (MOBI, AZW3) and other formats'
+            'rust: build Kokoros with omareader setup'
+            'opus: build Kokoros with omareader setup'
+            'pkgconf: build Kokoros with omareader setup')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/looizao/omareader/releases/download/v$pkgver/omareader-$pkgver.tar.gz")
+sha256sums=('@SHA256@')
+
+build() {
+  cd "$pkgname-$pkgver"
+  ./bin/build
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  ./bin/test
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 build/omareader "$pkgdir/usr/bin/omareader"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 pkgbuild/omareader.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/omareader.svg"
+  install -Dm644 pkgbuild/omareader.desktop "$pkgdir/usr/share/applications/omareader.desktop"
+}
