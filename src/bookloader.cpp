@@ -397,31 +397,149 @@ QList<Chapter> BookLoader::markdownChapters(const QString &input) {
     return chapters;
 }
 
-QList<Chapter> BookLoader::pdfChapters(const QString &output, int pagesPerChapter) {
+QList<PdfOutlineItem> BookLoader::pdfOutline(const QString &pdftohtmlXml) {
+    // pdftohtml -xml writes the bookmarks as nested <outline> lists of
+    // <item page="N">title</item>.
+    QList<PdfOutlineItem> items;
+    static const QRegularExpression token(R"re(<outline>|</outline>|<item page="(\d+)">(.*?)</item>)re");
+    int depth = 0;
+    auto it = token.globalMatch(pdftohtmlXml);
+    while (it.hasNext()) {
+        const auto match = it.next();
+        const QString whole = match.captured(0);
+        if (whole == "<outline>") {
+            ++depth;
+        } else if (whole == "</outline>") {
+            --depth;
+        } else {
+            QString title = match.captured(2);
+            title.remove(QRegularExpression("<[^>]*>"));
+            static const QRegularExpression entity("&(#?\\w+);");
+            QString decoded;
+            int last = 0;
+            auto entities = entity.globalMatch(title);
+            while (entities.hasNext()) {
+                const auto e = entities.next();
+                decoded += title.mid(last, e.capturedStart() - last) + decodeEntity(e.captured(1));
+                last = int(e.capturedEnd());
+            }
+            decoded += title.mid(last);
+            items.append({match.captured(1).toInt(), qMax(0, depth - 1), decoded.simplified()});
+        }
+    }
+    return items;
+}
+
+QList<Chapter> BookLoader::pdfChapters(const QString &output, const QList<PdfOutlineItem> &outline, int pagesPerChapter) {
     QStringList pages = output.split('\f');
     while (!pages.isEmpty() && pages.last().trimmed().isEmpty())
         pages.removeLast();
+    const int pageCount = int(pages.size());
 
     static const QRegularExpression pageNumber(R"(^\s*(\d{1,4}|[ivxlc]{1,6})\s*$)",
                                                QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression numbersOnly(R"(^[\d\s.,:;%+\-−–()×x/=]+$)");
     auto endsSentence = [](const QString &t) {
         static const QRegularExpression end(R"([.!?…:"”’)\]]\s*$)");
         return end.match(t).hasMatch();
     };
+    auto runningKey = [](const QString &line) {
+        QString key = line.toLower();
+        key.remove(QRegularExpression(R"([\d\s.,:;\-–—|]+)"));
+        return key;
+    };
 
-    QList<Chapter> chapters;
-    for (int pageIndex = 0; pageIndex < pages.size(); ++pageIndex) {
-        if (pageIndex % pagesPerChapter == 0) {
-            Chapter chapter;
-            const int last = qMin(int(pages.size()), pageIndex + pagesPerChapter);
-            chapter.title = last - pageIndex == 1 ? tr("Page %1").arg(pageIndex + 1)
-                                                  : tr("Pages %1–%2").arg(pageIndex + 1).arg(last);
-            chapters.append(chapter);
-        }
-
-        QStringList lines = pages.at(pageIndex).split('\n');
+    QList<QStringList> pageLines;
+    for (const QString &page : std::as_const(pages)) {
+        QStringList lines = page.split('\n');
         for (auto &line : lines)
             line = line.simplified();
+        pageLines.append(lines);
+    }
+
+    // Running heads and feet ("24 CHAPTER 2 Working with text") repeat near
+    // the top or bottom of many pages; any line there that recurs on three or
+    // more pages is page furniture, not reading text.
+    QHash<QString, int> edgeCounts;
+    auto edgeLines = [](const QStringList &lines) {
+        QList<int> indexes;
+        int seen = 0;
+        for (int i = 0; i < lines.size() && seen < 3; ++i)
+            if (!lines.at(i).isEmpty()) { indexes.append(i); ++seen; }
+        seen = 0;
+        for (int i = int(lines.size()) - 1; i >= 0 && seen < 3; --i)
+            if (!lines.at(i).isEmpty()) { if (!indexes.contains(i)) indexes.append(i); ++seen; }
+        return indexes;
+    };
+    for (const auto &lines : std::as_const(pageLines)) {
+        QSet<QString> keys;
+        const QList<int> edges = edgeLines(lines);
+        for (int i = 0; i < lines.size(); ++i)
+            if ((edges.contains(i) ? lines.at(i).size() <= 90 : lines.at(i).size() <= 40)
+                && !runningKey(lines.at(i)).isEmpty())
+                keys.insert(runningKey(lines.at(i)));
+        for (const auto &key : std::as_const(keys))
+            ++edgeCounts[key];
+    }
+    const int repeatThreshold = qMax(3, pageCount / 40);
+
+    // Outline titles, so headings in the text are kept and marked as
+    // headings, but only on the page each one points to: an outline entry
+    // like "Chapter 2" must not protect every running head that says so.
+    QHash<int, QSet<QString>> headingKeys; // 0-based page -> titles
+    for (const auto &item : outline)
+        headingKeys[item.page - 1].insert(Text::normalizeWord(item.title));
+
+    // Chapters follow the outline at the shallowest level with at least three
+    // entries; without an outline, groups of pages.
+    QList<std::pair<int, QString>> starts; // 0-based page, title
+    if (!outline.isEmpty()) {
+        // A single top-level entry (often the book's own title) wrapping
+        // everything means the chapters are one level down.
+        int level = 0;
+        for (int candidate = 0; candidate < 4; ++candidate) {
+            int count = 0;
+            for (const auto &item : outline)
+                count += item.level == candidate;
+            if (count >= 3) {
+                level = candidate;
+                break;
+            }
+        }
+        for (const auto &item : outline) {
+            if (item.level != level || item.page < 1 || item.page > pageCount)
+                continue;
+            if (!starts.isEmpty() && starts.last().first == item.page - 1)
+                starts.last().second += " · " + item.title;
+            else if (starts.isEmpty() || item.page - 1 > starts.last().first)
+                starts.append({item.page - 1, item.title});
+        }
+        if (!starts.isEmpty() && starts.first().first > 0)
+            starts.prepend({0, tr("Front matter")});
+    }
+    if (starts.isEmpty())
+        for (int page = 0; page < pageCount; page += pagesPerChapter) {
+            const int last = qMin(pageCount, page + pagesPerChapter);
+            starts.append({page, last - page == 1 ? tr("Page %1").arg(page + 1)
+                                                  : tr("Pages %1–%2").arg(page + 1).arg(last)});
+        }
+
+    QList<Chapter> chapters;
+    int nextStart = 0;
+    for (int pageIndex = 0; pageIndex < pageCount; ++pageIndex) {
+        if (nextStart < starts.size() && starts.at(nextStart).first == pageIndex) {
+            chapters.append(Chapter{starts.at(nextStart).second, {}});
+            ++nextStart;
+        }
+        if (chapters.isEmpty())
+            chapters.append(Chapter{});
+
+        const QStringList &lines = pageLines.at(pageIndex);
+        const QList<int> edges = edgeLines(lines);
+        auto isHeading = [&](const QString &line) {
+            const QString key = Text::normalizeWord(line);
+            return headingKeys.value(pageIndex).contains(key);
+        };
         // Typical line length on this page, to spot a paragraph's short last line.
         QList<int> lengths;
         for (const auto &line : lines)
@@ -432,37 +550,86 @@ QList<Chapter> BookLoader::pdfChapters(const QString &output, int pagesPerChapte
 
         QStringList paragraphs;
         QString current;
+        auto flush = [&] {
+            if (!current.isEmpty())
+                paragraphs.append(current);
+            current.clear();
+        };
         for (int i = 0; i < lines.size(); ++i) {
             const QString &line = lines.at(i);
-            if (line.isEmpty() || pageNumber.match(line).hasMatch()) {
-                if (!current.isEmpty())
-                    paragraphs.append(current);
-                current.clear();
+            // A running head can also just repeat the chapter's title, even
+            // in a section too short for it to recur three times.
+            const QString chapterKey = runningKey(chapters.last().title);
+            const bool repeatsTitle = !chapterKey.isEmpty() && runningKey(line) == chapterKey
+                                      && pageIndex != starts.value(nextStart - 1).first;
+            // Next to figures pdftotext can place a running head mid-page,
+            // so short lines count wherever they are.
+            const bool furniture = (edges.contains(i) || line.size() <= 40)
+                                   && ((edgeCounts.value(runningKey(line)) >= repeatThreshold
+                                        && !isHeading(line))
+                                       || repeatsTitle);
+            if (line.isEmpty() || pageNumber.match(line).hasMatch() || furniture) {
+                flush();
                 continue;
             }
-            if (current.endsWith('-') && !line.isEmpty() && line.at(0).isLower())
+            if (isHeading(line)) {
+                flush();
+                paragraphs.append(QString(QChar(0x1)) + line); // marked as a heading below
+                continue;
+            }
+            if (current.endsWith('-') && line.at(0).isLower())
                 current = current.left(current.size() - 1) + line;
             else
                 current = current.isEmpty() ? line : current + ' ' + line;
-            if (endsSentence(line) && line.size() < typical * 0.75) {
-                paragraphs.append(current);
-                current.clear();
-            }
+            if (endsSentence(line) && line.size() < typical * 0.75)
+                flush();
         }
-        if (!current.isEmpty())
-            paragraphs.append(current);
+        flush();
+
+        // Figure labels and table cells come out as runs of short fragments
+        // with no sentence in them; reading them aloud is noise.
+        auto fragment = [&](const QString &p) {
+            if (p.startsWith(QChar(0x1)))
+                return false;
+            return numbersOnly.match(p).hasMatch() || (p.split(' ').size() <= 6 && !endsSentence(p));
+        };
+        // With an outline the headings are known, so any fragment left is
+        // figure text; without one, only runs of three or more go.
+        QList<bool> drop(paragraphs.size(), false);
+        if (!outline.isEmpty())
+            for (int i = 0; i < paragraphs.size(); ++i)
+                drop[i] = fragment(paragraphs.at(i));
+        for (int i = 0; i < paragraphs.size();) {
+            int j = i;
+            while (j < paragraphs.size() && fragment(paragraphs.at(j)))
+                ++j;
+            if (j - i >= 3)
+                for (int k = i; k < j; ++k)
+                    drop[k] = true;
+            i = j > i ? j : i + 1;
+        }
 
         auto &target = chapters.last().paragraphs;
+        bool first = true;
         for (int i = 0; i < paragraphs.size(); ++i) {
-            const QString &p = paragraphs.at(i);
+            QString p = paragraphs.at(i);
+            if (drop.at(i) || numbersOnly.match(p).hasMatch())
+                continue;
+            const bool firstOnPage = first;
+            first = false;
+            if (p.startsWith(QChar(0x1))) {
+                target.append({p.mid(1), 2});
+                continue;
+            }
             if (!hasReadableText(p))
                 continue;
             // A paragraph that runs over the page break continues here.
-            if (i == 0 && p.at(0).isLower()) {
+            if (firstOnPage && p.at(0).isLower()) {
                 QList<Paragraph> *previous = !target.isEmpty() ? &target
                                            : chapters.size() > 1 ? &chapters[chapters.size() - 2].paragraphs
                                                                  : nullptr;
-                if (previous && !previous->isEmpty() && !endsSentence(previous->last().text)) {
+                if (previous && !previous->isEmpty() && previous->last().level == 0
+                    && !endsSentence(previous->last().text)) {
                     QString &tail = previous->last().text;
                     tail = tail.endsWith('-') ? tail.left(tail.size() - 1) + p : tail + ' ' + p;
                     continue;
@@ -830,7 +997,7 @@ bool BookLoader::loadPdf(Book &book, QString *error) {
                 if (line.startsWith("Title:"))
                     book.title = line.mid(6).simplified();
                 else if (line.startsWith("Author:"))
-                    book.author = line.mid(7).simplified();
+                    book.author = line.mid(7).split(';', Qt::SkipEmptyParts).join(", ").simplified();
             }
         }
     }
@@ -843,7 +1010,21 @@ bool BookLoader::loadPdf(Book &book, QString *error) {
                                    : tr("pdftotext could not read this PDF: %1").arg(message);
         return false;
     }
-    book.chapters = pdfChapters(QString::fromUtf8(process.readAllStandardOutput()));
+    const QString text = QString::fromUtf8(process.readAllStandardOutput());
+
+    // The bookmarks give the chapters. pdftohtml (also poppler) writes them
+    // out; rendering only the first page keeps that quick.
+    QList<PdfOutlineItem> outline;
+    const QString pdftohtml = QStandardPaths::findExecutable("pdftohtml");
+    if (!pdftohtml.isEmpty()) {
+        QProcess xml;
+        xml.start(pdftohtml, {"-xml", "-i", "-q", "-stdout", "-enc", "UTF-8", "-f", "1", "-l", "1", book.path});
+        if (xml.waitForFinished(60000) && xml.exitCode() == 0)
+            outline = pdfOutline(QString::fromUtf8(xml.readAllStandardOutput()));
+        else
+            xml.kill();
+    }
+    book.chapters = pdfChapters(text, outline);
     if (book.chapters.isEmpty()) {
         *error = tr("This PDF has no text layer (it is probably scanned images), so there is nothing to read aloud.");
         return false;

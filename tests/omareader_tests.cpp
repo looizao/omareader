@@ -203,12 +203,51 @@ private slots:
     void pdfTextReflows() {
         const QString output = "The quick brown fox jumps over the lazy dog and keeps run-\n"
                                "ning far away.\n\n12\n\fit continues on the next page.\nA new one.\n";
-        const auto chapters = BookLoader::pdfChapters(output, 10);
+        const auto chapters = BookLoader::pdfChapters(output, {}, 10);
         QCOMPARE(chapters.size(), 1);
         QCOMPARE(chapters[0].title, QString("Pages 1–2"));
         QCOMPARE(chapters[0].paragraphs.size(), 2);
         QCOMPARE(chapters[0].paragraphs[0].text,
                  QString("The quick brown fox jumps over the lazy dog and keeps running far away."));
+    }
+
+    void pdfOutlineParses() {
+        const auto items = BookLoader::pdfOutline(
+            "<pdf2xml><page number=\"1\"></page><outline><item page=\"1\">Cover</item>"
+            "<item page=\"3\">1 Fish &amp; Chips</item><outline><item page=\"4\">1.1 Batter</item></outline>"
+            "<item page=\"6\">2 Peas</item></outline></pdf2xml>");
+        QCOMPARE(items.size(), 4);
+        QCOMPARE(items[1].title, QString("1 Fish & Chips"));
+        QCOMPARE(items[1].page, 3);
+        QCOMPARE(items[2].level, 1);
+        QCOMPARE(items[3].level, 0);
+    }
+
+    void pdfChaptersFollowTheOutlineAndDropFurniture() {
+        // Six pages; every page carries a running head, and page 4 a figure.
+        QStringList pages;
+        for (int page = 1; page <= 6; ++page) {
+            QString text = QString("%1\n\nCHAPTER %2\n\n").arg(page).arg(page < 4 ? 1 : 2);
+            if (page == 1)
+                text += "1 Opening\n\nThe story starts on the first page.\n";
+            else if (page == 4)
+                text += "2 Middle\n\nInput\n0.25\nOutput layer\nHidden layer\n\nThe middle chapter begins here.\n";
+            else
+                text += QStringList{"", "", "Rain fell on the second page.", "Wind rose by the third.", "",
+                                    "Snow came with the fifth page.", "Sun returned on the last one."}.at(page) + "\n";
+            pages << text;
+        }
+        const QList<PdfOutlineItem> outline{{1, 0, "1 Opening"}, {4, 0, "2 Middle"}, {2, 1, "Chapter 2"}};
+        const auto chapters = BookLoader::pdfChapters(pages.join('\f'), outline);
+        QCOMPARE(chapters.size(), 2);
+        QCOMPARE(chapters[0].title, QString("1 Opening"));
+        QCOMPARE(chapters[1].title, QString("2 Middle"));
+        QStringList second;
+        for (const auto &p : chapters[1].paragraphs)
+            second << p.text;
+        QCOMPARE(second, (QStringList{"2 Middle", "The middle chapter begins here.",
+                                      "Snow came with the fifth page.", "Sun returned on the last one."}));
+        QCOMPARE(chapters[1].paragraphs[0].level, 2);
     }
 
     void epubLoadsWithTocTitlesAndCover() {

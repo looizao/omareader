@@ -4,6 +4,12 @@
 
 #include <QCoreApplication>
 
+struct PdfOutlineItem {
+    int page = 0; // 1-based
+    int level = 0;
+    QString title;
+};
+
 // Turns a file on disk into a Book. Everything runs locally: EPUB, FB2, DOCX,
 // ODT, HTML, Markdown and plain text are parsed in-process, PDF goes through
 // poppler's pdftotext, and Kindle and other formats through Calibre's
@@ -20,7 +26,9 @@ public:
     static QList<Paragraph> htmlParagraphs(const QByteArray &html, QString *title = nullptr);
     static QList<Chapter> textChapters(const QString &text);
     static QList<Chapter> markdownChapters(const QString &text);
-    static QList<Chapter> pdfChapters(const QString &pdftotextOutput, int pagesPerChapter = 10);
+    static QList<Chapter> pdfChapters(const QString &pdftotextOutput, const QList<PdfOutlineItem> &outline = {},
+                                      int pagesPerChapter = 10);
+    static QList<PdfOutlineItem> pdfOutline(const QString &pdftohtmlXml);
     static QString decodeText(const QByteArray &bytes);
 
 private:
