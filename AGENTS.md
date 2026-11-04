@@ -9,10 +9,14 @@ that reads books aloud with Kokoros and highlights each word as it's spoken.
 Every new feature, bugfix, or other change goes through all of these steps,
 in order, before it counts as done:
 
-1. **Test it fully.**
+1. **Test it locally.**
    - Add or update tests in `tests/omareader_tests.cpp` for the behavior you
      changed: a failing test first for a bugfix, and new cases for a feature.
    - Run `bin/build` and `bin/test`; both must pass with no failures.
+   - Local runs are the quick check. The full CI (shell lint, the Arch
+     container build and tests, the package, the release) runs on GitHub,
+     and only a green GitHub run counts. Don't stand in for it by running
+     the workflow locally (act, podman, docker).
    - When the change touches the window, look at it: drive the real QML
      offscreen (`QT_QPA_PLATFORM=offscreen`, load `qrc:/Main.qml`, save
      `window->grabWindow()`) and check the screenshot. When it touches
@@ -23,8 +27,9 @@ in order, before it counts as done:
      `~/Documents/books`.
 2. **Commit it** with a short imperative message ("Skip code listings in
    PDFs").
-3. **Push it to main** and wait for CI (`.github/workflows/ci.yml`) to pass.
-   Fix anything it reports before moving on.
+3. **Push it to main** and wait for the full CI run on GitHub
+   (`.github/workflows/ci.yml`) to finish green: every job, not just the
+   first. Fix anything it reports, push again, and wait again.
 4. **Install it locally** so the user can test it: run `bin/install`. If sudo
    needs a password, build the package with
    `cd pkgbuild && makepkg -f --noconfirm` and give the user the exact
