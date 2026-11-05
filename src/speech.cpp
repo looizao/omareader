@@ -5,7 +5,9 @@
 #include <QCoreApplication>
 #include <QFile>
 #include <QtEndian>
+#include <cmath>
 #include <cstring>
+#include <vector>
 
 namespace {
 // Reads a little-endian value from unaligned bytes.
@@ -201,6 +203,99 @@ bool readWav(const QString &path, Audio *audio, QString *error) {
         return false;
     }
     return parseWav(file.readAll(), audio, error);
+}
+
+
+Audio resample(const Audio &audio, int sampleRate) {
+    if (audio.sampleRate <= 0 || sampleRate <= 0 || audio.sampleRate == sampleRate || audio.frames() == 0) {
+        Audio out = audio;
+        if (out.sampleRate <= 0)
+            out.sampleRate = sampleRate;
+        return out;
+    }
+    const auto *in = reinterpret_cast<const float *>(audio.samples.constData());
+    const qint64 inFrames = audio.frames();
+    const qint64 outFrames = qMax<qint64>(1, qint64(std::llround(double(inFrames) * sampleRate / audio.sampleRate)));
+    Audio out;
+    out.sampleRate = sampleRate;
+    out.samples.resize(outFrames * qint64(sizeof(float)));
+    auto *dst = reinterpret_cast<float *>(out.samples.data());
+    const double step = double(audio.sampleRate) / sampleRate;
+    for (qint64 i = 0; i < outFrames; ++i) {
+        const double position = i * step;
+        const qint64 index = qint64(position);
+        const double fraction = position - double(index);
+        const float a = in[qMin(index, inFrames - 1)];
+        const float b = in[qMin(index + 1, inFrames - 1)];
+        dst[i] = float(a + (b - a) * fraction);
+    }
+    return out;
+}
+
+Audio timeStretch(const Audio &audio, double speed) {
+    speed = qBound(0.5, speed, 2.0);
+    const qint64 inFrames = audio.frames();
+    if (std::abs(speed - 1.0) < 1e-3 || audio.sampleRate <= 0 || inFrames == 0)
+        return audio;
+    const auto *in = reinterpret_cast<const float *>(audio.samples.constData());
+    // 30 ms windows overlapping by half, each free to move 10 ms either way:
+    // short enough to follow speech, long enough to hold a pitch period.
+    const int window = qMax(16, int(audio.sampleRate * 0.03)) & ~1;
+    const int hop = window / 2;
+    const int tolerance = qMax(1, int(audio.sampleRate * 0.01));
+    const qint64 outFrames = qMax<qint64>(1, qint64(std::llround(inFrames / speed)));
+
+    std::vector<float> taper(window);
+    for (int i = 0; i < window; ++i)
+        taper[i] = float(0.5 - 0.5 * std::cos(2 * M_PI * i / window));
+    std::vector<double> sum(outFrames + window, 0.0);
+    std::vector<double> weight(outFrames + window, 0.0);
+    auto sample = [&](qint64 index) -> float { return index >= 0 && index < inFrames ? in[index] : 0.0f; };
+
+    qint64 previous = 0; // where the last window was taken from
+    for (qint64 out = 0, k = 0; out < outFrames; out += hop, ++k) {
+        const qint64 ideal = qint64(std::llround(k * hop * speed));
+        qint64 chosen = ideal;
+        if (k > 0) {
+            // Pick the window whose start best matches how the previous one
+            // would naturally have continued.
+            const qint64 natural = previous + hop;
+            double best = -1e300;
+            for (qint64 offset = -tolerance; offset <= tolerance; offset += 2) {
+                const qint64 candidate = ideal + offset;
+                if (candidate < 0)
+                    continue;
+                double score = 0;
+                for (int i = 0; i < hop; i += 2)
+                    score += double(sample(natural + i)) * sample(candidate + i);
+                if (score > best) {
+                    best = score;
+                    chosen = candidate;
+                }
+            }
+        }
+        for (int i = 0; i < window && out + i < qint64(sum.size()); ++i) {
+            sum[out + i] += double(sample(chosen + i)) * taper[i];
+            weight[out + i] += taper[i];
+        }
+        previous = chosen;
+    }
+    Audio result;
+    result.sampleRate = audio.sampleRate;
+    result.samples.resize(outFrames * qint64(sizeof(float)));
+    auto *dst = reinterpret_cast<float *>(result.samples.data());
+    for (qint64 i = 0; i < outFrames; ++i)
+        dst[i] = weight[i] > 1e-6 ? float(sum[i] / weight[i]) : 0.0f;
+    return result;
+}
+
+void applyGain(Audio *audio, double gain) {
+    if (!audio || std::abs(gain - 1.0) < 1e-6)
+        return;
+    auto *samples = reinterpret_cast<float *>(audio->samples.data());
+    const qint64 frames = audio->frames();
+    for (qint64 i = 0; i < frames; ++i)
+        samples[i] = float(qBound(-1.0, samples[i] * gain, 1.0));
 }
 
 }

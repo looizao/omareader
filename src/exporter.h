@@ -1,8 +1,8 @@
 #pragma once
 
 #include "book.h"
-#include "kokoro.h"
 #include "speech.h"
+#include "synthesizer.h"
 
 #include <QHash>
 #include <QObject>
@@ -14,7 +14,7 @@
 class FilePicker;
 
 // Turns a whole book into audio files for listening elsewhere, such as a
-// podcast or audiobook app on a phone. Kokoros reads one chapter per run and
+// podcast or audiobook app on a phone. The voice reads one chapter per run and
 // ffmpeg encodes each chapter as it arrives; at the end the chapters become
 // either one file with chapter markers or a folder with one file per chapter.
 // Everything is built in a hidden folder beside the destination and renamed
@@ -42,9 +42,9 @@ public:
     Q_ENUM(Format)
 
     struct Options {
-        KokoroSetup setup;
-        QString voice = "af_heart";
-        double speed = 1.0;
+        // The engine, voice, speed and tuning, copied when the export starts:
+        // changing the voice afterwards doesn't change an export under way.
+        SynthesisOptions synthesis{VoiceSettings::recommended(Engine::Kokoro), {}, {}};
         Layout layout = SingleFile;
         Format format = Mp3;
         QString folder;    // where the file or the book's folder goes
@@ -109,10 +109,6 @@ public:
     static QStringList joinArguments(Format format, const QString &list, const QString &metadata,
                                      const QString &coverPath, const QString &output);
 
-    // Silence after a paragraph, so the listener hears where it ends.
-    static constexpr double ParagraphPause = 0.45;
-    static constexpr double HeadingPause = 0.9;
-
 signals:
     void runningChanged();
     void progressChanged();
@@ -123,7 +119,7 @@ signals:
 
 private:
     void startTrack();
-    void onSentenceReady(int id, const QString &wav, const QString &tsv);
+    void onSentenceReady(int id, const SpokenSentence &sentence);
     void onRunFinished(bool ok, const QString &error);
     void writeReady();
     void writeSamples(const QByteArray &samples);
@@ -154,7 +150,7 @@ private:
 
     std::unique_ptr<QTemporaryDir> m_work;
     QString m_cover;
-    KokoroRunner m_runner;
+    std::unique_ptr<Synthesizer> m_synth;
     std::unique_ptr<QProcess> m_encoder;
     std::unique_ptr<QProcess> m_joiner;
     int m_track = -1;

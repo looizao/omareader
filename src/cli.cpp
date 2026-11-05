@@ -3,6 +3,9 @@
 #include "bookloader.h"
 #include "exporter.h"
 #include "kokoro.h"
+#include "qwen.h"
+#include "synthesizer.h"
+#include "voicesettings.h"
 
 #include <QCommandLineParser>
 #include <QCoreApplication>
@@ -14,6 +17,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QTextStream>
 #include <QTimer>
@@ -72,6 +76,58 @@ std::shared_ptr<Book> loadBook(const QString &path) {
     if (!book)
         fail(error);
     return book;
+}
+
+void addVoiceOptions(QCommandLineParser &parser) {
+    parser.addOption({"engine", "kokoro or qwen (the window's choice by default)", "engine"});
+    parser.addOption({"voice", "One of the engine's voices, such as af_heart or ryan (see omareader voices)", "voice"});
+    parser.addOption({"language", "Qwen3-TTS only: the language to read in, such as English or Portuguese", "language"});
+    parser.addOption({"speed", "Speaking speed from 0.5 to 2.0", "speed"});
+    parser.addOption({"tune", "Change one tuning setting for this run, such as temperature=0.6 (repeatable; "
+                              "see omareader voices)",
+                      "key=value"});
+}
+
+// The voice a command speaks with: the window's saved settings for the
+// engine, with whatever the command line overrides. Nothing is saved.
+bool voiceFromOptions(const QCommandLineParser &parser, VoiceSettings *voice) {
+    QString engine = VoiceSettings::selectedEngine();
+    if (parser.isSet("engine")) {
+        engine = parser.value("engine").toLower();
+        if (!Engine::isKnown(engine)) {
+            fail("The engine is kokoro or qwen.");
+            return false;
+        }
+    }
+    *voice = VoiceSettings::load(engine);
+    QList<QPair<QString, QString>> overrides;
+    for (const char *key : {"voice", "language", "speed"})
+        if (parser.isSet(key))
+            overrides.append({key, parser.value(key)});
+    for (const QString &tune : parser.values("tune")) {
+        const qsizetype equals = tune.indexOf('=');
+        if (equals <= 0) {
+            fail("Use --tune key=value, such as --tune temperature=0.6.");
+            return false;
+        }
+        overrides.append({tune.left(equals).trimmed(), tune.mid(equals + 1).trimmed()});
+    }
+    for (const auto &[key, value] : std::as_const(overrides)) {
+        QString error;
+        if (!voice->set(key, value, &error)) {
+            fail(error);
+            return false;
+        }
+    }
+    return true;
+}
+
+QString engineOption(const QCommandLineParser &parser, bool *ok) {
+    const QString engine = parser.isSet("engine") ? parser.value("engine").toLower() : VoiceSettings::selectedEngine();
+    *ok = Engine::isKnown(engine);
+    if (!*ok)
+        fail("The engine is kokoro or qwen.");
+    return engine;
 }
 
 int info(const QStringList &arguments) {
@@ -185,8 +241,7 @@ int exportAudio(const QStringList &arguments) {
     command.parser.addPositionalArgument("book", "The book file");
     command.parser.addOption({"split", "One file per chapter in a folder named after the book"});
     command.parser.addOption({"format", "mp3 (the default) or m4b", "format", "mp3"});
-    command.parser.addOption({"voice", "A Kokoro voice, such as af_heart", "voice"});
-    command.parser.addOption({"speed", "Speaking speed from 0.5 to 2.0", "speed"});
+    addVoiceOptions(command.parser);
     command.parser.addOption({"output", "The folder to write to (the current one by default)", "folder"});
     command.parser.addOption({"chapters", "Only these chapters, such as 3 or 2-5", "range"});
     command.json();
@@ -194,24 +249,15 @@ int exportAudio(const QStringList &arguments) {
         return command.parser.isSet("help") ? 0 : 1;
     const QStringList positional = command.parser.positionalArguments();
     if (positional.size() != 1)
-        return fail("Use: omareader export <book> [--split] [--format mp3|m4b] [--voice ID] [--speed X] "
-                    "[--output DIR] [--chapters N-M] [--json]");
+        return fail("Use: omareader export <book> [--split] [--format mp3|m4b] [--engine kokoro|qwen] [--voice ID] "
+                    "[--language L] [--speed X] [--tune key=value] [--output DIR] [--chapters N-M] [--json]");
 
-    // The window's voice and speed unless the command names others.
-    QSettings settings;
+    // The window's engine, voice and tuning unless the command names others.
+    VoiceSettings voice;
+    if (!voiceFromOptions(command.parser, &voice))
+        return 1;
     Exporter::Options options;
-    options.voice = command.parser.isSet("voice") ? command.parser.value("voice")
-                                                  : settings.value("voice/name", "af_heart").toString();
-    bool knownVoice = false;
-    for (const Voice &voice : Voices::all())
-        knownVoice = knownVoice || voice.id == options.voice;
-    if (!knownVoice)
-        return fail("Unknown voice " + options.voice + ".");
-    bool speedOk = true;
-    options.speed = command.parser.isSet("speed") ? command.parser.value("speed").toDouble(&speedOk)
-                                                  : settings.value("voice/speed", 1.0).toDouble();
-    if (!speedOk || options.speed < 0.5 || options.speed > 2.0)
-        return fail("The speed goes from 0.5 to 2.0.");
+    options.synthesis = Synthesis::optionsFor(voice);
     const QString format = command.parser.value("format").toLower();
     if (format != "mp3" && format != "m4b")
         return fail("The format is mp3 or m4b.");
@@ -219,7 +265,6 @@ int exportAudio(const QStringList &arguments) {
     options.layout = command.parser.isSet("split") ? Exporter::ChapterFiles : Exporter::SingleFile;
     options.folder = QDir(command.parser.isSet("output") ? command.parser.value("output") : QDir::currentPath())
                          .absolutePath();
-    options.setup = KokoroSetup::find(settings.value("voice/koko").toString(), settings.value("voice/models").toString());
 
     const auto book = loadBook(positional.first());
     if (!book)
@@ -269,8 +314,11 @@ int exportAudio(const QStringList &arguments) {
         printJson({{"path", outcome},
                    {"layout", options.layout == Exporter::ChapterFiles ? "chapters" : "single"},
                    {"format", format},
-                   {"voice", options.voice},
-                   {"speed", options.speed}});
+                   {"engine", voice.engine},
+                   {"voice", voice.voice},
+                   {"language", voice.language},
+                   {"speed", voice.speed},
+                   {"tuning", QJsonObject::fromVariantMap(voice.tuning)}});
         return 0;
     }
     out() << outcome << Qt::endl;
@@ -278,51 +326,173 @@ int exportAudio(const QStringList &arguments) {
 }
 
 int doctor(const QStringList &arguments) {
-    Command command("doctor", "Check that read-aloud is ready.");
+    Command command("doctor", "Check that read-aloud is ready, for Kokoro and Qwen3-TTS.");
+    command.parser.addOption({"engine", "The engine whose readiness sets the exit code: kokoro or qwen (the window's "
+                                        "choice by default)",
+                              "engine"});
     command.json();
     if (!command.parse(arguments))
         return command.parser.isSet("help") ? 0 : 1;
-    const KokoroSetup setup = KokoroSetup::find();
+    bool engineOk = false;
+    const QString engine = engineOption(command.parser, &engineOk);
+    if (!engineOk)
+        return 1;
+    QSettings settings;
+    const KokoroSetup setup = KokoroSetup::find(settings.value("voice/koko").toString(),
+                                                settings.value("voice/models").toString());
+    const VoiceSettings qwenVoice = VoiceSettings::load(Engine::Qwen);
+    const QString modelSize = qwenVoice.text("model");
+    const QwenSetup qwen = QwenSetup::find(modelSize, qwenVoice.text("device"));
+    const QwenHardware hardware = QwenHardware::probe();
+    const bool ready = engine == Engine::Qwen ? qwen.ready() : setup.ready();
     // ffmpeg only matters for exports, so it never makes read-aloud unready.
     const QString ffmpeg = Exporter::findFfmpeg();
     if (command.parser.isSet("json")) {
+        // Kokoro's fields stay at the top level, as before Qwen3-TTS arrived.
         QJsonObject result = setup.toJson();
         result.insert("ffmpeg", ffmpeg);
+        result.insert("engine", engine);
+        result.insert("engineReady", ready);
+        QJsonObject qwenJson = qwen.toJson();
+        qwenJson.insert("hardware", hardware.toJson(modelSize));
+        qwenJson.insert("problem", qwen.problem());
+        result.insert("qwen", qwenJson);
         printJson(result);
-        return setup.ready() ? 0 : 1;
+        return ready ? 0 : 1;
     }
-    out() << "koko:   " << (setup.binary.isEmpty() ? "missing" : setup.binary) << Qt::endl;
-    out() << "model:  " << (setup.model.isEmpty() ? "missing" : setup.model) << Qt::endl;
-    out() << "voices: " << (setup.voices.isEmpty() ? "missing" : setup.voices) << Qt::endl;
+    out() << "Kokoro" << (engine == Engine::Kokoro ? " (selected)" : "") << Qt::endl;
+    out() << "  koko:    " << (setup.binary.isEmpty() ? "missing" : setup.binary) << Qt::endl;
+    out() << "  model:   " << (setup.model.isEmpty() ? "missing" : setup.model) << Qt::endl;
+    out() << "  voices:  " << (setup.voices.isEmpty() ? "missing" : setup.voices) << Qt::endl;
+    if (!setup.ready())
+        out() << "  searched: " << setup.searchedModelDirectories.join(", ") << Qt::endl;
+    out() << "  status:  " << (setup.ready() ? "ready" : setup.problem()) << Qt::endl;
+    out() << Qt::endl;
+    out() << "Qwen3-TTS" << (engine == Engine::Qwen ? " (selected)" : "") << ", " << modelSize << " model, device "
+          << qwen.device << Qt::endl;
+    out() << "  python:  " << (qwen.python.isEmpty() ? "missing" : qwen.python) << Qt::endl;
+    out() << "  model:   " << (qwen.model.isEmpty() ? "missing" : qwen.model) << Qt::endl;
+    out() << "  aligner: " << (qwen.aligner.isEmpty() ? "missing" : qwen.aligner) << Qt::endl;
+    out() << "  gpu:     "
+          << (hardware.nvidia ? QString("%1, %2 MiB free of %3 MiB")
+                                    .arg(hardware.gpu)
+                                    .arg(hardware.freeMiB)
+                                    .arg(hardware.totalMiB)
+                              : QString("no NVIDIA GPU found"))
+          << Qt::endl;
+    out() << "  needs:   about " << QwenHardware::neededMiB(modelSize)
+          << " MiB of free GPU memory to read along in real time, or any CPU for slow exports" << Qt::endl;
+    const QString advice = hardware.advice(modelSize);
+    if (!advice.isEmpty())
+        out() << "  note:    " << advice << Qt::endl;
+    out() << "  status:  " << (qwen.ready() ? "ready" : qwen.problem()) << Qt::endl;
+    out() << Qt::endl;
     out() << "ffmpeg: " << (ffmpeg.isEmpty() ? "missing (needed to export audio)" : ffmpeg) << Qt::endl;
-    if (!setup.ready()) {
-        out() << "searched: " << setup.searchedModelDirectories.join(", ") << Qt::endl;
-        return fail(setup.problem());
-    }
-    out() << "Read-aloud is ready." << Qt::endl;
+    if (!ready)
+        return fail((engine == Engine::Qwen ? qwen.problem() : setup.problem()));
+    out() << "Read-aloud with " << Engine::displayName(engine) << " is ready." << Qt::endl;
     return 0;
 }
 
-int setup(const QStringList &arguments) {
-    Command command("setup", "Install Kokoros and the Kokoro model (uses the network once).");
-    command.parser.addOption({"dry-run", "Show what would be done without changing anything"});
-    if (!command.parse(arguments))
-        return command.parser.isSet("help") ? 0 : 1;
-    QFile script(":/setup-kokoros.sh");
+int runSetupScript(const QString &resource, const QStringList &scriptArguments) {
+    QFile script(resource);
     if (!script.open(QIODevice::ReadOnly))
         return fail("The setup script is missing from this build.");
     QProcess process;
     process.setProcessChannelMode(QProcess::ForwardedChannels);
-    QStringList shellArguments{"-s", "--"};
-    if (command.parser.isSet("dry-run"))
-        shellArguments << "--dry-run";
-    process.start("sh", shellArguments);
+    process.start("sh", QStringList{"-s", "--"} + scriptArguments);
     if (!process.waitForStarted())
         return fail("Could not run sh.");
     process.write(script.readAll());
     process.closeWriteChannel();
     process.waitForFinished(-1);
     return process.exitStatus() == QProcess::NormalExit ? process.exitCode() : 1;
+}
+
+int setup(const QStringList &arguments) {
+    Command command("setup", "Install a voice engine and its models (the one step that uses the network).");
+    command.parser.addOption({"engine", "kokoro (the default) or qwen", "engine", "kokoro"});
+    command.parser.addOption({"model", "Qwen3-TTS only: 0.6b (the default) or 1.7b, which needs about 7 GB of GPU "
+                                       "memory",
+                              "size", "0.6b"});
+    command.parser.addOption({"dry-run", "Show what would be done without changing anything"});
+    if (!command.parse(arguments))
+        return command.parser.isSet("help") ? 0 : 1;
+    const QString engine = command.parser.value("engine").toLower();
+    if (!Engine::isKnown(engine))
+        return fail("The engine is kokoro or qwen.");
+    QStringList scriptArguments;
+    if (command.parser.isSet("dry-run"))
+        scriptArguments << "--dry-run";
+    if (engine == Engine::Kokoro) {
+        if (command.parser.isSet("model"))
+            return fail("--model only applies to --engine qwen.");
+        return runSetupScript(":/setup-kokoros.sh", scriptArguments);
+    }
+    const QString model = command.parser.value("model").toLower();
+    if (model != "0.6b" && model != "1.7b")
+        return fail("The Qwen3-TTS model is 0.6b or 1.7b.");
+    return runSetupScript(":/setup-qwen.sh", scriptArguments << "--model" << model);
+}
+
+int voices(const QStringList &arguments) {
+    Command command("voices", "List an engine's voices, languages and tuning settings.");
+    command.parser.addOption({"engine", "kokoro or qwen (the window's choice by default)", "engine"});
+    command.json();
+    if (!command.parse(arguments))
+        return command.parser.isSet("help") ? 0 : 1;
+    bool engineOk = false;
+    const QString engine = engineOption(command.parser, &engineOk);
+    if (!engineOk)
+        return 1;
+    const VoiceSettings current = VoiceSettings::load(engine);
+    if (command.parser.isSet("json")) {
+        QJsonArray voiceList, languageList, tuningList;
+        for (const EngineVoice &voice : EngineCatalog::voices(engine))
+            voiceList.append(QJsonObject{{"id", voice.id}, {"name", voice.name}, {"language", voice.language},
+                                         {"description", voice.description}});
+        for (const EngineLanguage &language : EngineCatalog::languages(engine))
+            languageList.append(QJsonObject{{"id", language.id}, {"name", language.name}});
+        for (const TuningParameter &p : Tuning::parameters(engine)) {
+            QJsonObject item{{"key", p.key}, {"label", p.label}, {"description", p.description},
+                             {"recommended", QJsonValue::fromVariant(p.recommended)},
+                             {"current", QJsonValue::fromVariant(current.tuning.value(p.key))}};
+            if (p.kind == TuningParameter::Number) {
+                item.insert("minimum", p.minimum);
+                item.insert("maximum", p.maximum);
+            } else if (p.kind == TuningParameter::Choice) {
+                item.insert("choices", QJsonArray::fromStringList(p.choices));
+            }
+            tuningList.append(item);
+        }
+        printJson({{"engine", engine}, {"current", QJsonObject::fromVariantMap(current.toMap())}, {"voices", voiceList},
+                   {"languages", languageList}, {"tuning", tuningList}});
+        return 0;
+    }
+    out() << Engine::displayName(engine) << " voices:" << Qt::endl;
+    for (const EngineVoice &voice : EngineCatalog::voices(engine))
+        out() << "  " << voice.id.leftJustified(12) << " " << voice.name
+              << (voice.description.isEmpty() ? QString() : ": " + voice.description)
+              << (voice.id == current.voice ? "  (current)" : "") << Qt::endl;
+    if (engine == Engine::Qwen) {
+        out() << Qt::endl << "Languages (--language):" << Qt::endl;
+        for (const EngineLanguage &language : EngineCatalog::languages(engine))
+            out() << "  " << language.id << (language.id == current.language ? "  (current)" : "") << Qt::endl;
+    }
+    out() << Qt::endl << "Tuning (--tune key=value):" << Qt::endl;
+    for (const TuningParameter &p : Tuning::parameters(engine)) {
+        QString range;
+        if (p.kind == TuningParameter::Number)
+            range = QString("%1 to %2%3").arg(p.minimum).arg(p.maximum).arg(p.unit.isEmpty() ? QString() : " " + p.unit);
+        else if (p.kind == TuningParameter::Choice)
+            range = p.choices.join(" | ").replace(QRegularExpression("^ \\| "), "(none) | ");
+        else
+            range = "text";
+        out() << "  " << p.key.leftJustified(18) << " " << range << ", now " << current.tuning.value(p.key).toString()
+              << Qt::endl
+              << "  " << QString(18, ' ') << " " << p.description << Qt::endl;
+    }
+    return 0;
 }
 
 int skill(const QStringList &arguments) {
@@ -373,14 +543,15 @@ QString usage() {
            "  info <book> [--json]            Show a book's metadata and chapters\n"
            "  text <book> [--chapter N]       Print a book's text as omareader reads it\n"
            "  export <book> [--split]         Read a book aloud into MP3 or M4B files\n"
-           "  doctor [--json]                 Check that read-aloud is ready\n"
-           "  setup [--dry-run]               Install Kokoros and the model (uses the network once)\n"
+           "  doctor [--engine E] [--json]    Check that read-aloud is ready, with hardware advice\n"
+           "  setup [--engine kokoro|qwen]    Install a voice engine and its models (uses the network)\n"
+           "  voices [--engine E] [--json]    List an engine's voices, languages and tuning\n"
            "  skill [install]                 Print the skill for coding agents, or install it\n"
            "  version                         Print the version\n";
 }
 
 bool isCommand(const QString &word) {
-    return QStringList{"info", "text", "export", "doctor", "setup", "skill", "help", "--help", "-h", "version", "--version"}
+    return QStringList{"info", "text", "export", "doctor", "setup", "voices", "skill", "help", "--help", "-h", "version", "--version"}
         .contains(word);
 }
 
@@ -392,6 +563,7 @@ int run(const QStringList &arguments) {
     if (command == "export") return exportAudio(rest);
     if (command == "doctor") return doctor(rest);
     if (command == "setup") return setup(rest);
+    if (command == "voices") return voices(rest);
     if (command == "skill") return skill(rest);
     if (command == "version" || command == "--version") {
         out() << "omareader " << QCoreApplication::applicationVersion() << Qt::endl;

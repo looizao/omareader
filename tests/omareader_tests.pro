@@ -8,3 +8,4 @@ INCLUDEPATH += ../src
 HEADERS += $$files(../src/*.h) fixtures.h
 SOURCES += omareader_tests.cpp fixtures.cpp $$files(../src/*.cpp)
 SOURCES -= ../src/main.cpp
+RESOURCES += ../src/resources.qrc

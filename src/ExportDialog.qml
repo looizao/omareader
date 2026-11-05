@@ -117,8 +117,9 @@ Popup {
                 Layout.fillWidth: true
                 Layout.topMargin: 8
                 text: narrator.available
-                      ? qsTr("About %1 of audio. Kokoros reads the whole book first, so a long book takes a while; you can keep reading meanwhile.")
+                      ? qsTr("About %1 of audio, read by %2. The whole book is read aloud first, so a long book takes a while; you can keep reading meanwhile.")
                             .arg(dialog.duration(reader.audioMinutes(narrator.speed)))
+                            .arg(narrator.engines.find(e => e.id === narrator.engine).name)
                       : narrator.problem
                 wrapMode: Text.Wrap
                 color: narrator.available ? Colors.muted : "#f2d4d6"

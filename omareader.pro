@@ -24,11 +24,14 @@ HEADERS += \
     src/library.h \
     src/narrator.h \
     src/portalfilepicker.h \
+    src/qwen.h \
     src/reader.h \
     src/speech.h \
+    src/synthesizer.h \
     src/theme.h \
     src/titleagent.h \
-    src/translator.h
+    src/translator.h \
+    src/voicesettings.h
 
 SOURCES += \
     src/main.cpp \
@@ -42,10 +45,13 @@ SOURCES += \
     src/library.cpp \
     src/narrator.cpp \
     src/portalfilepicker.cpp \
+    src/qwen.cpp \
     src/reader.cpp \
     src/speech.cpp \
+    src/synthesizer.cpp \
     src/theme.cpp \
     src/titleagent.cpp \
-    src/translator.cpp
+    src/translator.cpp \
+    src/voicesettings.cpp
 
 RESOURCES += src/resources.qrc

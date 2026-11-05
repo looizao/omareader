@@ -20,7 +20,7 @@ concurrency:
 env:
   DEPENDENCIES: >-
     git qt6-base qt6-declarative qt6-multimedia qt6-svg qt6-wayland
-    xdg-desktop-portal poppler ffmpeg ttf-dejavu shellcheck
+    xdg-desktop-portal poppler ffmpeg ttf-dejavu shellcheck python
 
 jobs:
   test:
@@ -42,7 +42,7 @@ jobs:
           grep -qx "pkgver=$version" pkgbuild/PKGBUILD || { echo "pkgbuild/PKGBUILD pkgver does not match VERSION $version"; exit 1; }
 
       - name: Lint shell scripts
-        run: shellcheck bin/* src/setup-kokoros.sh
+        run: shellcheck bin/* src/setup-kokoros.sh src/setup-qwen.sh
 
       - name: Build
         run: bin/build

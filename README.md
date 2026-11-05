@@ -12,7 +12,9 @@ language.
 Everything runs on your machine. omareader has no accounts, no sync, and no
 network code: books are parsed locally and the voice is
 [Kokoros](https://github.com/lucasjinreal/Kokoros), a Rust build of Kokoro that
-runs on the CPU.
+runs on the CPU. If you have an NVIDIA GPU, you can add
+[Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) as a second voice engine,
+for a more natural, expressive reading.
 
 ## Install
 
@@ -36,6 +38,29 @@ Kokoro v1.0 model with word timestamps (about 330 MB) into
 SHA-256 sums. Run `omareader setup --dry-run` to see what it would do, and
 `omareader doctor` to check the result. Building Kokoros needs
 `omarchy-pkg-add rust pkgconf opus`.
+
+### Qwen3-TTS (optional)
+
+```sh
+omareader setup --engine qwen              # the 0.6B model, fits a 6 GB GPU
+omareader setup --engine qwen --model 1.7b # richer, needs about 7 GB free
+omareader doctor --engine qwen             # is it ready, and will it fit?
+```
+
+This builds a private Python 3.12 environment with PyTorch in
+`~/.local/share/omareader/qwen` (about 14 GB, mostly CUDA libraries) and
+downloads the CustomVoice model and the forced aligner, which times each
+spoken word, into `~/.local/share/omareader/models/qwen`. Every package and
+model file is pinned to a version and checked against its SHA-256 sum, and
+rerunning the setup keeps what is already there and verified. It needs
+`omarchy-pkg-add uv curl`. Afterwards Qwen3-TTS runs fully offline.
+
+It wants an NVIDIA GPU with about 4 GB free for the 0.6B model;
+`omareader doctor` says how much is free and what that means. Without enough,
+it runs on the CPU, about three times slower than real time: fine for an
+export left running, too slow to listen along. Kokoro stays the default and
+keeps working whatever happens to Qwen3-TTS, and omareader never switches
+engines on its own.
 
 omareader then shows up in the app launcher (Super + Space). You can also run
 `omareader book.epub`.
@@ -78,9 +103,20 @@ each sentence plays, its words light up in the theme's accent. Click any word
 to start reading from there. The view follows the voice; scroll away and it
 stays put until you press F.
 
-Voices cover American and British English, Spanish, French, Hindi, Italian,
-Japanese, Brazilian Portuguese and Mandarin. Pick one that matches the book's
-language.
+Kokoro's voices cover American and British English, Spanish, French, Hindi,
+Italian, Japanese, Brazilian Portuguese and Mandarin; pick one that matches
+the book's language. Qwen3-TTS has nine voices that each read English,
+Portuguese, Spanish, French, German, Italian, Russian, Chinese, Japanese and
+Korean; pick the language separately.
+
+Press A for the voice settings. Engine, voice, language and speed sit at the
+top, with a preview button and a reset to the recommended settings. Advanced
+opens the rest, each with its range, current value and what it does: pauses
+and volume for both engines, a second voice to blend for Kokoro, and for
+Qwen3-TTS the model, the device, how varied the intonation is, and a take
+number for another reading of the same text. Each engine remembers its own
+settings. Changing one while reading rebuilds the audio ahead from the
+sentence you are on.
 
 ## Exporting audio
 
@@ -91,8 +127,10 @@ audiobook). The files use the voice and speed you read with, carry the title,
 author, track numbers and cover, and land in `~/Music/Audiobooks` unless you
 pick another folder.
 
-Kokoros reads the whole book first, which takes a while for a long book (it
-runs several times faster than real time on a recent CPU). The export keeps
+The voice reads the whole book first, which takes a while for a long book
+(Kokoros runs several times faster than real time on a recent CPU, Qwen3-TTS
+about twice as fast on a laptop GPU). An export keeps the voice settings it
+started with, whatever you change afterwards. The export keeps
 going after you close the dialog, at a lower priority so reading aloud stays
 smooth. It is built in a hidden folder and renamed into place at the end, so
 a cancelled export leaves nothing behind and an earlier export is never
@@ -132,6 +170,8 @@ omareader info book.epub --json          # metadata and chapters
 omareader text book.epub --chapter 3     # the text as omareader reads it
 omareader export book.epub --split       # audio, one MP3 per chapter
 omareader export book.epub --format m4b  # one M4B audiobook with chapters
+omareader export book.epub --engine qwen --voice ryan --tune temperature=0.7
+omareader voices --engine qwen           # voices, languages and tuning ranges
 omareader doctor --json                  # is read-aloud ready?
 omareader skill install                  # agent skill for ~/.claude/skills
 ```
@@ -144,14 +184,24 @@ omareader skill install                  # agent skill for ~/.claude/skills
   sentences, one per line, and picks up each sentence's WAV and word-timing TSV
   as Kokoros writes them. Kokoros would download a missing model by itself, so
   omareader only starts it once both model files are already on disk.
-- `src/speech.cpp` matches Kokoro's words back onto the words on the page and
+- `src/qwen-worker.py` keeps Qwen3-TTS loaded in one Python process for the
+  whole app; `src/qwen.cpp` feeds it batches of sentences, whatever someone
+  is listening to first and exports in the gaps, and cancels what nobody
+  needs any more. The forced aligner gives each word its real start and end.
+- `src/synthesizer.cpp` puts both engines behind one contract, a sentence's
+  audio plus its word timings, which narration, the preview and exports all
+  use. It applies the speed (Qwen3-TTS is time-stretched, its word times
+  scaled to match) and the volume.
+- `src/voicesettings.cpp` lists each engine's voices, languages and tuning,
+  with ranges and recommended values, and remembers them per engine.
+- `src/speech.cpp` matches the spoken words back onto the words on the page and
   decodes the audio; `src/narrator.cpp` plays the sentences as one stream and
   maps the playback position to the word being heard.
 - `src/library.cpp` keeps pasted text as small JSON files the loader reads
   like plain text; `src/titleagent.cpp` asks a coding agent for a title.
 - `src/highlight.cpp` colours that word inside the paragraph without changing
   its layout.
-- `src/exporter.cpp` runs Kokoros once per chapter for exports and pipes the
+- `src/exporter.cpp` synthesises the book for exports and pipes the
   samples into `ffmpeg`, then joins the chapters into one file with chapter
   markers, or keeps them as a folder of tracks.
 

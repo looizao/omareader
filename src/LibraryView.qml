@@ -74,7 +74,7 @@ FocusScope {
             }
         }
 
-        // Read-aloud needs Kokoros on this machine; say so up front.
+        // Read-aloud needs the chosen engine on this machine; say so up front.
         Rectangle {
             Layout.fillWidth: true
             visible: !narrator.available
@@ -96,7 +96,7 @@ FocusScope {
                 RowLayout {
                     spacing: 12
                     Label {
-                        text: "omareader setup"
+                        text: narrator.engine === "qwen" ? "omareader setup --engine qwen" : "omareader setup"
                         font.family: "monospace"
                         color: theme.accent
                     }

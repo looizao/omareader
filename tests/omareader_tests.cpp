@@ -22,11 +22,14 @@
 #include "kokoro.h"
 #include "library.h"
 #include "narrator.h"
+#include "qwen.h"
 #include "reader.h"
 #include "speech.h"
+#include "synthesizer.h"
 #include "theme.h"
 #include "titleagent.h"
 #include "translator.h"
+#include "voicesettings.h"
 
 // Every book here is made up inside the test, so nothing personal or
 // copyrighted is checked in.
@@ -518,6 +521,585 @@ private slots:
         narrator.setOverrides({}, {});
     }
 
+    // Voice settings for both engines.
+
+    void voiceSettingsKeepKokoroAsTheDefault() {
+        QSettings().remove("voice");
+        QCOMPARE(VoiceSettings::selectedEngine(), Engine::Kokoro);
+        const VoiceSettings kokoro = VoiceSettings::loadSelected();
+        QCOMPARE(kokoro.engine, Engine::Kokoro);
+        QCOMPARE(kokoro.voice, QString("af_heart"));
+        QCOMPARE(kokoro.speed, 1.0);
+        QCOMPARE(kokoro.number("volume"), 100.0);
+        QCOMPARE(kokoro.number("paragraphPause"), 0.45);
+        VoiceSettings::setSelectedEngine("espeak");
+        QCOMPARE(VoiceSettings::selectedEngine(), Engine::Kokoro);
+        VoiceSettings::setSelectedEngine(Engine::Qwen);
+        const VoiceSettings qwen = VoiceSettings::loadSelected();
+        QCOMPARE(qwen.engine, Engine::Qwen);
+        QCOMPARE(qwen.voice, QString("ryan"));
+        QCOMPARE(qwen.language, QString("English"));
+        QCOMPARE(qwen.text("model"), QString("0.6b"));
+        QCOMPARE(qwen.number("temperature"), 0.9);
+        QSettings().remove("voice");
+    }
+
+    void voiceSettingsReadTheOldKokoroKeys() {
+        QSettings stored;
+        stored.remove("voice");
+        // What versions before Qwen3-TTS saved.
+        stored.setValue("voice/name", "pf_dora");
+        stored.setValue("voice/speed", 1.25);
+        VoiceSettings kokoro = VoiceSettings::load(Engine::Kokoro);
+        QCOMPARE(kokoro.voice, QString("pf_dora"));
+        QCOMPARE(kokoro.speed, 1.25);
+        QCOMPARE(VoiceSettings::selectedEngine(), Engine::Kokoro);
+        kokoro.speed = 1.5;
+        kokoro.save();
+        QCOMPARE(stored.value("voice/speed").toDouble(), 1.5);
+        QCOMPARE(stored.value("voice/name").toString(), QString("pf_dora"));
+        stored.setValue("voice/name", "zz_nobody");
+        QCOMPARE(VoiceSettings::load(Engine::Kokoro).voice, QString("af_heart"));
+        stored.remove("voice");
+    }
+
+    void voiceSettingsArePerEngineAndReset() {
+        QSettings().remove("voice");
+        VoiceSettings qwen = VoiceSettings::load(Engine::Qwen);
+        QVERIFY(qwen.set("voice", "serena"));
+        QVERIFY(qwen.set("language", "Portuguese"));
+        QVERIFY(qwen.set("temperature", 0.6));
+        QVERIFY(qwen.set("speed", "1.3"));
+        qwen.save();
+        VoiceSettings kokoro = VoiceSettings::load(Engine::Kokoro);
+        QVERIFY(kokoro.set("volume", 120));
+        kokoro.save();
+
+        qwen = VoiceSettings::load(Engine::Qwen);
+        QCOMPARE(qwen.voice, QString("serena"));
+        QCOMPARE(qwen.language, QString("Portuguese"));
+        QCOMPARE(qwen.number("temperature"), 0.6);
+        QCOMPARE(qwen.speed, 1.3);
+        QCOMPARE(qwen.number("volume"), 100.0); // Kokoro's volume is Kokoro's own
+        QCOMPARE(VoiceSettings::load(Engine::Kokoro).number("volume"), 120.0);
+        QCOMPARE(VoiceSettings::load(Engine::Kokoro).voice, QString("af_heart"));
+        // Only what differs from the recommendation is stored.
+        QVERIFY(QSettings().contains("voice/qwen/tuning/temperature"));
+        QVERIFY(!QSettings().contains("voice/qwen/tuning/topP"));
+
+        VoiceSettings::reset(Engine::Qwen);
+        qwen = VoiceSettings::load(Engine::Qwen);
+        QCOMPARE(qwen.voice, QString("serena")); // the voice is a choice, not tuning
+        QCOMPARE(qwen.language, QString("Portuguese"));
+        QCOMPARE(qwen.number("temperature"), 0.9);
+        QCOMPARE(qwen.speed, 1.0);
+        QCOMPARE(VoiceSettings::load(Engine::Kokoro).number("volume"), 120.0);
+        QSettings().remove("voice");
+    }
+
+    void voiceSettingsRejectWhatTheEngineDoesNotSupport() {
+        VoiceSettings qwen = VoiceSettings::recommended(Engine::Qwen);
+        QString error;
+        QVERIFY(!qwen.set("voice", "af_heart", &error));
+        QVERIFY(error.contains("af_heart"));
+        QVERIFY(!qwen.set("language", "Klingon", &error));
+        QVERIFY(!qwen.set("blend", "af_bella", &error)); // a Kokoro setting
+        QVERIFY(error.contains("blend"));
+        QVERIFY(!qwen.set("temperature", 5, &error));
+        QVERIFY(error.contains("0.3"));
+        QVERIFY(!qwen.set("speed", 2.5, &error));
+        QVERIFY(!qwen.set("model", "7b", &error));
+        QVERIFY(error.contains("1.7b"));
+        QVERIFY(qwen.set("temperature", 0.6234));
+        QCOMPARE(qwen.number("temperature"), 0.6); // to the slider's step
+        QVERIFY(qwen.set("paragraphPause", 0.45));
+        QCOMPARE(qwen.number("paragraphPause"), 0.45);
+        VoiceSettings kokoro = VoiceSettings::recommended(Engine::Kokoro);
+        QVERIFY(!kokoro.set("language", "English", &error)); // Kokoro's language comes with its voice
+        QVERIFY(!kokoro.set("temperature", 0.6, &error));
+        QCOMPARE(VoiceSettings::clampSpeed(0.1), 0.5);
+        QCOMPARE(VoiceSettings::clampSpeed(1.234), 1.25);
+    }
+
+    void enginesOfferOnlyTheirOwnVoicesAndLanguages() {
+        QVERIFY(EngineCatalog::hasVoice(Engine::Kokoro, "af_heart"));
+        QVERIFY(!EngineCatalog::hasVoice(Engine::Kokoro, "ryan"));
+        QVERIFY(EngineCatalog::hasVoice(Engine::Qwen, "ryan"));
+        QCOMPARE(EngineCatalog::voices(Engine::Qwen).size(), 9);
+        QVERIFY(EngineCatalog::languages(Engine::Kokoro).isEmpty());
+        QVERIFY(EngineCatalog::hasLanguage(Engine::Qwen, "Portuguese"));
+        QVERIFY(EngineCatalog::hasLanguage(Engine::Qwen, "Auto"));
+        QVERIFY(!EngineCatalog::hasLanguage(Engine::Qwen, "Hindi"));
+        // Kokoro has no sampling knobs, and Qwen has no voice blending.
+        QVERIFY(!Tuning::find(Tuning::parameters(Engine::Kokoro), "temperature"));
+        QVERIFY(!Tuning::find(Tuning::parameters(Engine::Qwen), "blend"));
+        for (const QString &engine : Engine::all()) {
+            for (const char *shared : {"volume", "paragraphPause", "headingPause"})
+                QVERIFY(Tuning::find(Tuning::parameters(engine), shared));
+            for (const TuningParameter &p : Tuning::parameters(engine)) {
+                bool ok = false;
+                QCOMPARE(Tuning::normalize(p, p.recommended, &ok), p.recommended);
+                QVERIFY2(ok, qPrintable(engine + "/" + p.key));
+                QVERIFY(!p.label.isEmpty() && !p.description.isEmpty());
+            }
+        }
+        QCOMPARE(EngineCatalog::previewLanguage(Engine::Kokoro, "pf_dora", {}), QString("pt"));
+        QCOMPARE(EngineCatalog::previewLanguage(Engine::Qwen, "ryan", "Portuguese"), QString("pt"));
+        QVERIFY(EngineCatalog::previewText("pt").contains(" "));
+    }
+
+    void everyVoiceStringHasAPortugueseTranslation() {
+        QFile file(QFINDTESTDATA("../src/i18n/pt-BR.json"));
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QJsonObject catalog = QJsonDocument::fromJson(file.readAll()).object();
+        QStringList shown;
+        for (const QString &engine : Engine::all()) {
+            for (const TuningParameter &p : Tuning::parameters(engine)) {
+                shown << p.label << p.description;
+                if (p.key != "blend") // the other labels are voice names
+                    shown << p.choiceLabels;
+            }
+            for (const EngineVoice &voice : EngineCatalog::voices(engine))
+                if (!voice.description.isEmpty())
+                    shown << voice.description;
+            for (const EngineLanguage &language : EngineCatalog::languages(engine))
+                shown << language.name;
+        }
+        shown << "No second voice";
+        for (const QString &text : std::as_const(shown))
+            QVERIFY2(catalog.contains(text), qPrintable("No pt-BR entry for: " + text));
+    }
+
+    void kokoroBlendsVoicesInTenths() {
+        VoiceSettings voice = VoiceSettings::recommended(Engine::Kokoro);
+        QCOMPARE(KokoroSynthesizer::style(voice), QString("af_heart"));
+        QVERIFY(voice.set("blend", "af_bella"));
+        QCOMPARE(KokoroSynthesizer::style(voice), QString("af_heart.7+af_bella.3"));
+        QVERIFY(voice.set("blendAmount", 60));
+        QCOMPARE(KokoroSynthesizer::style(voice), QString("af_heart.4+af_bella.6"));
+        QVERIFY(voice.set("blend", "af_heart")); // a voice blended with itself is itself
+        QCOMPARE(KokoroSynthesizer::style(voice), QString("af_heart"));
+    }
+
+    void qwenRequestsCarryTheVoiceAndASteadySeed() {
+        VoiceSettings voice = VoiceSettings::recommended(Engine::Qwen);
+        QVERIFY(voice.set("voice", "serena"));
+        QVERIFY(voice.set("language", "Portuguese"));
+        QVERIFY(voice.set("temperature", 0.7));
+        QVERIFY(voice.set("style", "calm narration"));
+        QJsonObject request = QwenSynthesizer::voiceRequest(voice);
+        QCOMPARE(request.value("speaker").toString(), QString("serena"));
+        QCOMPARE(request.value("language").toString(), QString("Portuguese"));
+        QCOMPARE(request.value("generation").toObject().value("temperature").toDouble(), 0.7);
+        QCOMPARE(request.value("seed").toInt(), 1001);
+        QVERIFY(!request.contains("instruct")); // the 0.6B model can't follow one
+        QVERIFY(voice.set("model", "1.7b"));
+        QVERIFY(voice.set("take", 3));
+        request = QwenSynthesizer::voiceRequest(voice);
+        QCOMPARE(request.value("instruct").toString(), QString("calm narration"));
+        QCOMPARE(request.value("seed").toInt(), 1003);
+        // Speed and volume are applied afterwards, so they never change the take.
+        VoiceSettings faster = voice;
+        faster.speed = 1.6;
+        QVERIFY(faster.set("volume", 150));
+        QCOMPARE(QwenSynthesizer::voiceRequest(faster), request);
+    }
+
+    void pausesFollowTheVoiceSettings() {
+        QTemporaryDir dir;
+        Book book = sampleBook(dir.filePath("a.txt"));
+        book.chapters[1].paragraphs.prepend({"Heading", 1});
+        book.segment();
+        VoiceSettings voice = VoiceSettings::recommended(Engine::Qwen);
+        QVERIFY(voice.set("paragraphPause", 1.2));
+        QVERIFY(voice.set("headingPause", 2));
+        QCOMPARE(Synthesis::pauseAfter(book, 0, voice), 0.0);   // "First." mid-paragraph
+        QCOMPARE(Synthesis::pauseAfter(book, 1, voice), 1.2);   // "Second." ends it
+        QCOMPARE(Synthesis::pauseAfter(book, 3, voice), 2.0);   // the heading
+        QCOMPARE(Synthesis::pauseAfter(book, 99, voice), 0.0);
+    }
+
+    // Timing and the audio both engines deliver.
+
+    void audioIsResampledStretchedAndAmplified() {
+        Audio audio;
+        audio.sampleRate = 12000;
+        QList<float> tone;
+        for (int i = 0; i < 12000; ++i)
+            tone << 0.5f * float(std::sin(2 * M_PI * 220 * i / 12000.0));
+        audio.samples = QByteArray(reinterpret_cast<const char *>(tone.constData()), tone.size() * 4);
+        const Audio resampled = Speech::resample(audio, 24000);
+        QCOMPARE(resampled.sampleRate, 24000);
+        QVERIFY(qAbs(resampled.frames() - 24000) <= 1);
+
+        const Audio faster = Speech::timeStretch(resampled, 2.0);
+        QVERIFY2(qAbs(faster.seconds() - 0.5) < 0.03, qPrintable(QString::number(faster.seconds())));
+        const Audio slower = Speech::timeStretch(resampled, 0.5);
+        QVERIFY2(qAbs(slower.seconds() - 2.0) < 0.05, qPrintable(QString::number(slower.seconds())));
+        QCOMPARE(Speech::timeStretch(resampled, 1.0).frames(), resampled.frames());
+        // Stretching keeps the loudness: no silence and no blow-up.
+        auto peak = [](const Audio &a) {
+            const float *s = reinterpret_cast<const float *>(a.samples.constData());
+            float p = 0;
+            for (qint64 i = 0; i < a.frames(); ++i)
+                p = std::max(p, std::abs(s[i]));
+            return p;
+        };
+        QVERIFY(peak(faster) > 0.35f && peak(faster) < 0.65f);
+
+        Audio louder = resampled;
+        Speech::applyGain(&louder, 3.0);
+        QCOMPARE(peak(louder), 1.0f); // clipped, never past full scale
+        Audio quieter = resampled;
+        Speech::applyGain(&quieter, 0.5);
+        QVERIFY(qAbs(peak(quieter) - 0.25f) < 0.01f);
+    }
+
+    void qwenWordTimesFollowTheSpeed() {
+        QTemporaryDir dir;
+        if (QStandardPaths::findExecutable("python3").isEmpty())
+            QSKIP("python3 is not installed");
+        QwenWorker worker;
+        QwenSynthesizer synth(nullptr, &worker);
+        QSignalSpy ready(&synth, &Synthesizer::sentenceReady);
+        QSignalSpy finished(&synth, &Synthesizer::finished);
+        SynthesisOptions options{VoiceSettings::recommended(Engine::Qwen)};
+        options.qwen = fakeQwen(dir);
+        options.voice.speed = 2.0;
+        QVERIFY(synth.start(options, {{7, "One two three four."}}));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 15000);
+        QVERIFY2(finished.first().at(0).toBool(), qPrintable(finished.first().at(1).toString()));
+        QCOMPARE(ready.size(), 1);
+        QCOMPARE(ready.first().at(0).toInt(), 7);
+        const SpokenSentence sentence = ready.first().at(1).value<SpokenSentence>();
+        QCOMPARE(sentence.audio.sampleRate, Synthesizer::SampleRate);
+        // Two seconds of 12 kHz audio, at twice the speed.
+        QVERIFY2(qAbs(sentence.audio.seconds() - 1.0) < 0.05, qPrintable(QString::number(sentence.audio.seconds())));
+        QCOMPARE(sentence.words.size(), 4);
+        QCOMPARE(sentence.words.at(2).word, QString("three"));
+        QCOMPARE(sentence.words.at(2).start, 0.5);
+        QCOMPARE(sentence.words.at(2).end, 0.7);
+        // And the highlight finds each word where it is heard.
+        const QList<WordTiming> timings =
+            Speech::align({"One", "two", "three", "four"}, sentence.words, sentence.audio.seconds());
+        QCOMPARE(timings.size(), 4);
+        QCOMPARE(timings.at(3).start, 0.75);
+    }
+
+    void qwenWorkerSharesOneProcessByPriority() {
+        QTemporaryDir dir;
+        if (QStandardPaths::findExecutable("python3").isEmpty())
+            QSKIP("python3 is not installed");
+        const QString log = dir.filePath("worker.log");
+        qputenv("FAKE_QWEN_LOG", log.toUtf8());
+        const QwenSetup setup = fakeQwen(dir);
+        QwenWorker worker;
+        QwenSynthesizer exporting(nullptr, &worker), listening(nullptr, &worker);
+        QSignalSpy exported(&exporting, &Synthesizer::sentenceReady);
+        QSignalSpy heard(&listening, &Synthesizer::sentenceReady);
+        QSignalSpy exportDone(&exporting, &Synthesizer::finished);
+        QSignalSpy listenDone(&listening, &Synthesizer::finished);
+        SynthesisOptions background{VoiceSettings::recommended(Engine::Qwen)};
+        background.qwen = setup;
+        background.background = true;
+        SynthesisOptions foreground = background;
+        foreground.background = false;
+        QList<Synthesizer::Line> lines;
+        for (int i = 0; i < 12; ++i)
+            lines.append({i, QString("Sentence %1.").arg(i)});
+        QVERIFY(exporting.start(background, lines));
+        QVERIFY(listening.start(foreground, {{100, "Listen to me."}, {101, "FAIL"}}));
+        QTRY_COMPARE_WITH_TIMEOUT(exportDone.size(), 1, 20000);
+        QCOMPARE(listenDone.size(), 1);
+        QCOMPARE(heard.size(), 1);
+        QCOMPARE(exported.size(), 12);
+        unsetenv("FAKE_QWEN_LOG");
+
+        QFile file(log);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QList<QByteArray> entries = file.readAll().split('\n');
+        int processes = 0, firstListening = -1, lastExport = -1, index = 0;
+        for (const QByteArray &line : entries) {
+            const QJsonObject entry = QJsonDocument::fromJson(line).object();
+            if (entry.contains("args"))
+                ++processes;
+            const QJsonArray items = entry.value("request").toObject().value("items").toArray();
+            for (const QJsonValue &item : items) {
+                const QString text = item.toObject().value("text").toString();
+                if (text.startsWith("Listen") && firstListening < 0)
+                    firstListening = index;
+                if (text.startsWith("Sentence"))
+                    lastExport = index;
+            }
+            if (!items.isEmpty())
+                ++index;
+        }
+        QCOMPARE(processes, 1); // one model in memory for both
+        // The listener jumped the export's queue rather than waiting for it.
+        QVERIFY2(firstListening >= 0 && firstListening < lastExport,
+                 qPrintable(QString("%1 %2").arg(firstListening).arg(lastExport)));
+    }
+
+    void qwenDropsStaleOutputAndCancels() {
+        QTemporaryDir dir;
+        if (QStandardPaths::findExecutable("python3").isEmpty())
+            QSKIP("python3 is not installed");
+        qputenv("FAKE_QWEN_DELAY", "0.2");
+        QwenWorker worker;
+        QwenSynthesizer synth(nullptr, &worker);
+        QSignalSpy ready(&synth, &Synthesizer::sentenceReady);
+        QSignalSpy finished(&synth, &Synthesizer::finished);
+        SynthesisOptions options{VoiceSettings::recommended(Engine::Qwen)};
+        options.qwen = fakeQwen(dir);
+        QVERIFY(synth.start(options, {{1, "Old one."}, {2, "Old two."}}));
+        QTRY_VERIFY_WITH_TIMEOUT(worker.isLoaded(), 15000);
+        // A seek: the old sentences are already in flight, but must never arrive.
+        QVERIFY(synth.start(options, {{50, "New one."}}));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 15000);
+        QTest::qWait(600);
+        QCOMPARE(ready.size(), 1);
+        QCOMPARE(ready.first().at(0).toInt(), 50);
+
+        // Stopping leaves nothing to arrive later, and no error.
+        QVERIFY(synth.start(options, {{60, "Never heard."}, {61, "Nor this."}}));
+        synth.stop();
+        QVERIFY(!synth.isRunning());
+        QTest::qWait(800);
+        QCOMPARE(ready.size(), 1);
+        QCOMPARE(finished.size(), 1);
+        unsetenv("FAKE_QWEN_DELAY");
+    }
+
+    void qwenCancelsStaleRequestsInTheWorker() {
+        QTemporaryDir dir;
+        if (QStandardPaths::findExecutable("python3").isEmpty())
+            QSKIP("python3 is not installed");
+        const QString log = dir.filePath("qwen.log");
+        qputenv("FAKE_QWEN_LOG", log.toUtf8());
+        // Each request takes two seconds unless the worker is told to stop.
+        qputenv("FAKE_QWEN_DELAY", "2");
+        QwenWorker worker;
+        QwenSynthesizer synth(nullptr, &worker);
+        QSignalSpy ready(&synth, &Synthesizer::sentenceReady);
+        QSignalSpy finished(&synth, &Synthesizer::finished);
+        SynthesisOptions options{VoiceSettings::recommended(Engine::Qwen)};
+        options.qwen = fakeQwen(dir);
+        QVERIFY(synth.start(options, {{1, "Old one."}, {2, "Old two."}, {3, "Old three."}}));
+        QTRY_VERIFY_WITH_TIMEOUT(worker.isLoaded(), 15000);
+        QTest::qWait(100);
+
+        // A seek: both old requests are in the worker. Waiting them out would
+        // take four seconds before the new sentence even started.
+        QElapsedTimer clock;
+        clock.start();
+        QVERIFY(synth.start(options, {{50, "New one."}}));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 15000);
+        QVERIFY2(clock.elapsed() < 3500, qPrintable(QString::number(clock.elapsed())));
+        QCOMPARE(ready.size(), 1);
+        QCOMPARE(ready.first().at(0).toInt(), 50);
+
+        QFile file(log);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QList<qint64> requested, cancelled;
+        for (const QByteArray &line : file.readAll().split('\n')) {
+            const QJsonObject entry = QJsonDocument::fromJson(line).object();
+            if (entry.contains("request"))
+                requested.append(entry.value("request").toObject().value("req").toInteger());
+            if (entry.contains("cancelled"))
+                cancelled.append(entry.value("cancelled").toInteger());
+        }
+        QCOMPARE(requested.size(), 3);
+        QCOMPARE(cancelled, (QList<qint64>{requested.at(0), requested.at(1)}));
+        unsetenv("FAKE_QWEN_DELAY");
+        unsetenv("FAKE_QWEN_LOG");
+    }
+
+    void qwenFailuresAreReportedNotSwitched() {
+        QTemporaryDir dir;
+        if (QStandardPaths::findExecutable("python3").isEmpty())
+            QSKIP("python3 is not installed");
+        QwenWorker worker;
+        QwenSynthesizer synth(nullptr, &worker);
+        QSignalSpy ready(&synth, &Synthesizer::sentenceReady);
+        QSignalSpy finished(&synth, &Synthesizer::finished);
+        SynthesisOptions options{VoiceSettings::recommended(Engine::Qwen)};
+        options.qwen = fakeQwen(dir, "Qwen3-TTS-broken");
+        QVERIFY(synth.start(options, {{0, "Hello."}}));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 15000);
+        QVERIFY(!finished.first().at(0).toBool());
+        QVERIFY2(finished.first().at(1).toString().contains("broken"), qPrintable(finished.first().at(1).toString()));
+        QCOMPARE(ready.size(), 0);
+        QCOMPARE(synth.engine(), Engine::Qwen);
+
+        // Without its setup, Qwen says how to install it and Kokoro is untouched.
+        SynthesisOptions missing{VoiceSettings::recommended(Engine::Qwen)};
+        QVERIFY(Synthesizer::problem(missing).contains("omareader setup --engine qwen"));
+        missing.voice.set("model", "1.7b");
+        missing.qwen.modelSize = "1.7b";
+        QVERIFY(Synthesizer::problem(missing).contains("--model 1.7b"));
+        SynthesisOptions kokoro{VoiceSettings::recommended(Engine::Kokoro)};
+        kokoro.kokoro = fakeKoko(dir);
+        QVERIFY(Synthesizer::problem(kokoro).isEmpty());
+    }
+
+    void qwenSetupCountsOnlyVerifiedFolders() {
+        const QString data = qEnvironmentVariable("XDG_DATA_HOME");
+        const QString models = data + "/omareader/models/qwen";
+        const QString python = data + "/omareader/qwen/venv/bin/python";
+        QVERIFY(QDir().mkpath(QFileInfo(python).path()));
+        write(python, "#!/bin/sh\n");
+        QFile::setPermissions(python, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+        for (const QString &name : {QwenSetup::modelFolderName("0.6b"), QwenSetup::alignerFolderName()}) {
+            QVERIFY(QDir().mkpath(models + "/" + name));
+            write(models + "/" + name + "/model.safetensors", "x");
+        }
+        // Files alone, as a download stopped halfway leaves them, don't count.
+        QwenSetup setup = QwenSetup::find();
+        QVERIFY(!setup.ready());
+        QVERIFY(setup.problem().contains("Python environment"));
+        QVERIFY(setup.problem().contains("0.6B model"));
+        write(data + "/omareader/qwen/venv/" + QwenSetup::verifiedMarker(), "lock");
+        write(models + "/" + QwenSetup::modelFolderName("0.6b") + "/" + QwenSetup::verifiedMarker(), "rev");
+        write(models + "/" + QwenSetup::alignerFolderName() + "/" + QwenSetup::verifiedMarker(), "rev");
+        setup = QwenSetup::find("0.6b", "cpu");
+        QVERIFY2(setup.ready(), qPrintable(setup.problem()));
+        QCOMPARE(setup.device, QString("cpu"));
+        QCOMPARE(setup.model, models + "/" + QwenSetup::modelFolderName("0.6b"));
+        // The 1.7B model is a separate install.
+        QVERIFY(QwenSetup::find("1.7b").problem().contains("--model 1.7b"));
+        const QStringList arguments = QwenWorker::arguments({python, setup.model, setup.aligner, "cpu"}, "w.py");
+        QCOMPARE(arguments.at(arguments.indexOf("--device") + 1), QString("cpu"));
+        QCOMPARE(arguments.at(arguments.indexOf("--gpu-mib") + 1), QString::number(QwenHardware::neededMiB("0.6b")));
+        QVERIFY(QDir(data + "/omareader").removeRecursively());
+    }
+
+    void qwenHardwareAdviceExplainsTheGpu() {
+        QTemporaryDir dir;
+        const QString smi = dir.filePath("nvidia-smi"), answer = dir.filePath("answer");
+        write(smi, "#!/bin/sh\ncat '" + answer.toUtf8() + "'\n");
+        QFile::setPermissions(smi, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+        write(answer, "NVIDIA GeForce RTX 4050 Laptop GPU, 6141, 4380\n");
+        QwenHardware hardware = QwenHardware::probe(smi);
+        QVERIFY(hardware.nvidia);
+        QCOMPARE(hardware.gpu, QString("NVIDIA GeForce RTX 4050 Laptop GPU"));
+        QCOMPARE(hardware.totalMiB, 6141);
+        QCOMPARE(hardware.freeMiB, 4380);
+        QVERIFY(hardware.advice("0.6b").isEmpty());
+        QVERIFY(hardware.advice("1.7b").contains("0.6B model fits"));
+        write(answer, "Small GPU, 4096, 2000\n");
+        hardware = QwenHardware::probe(smi);
+        QVERIFY(hardware.advice("0.6b").contains("CPU"));
+        QVERIFY(!QwenHardware::probe(dir.filePath("missing")).nvidia);
+        QVERIFY(QwenHardware{}.advice("0.6b").contains("No NVIDIA GPU"));
+        QCOMPARE(hardware.toJson("0.6b").value("neededMiB").toInt(), QwenHardware::neededMiB("0.6b"));
+    }
+
+    void narratorSwitchesEnginesAndKeepsEachOnesSettings() {
+        QSettings().remove("voice");
+        QTemporaryDir dir;
+        Narrator narrator;
+        QSignalSpy engineChanged(&narrator, &Narrator::engineChanged);
+        QCOMPARE(narrator.engine(), Engine::Kokoro);
+        QVERIFY(narrator.languages().isEmpty());
+        narrator.setVoice("bf_emma");
+        narrator.setSpeed(1.4);
+        narrator.setEngine(Engine::Qwen);
+        QCOMPARE(engineChanged.size(), 1);
+        QCOMPARE(VoiceSettings::selectedEngine(), Engine::Qwen);
+        QCOMPARE(narrator.voice(), QString("ryan"));
+        QCOMPARE(narrator.speed(), 1.0);
+        QCOMPARE(narrator.languages().size(), EngineCatalog::languages(Engine::Qwen).size());
+        QCOMPARE(narrator.voices().first().toMap().value("id").toString(), QString("ryan"));
+        // Qwen isn't installed in the tests' home: it says so, and doesn't
+        // quietly read with Kokoro instead.
+        QVERIFY(!narrator.available());
+        QVERIFY(narrator.problem().contains("--engine qwen"));
+        narrator.setVoice("af_heart"); // not a Qwen voice
+        QCOMPARE(narrator.voice(), QString("ryan"));
+        narrator.setEngine("espeak");
+        QCOMPARE(narrator.engine(), Engine::Qwen);
+        narrator.setEngine(Engine::Kokoro);
+        QCOMPARE(narrator.voice(), QString("bf_emma"));
+        QCOMPARE(narrator.speed(), 1.4);
+        QSettings().remove("voice");
+    }
+
+    void narratorTuningAndResetFollowTheEngine() {
+        QSettings().remove("voice");
+        QTemporaryDir dir;
+        Narrator narrator;
+        QSignalSpy tuningChanged(&narrator, &Narrator::tuningChanged);
+        QVERIFY(!narrator.tuned());
+        auto find = [&](const QString &key) {
+            for (const QVariant &item : narrator.tuning())
+                if (item.toMap().value("key") == key)
+                    return item.toMap();
+            return QVariantMap();
+        };
+        QVERIFY(!find("blendAmount").value("visible").toBool()); // nothing to blend yet
+        narrator.setTuning("blend", "af_bella");
+        QVERIFY(find("blendAmount").value("visible").toBool());
+        narrator.setTuning("volume", 130);
+        QCOMPARE(find("volume").value("value").toDouble(), 130.0);
+        QCOMPARE(find("volume").value("recommended").toDouble(), 100.0);
+        narrator.setTuning("volume", 9999); // out of range: ignored
+        QCOMPARE(find("volume").value("value").toDouble(), 130.0);
+        QVERIFY(narrator.tuned());
+        QVERIFY(tuningChanged.size() >= 2);
+        narrator.setEngine(Engine::Qwen);
+        QVERIFY(!narrator.tuned());
+        QVERIFY(find("temperature").value("visible").toBool());
+        QVERIFY(!find("style").value("visible").toBool()); // only the 1.7B model follows a style
+        narrator.setTuning("model", "1.7b");
+        QVERIFY(find("style").value("visible").toBool());
+        QVERIFY(narrator.problem().contains("--model 1.7b"));
+        narrator.setEngine(Engine::Kokoro);
+        QVERIFY(narrator.tuned());
+        narrator.resetTuning();
+        QVERIFY(!narrator.tuned());
+        QCOMPARE(narrator.voiceSettings().number("volume"), 100.0);
+        QCOMPARE(narrator.voiceSettings().text("blend"), QString());
+        QSettings().remove("voice");
+    }
+
+    void narratorPreviewsTheCurrentVoice() {
+        QSettings().remove("voice");
+        QTemporaryDir dir;
+        Narrator narrator;
+        const KokoroSetup setup = fakeKoko(dir);
+        narrator.setOverrides(setup.binary, dir.path());
+        QVERIFY(narrator.available());
+        QSignalSpy previewChanged(&narrator, &Narrator::previewChanged);
+        narrator.preview();
+        QVERIFY(narrator.previewing());
+        // It either plays (and ends) or this machine has no audio output; both end the preview.
+        QTRY_VERIFY_WITH_TIMEOUT(!narrator.previewing(), 15000);
+        QCOMPARE(previewChanged.size(), 2);
+        narrator.preview();
+        narrator.stopPreview();
+        QVERIFY(!narrator.previewing());
+        // A preview of an engine that isn't installed says why.
+        narrator.setEngine(Engine::Qwen);
+        narrator.preview();
+        QVERIFY(!narrator.previewing());
+        QVERIFY(narrator.error().contains("--engine qwen"));
+        narrator.setOverrides({}, {});
+        QSettings().remove("voice");
+    }
+
+    void narratorHandsExportsACopyOfItsVoice() {
+        QSettings().remove("voice");
+        Narrator narrator;
+        narrator.setTuning("volume", 140);
+        SynthesisOptions copy = narrator.synthesisOptions();
+        narrator.setTuning("volume", 60);
+        narrator.setSpeed(1.8);
+        QCOMPARE(copy.voice.number("volume"), 140.0);
+        QCOMPARE(copy.voice.speed, 1.0);
+        QCOMPARE(narrator.synthesisOptions().voice.number("volume"), 60.0);
+        QSettings().remove("voice");
+    }
+
     // Exporting the book as audio.
 
     void exportPlanSkipsChaptersWithNothingToSay() {
@@ -593,7 +1175,7 @@ private slots:
 
         QVERIFY(!exporter.start(book, options));
         QVERIFY(exporter.error().contains("omareader setup"));
-        options.setup = fakeKoko(dir);
+        options.synthesis.kokoro = fakeKoko(dir);
         QVERIFY(!exporter.start(book, options));
         QVERIFY(exporter.error().contains("ffmpeg"));
         QVERIFY(!exporter.start(std::make_shared<Book>(), options));
@@ -610,7 +1192,7 @@ private slots:
         Exporter exporter;
         QSignalSpy finished(&exporter, &Exporter::finished);
         Exporter::Options options;
-        options.setup = fakeKoko(dir);
+        options.synthesis.kokoro = fakeKoko(dir);
         options.ffmpeg = ffmpeg;
         options.folder = dir.filePath("out");
         QVERIFY(exporter.start(std::make_shared<Book>(sampleBook(dir.filePath("a.txt"))), options));
@@ -628,7 +1210,7 @@ private slots:
         QSignalSpy finished(&exporter, &Exporter::finished);
         QSignalSpy progress(&exporter, &Exporter::progressChanged);
         Exporter::Options options;
-        options.setup = fakeKoko(dir);
+        options.synthesis.kokoro = fakeKoko(dir);
         options.folder = dir.filePath("out");
         options.format = Exporter::M4b;
         QVERIFY(exporter.start(std::make_shared<Book>(sampleBook(dir.filePath("a.txt"))), options));
@@ -664,7 +1246,7 @@ private slots:
         Exporter exporter;
         QSignalSpy finished(&exporter, &Exporter::finished);
         Exporter::Options options;
-        options.setup = fakeKoko(dir);
+        options.synthesis.kokoro = fakeKoko(dir);
         options.folder = dir.filePath("out");
         options.layout = Exporter::ChapterFiles;
         QVERIFY(exporter.start(std::make_shared<Book>(sampleBook(dir.filePath("a.txt"))), options));
@@ -682,7 +1264,7 @@ private slots:
         Exporter exporter;
         QSignalSpy finished(&exporter, &Exporter::finished);
         Exporter::Options options;
-        options.setup = fakeKoko(dir);
+        options.synthesis.kokoro = fakeKoko(dir);
         options.ffmpeg = QStandardPaths::findExecutable("sh"); // never reached
         options.folder = dir.filePath("out");
         QVERIFY(exporter.start(std::make_shared<Book>(sampleBook(dir.filePath("a.txt"))), options));
@@ -691,6 +1273,43 @@ private slots:
         QCOMPARE(finished.size(), 1);
         QVERIFY(exporter.error().isEmpty()); // cancelling is not an error
         QVERIFY(QDir(options.folder).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden).isEmpty());
+    }
+
+    void exportKeepsTheSettingsItStartedWith() {
+        if (Exporter::findFfmpeg().isEmpty())
+            QSKIP("ffmpeg is not installed");
+        QTemporaryDir dir;
+        const QString log = dir.filePath("koko.log");
+        qputenv("FAKE_KOKO_LOG", log.toUtf8());
+        Exporter exporter;
+        QSignalSpy finished(&exporter, &Exporter::finished);
+        Exporter::Options options;
+        options.synthesis.kokoro = fakeKoko(dir);
+        QVERIFY(options.synthesis.voice.set("voice", "pf_dora"));
+        QVERIFY(options.synthesis.voice.set("speed", 1.5));
+        QVERIFY(options.synthesis.voice.set("paragraphPause", 0.0));
+        QVERIFY(options.synthesis.voice.set("headingPause", 0.0));
+        options.folder = dir.filePath("out");
+        options.layout = Exporter::ChapterFiles;
+        QVERIFY(exporter.start(std::make_shared<Book>(sampleBook(dir.filePath("a.txt"))), options));
+        // Changing the voice now, for the reader or the next export, doesn't
+        // reach the chapters still to come.
+        options.synthesis.voice.speed = 0.5;
+        VoiceSettings saved = VoiceSettings::load(Engine::Kokoro);
+        saved.speed = 0.5;
+        saved.save();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 20000);
+        QVERIFY2(finished.first().at(0).toBool(), qPrintable(finished.first().at(1).toString()));
+        unsetenv("FAKE_KOKO_LOG");
+        QFile file(log);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QStringList runs = QString::fromUtf8(file.readAll()).split('\n', Qt::SkipEmptyParts);
+        QCOMPARE(runs.size(), 2); // one run per chapter
+        for (const QString &run : runs) {
+            QVERIFY2(run.contains("--speed 1.5"), qPrintable(run));
+            QVERIFY2(run.contains("--style pf_dora"), qPrintable(run));
+        }
+        QSettings().remove("voice");
     }
 
     void exportRemembersItsChoices() {
@@ -1066,6 +1685,7 @@ private:
         write(sample, wav(24000, 1, {0.1f, 0.2f, 0.3f}));
         const QString koko = dir.filePath("koko");
         write(koko, QByteArray("#!/bin/sh\n"
+                               "[ -n \"${FAKE_KOKO_LOG:-}\" ] && echo \"$*\" >> \"$FAKE_KOKO_LOG\"\n"
                                "while [ $# -gt 0 ]; do case \"$1\" in file) input=\"$2\"; shift;; --output) pattern=\"$2\"; shift;; esac; shift; done\n"
                                "i=0\n"
                                "while IFS= read -r line; do\n"
@@ -1080,6 +1700,23 @@ private:
         write(dir.filePath("kokoro-v1.0.onnx"), "x");
         write(dir.filePath("voices-v1.0.bin"), "x");
         return KokoroSetup::find(koko, dir.path());
+    }
+
+    // The fake worker, run by a stand-in "python" that ignores the real
+    // worker script it is handed, with verified folders for the models.
+    QwenSetup fakeQwen(QTemporaryDir &dir, const QString &modelName = "Qwen3-TTS-12Hz-0.6B-CustomVoice") {
+        const QString script = dir.filePath("fake-worker.py");
+        write(script, Fixtures::fakeQwenWorker());
+        const QString python = dir.filePath("python");
+        write(python, "#!/bin/sh\nshift 2\nexec python3 -I '" + script.toUtf8() + "' \"$@\"\n");
+        QFile::setPermissions(python, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+        QwenSetup setup;
+        setup.python = python;
+        setup.model = dir.filePath(modelName);
+        setup.aligner = dir.filePath("Qwen3-ForcedAligner-0.6B");
+        QDir().mkpath(setup.model);
+        QDir().mkpath(setup.aligner);
+        return setup;
     }
 
     static Book sampleBook(const QString &path) {

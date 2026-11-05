@@ -65,3 +65,75 @@ void writeOdt(const QString &path) {
 }
 
 }
+
+QByteArray Fixtures::fakeQwenWorker() {
+    return R"PY(import json, os, queue, sys, threading, time, wave
+args = sys.argv[1:]
+log = os.environ.get("FAKE_QWEN_LOG")
+lock = threading.Lock()
+def note(entry):
+    if log:
+        with lock, open(log, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+def reply(message):
+    with lock:
+        sys.stdout.write(json.dumps(message) + "\n")
+        sys.stdout.flush()
+note({"args": args})
+model = args[args.index("--model") + 1]
+if "broken" in model:
+    reply({"event": "fatal", "message": "The model is broken."})
+    sys.exit(1)
+reply({"event": "ready", "device": "cpu", "gpu": "", "alignerDevice": "cpu"})
+# Like the real worker, stdin is read on its own thread so a cancel lands
+# while a request is being "spoken".
+work = queue.Queue()
+cancelled = set()
+def read():
+    for line in sys.stdin:
+        request = json.loads(line)
+        if request.get("op") == "quit":
+            break
+        if request.get("op") == "cancel":
+            note({"cancel": request["req"]})
+            cancelled.add(request["req"])
+            continue
+        note({"request": request})
+        work.put(request)
+    work.put(None)
+threading.Thread(target=read, daemon=True).start()
+while True:
+    request = work.get()
+    if request is None:
+        break
+    delay = float(os.environ.get("FAKE_QWEN_DELAY", "0"))
+    while delay > 0 and request["req"] not in cancelled:
+        time.sleep(min(delay, 0.02))
+        delay -= 0.02
+    if request["req"] in cancelled:
+        note({"cancelled": request["req"]})
+        reply({"event": "done", "req": request["req"], "items": [{"ok": False, "error": "cancelled"}] * len(request["items"])})
+        continue
+    results = []
+    for item in request["items"]:
+        if item["text"] == "FAIL":
+            results.append({"ok": False, "error": "boom"})
+            continue
+        words = item["text"].split()
+        try:
+            with wave.open(item["wav"], "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(12000)
+                w.writeframes(b"\x00\x10" * (6000 * len(words)))
+            with open(item["tsv"], "w") as f:
+                f.write("word\tstart_sec\tend_sec\n")
+                for i, word in enumerate(words):
+                    f.write(f"{word}\t{i * 0.5:.3f}\t{i * 0.5 + 0.4:.3f}\n")
+        except OSError as error:  # the folder went away with a cancelled run
+            results.append({"ok": False, "error": str(error)})
+            continue
+        results.append({"ok": True, "seconds": 0.5 * len(words), "aligned": True})
+    reply({"event": "done", "req": request["req"], "items": results})
+)PY";
+}

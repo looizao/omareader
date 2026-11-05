@@ -3,7 +3,7 @@ import QtQuick.Controls
 import QtQuick.Controls.Material
 import QtQuick.Layouts
 
-// The voice, its speed, and how the page looks.
+// The engine, its voice, speed and tuning, and how the page looks.
 Drawer {
     id: panel
     edge: Qt.RightEdge
@@ -11,7 +11,7 @@ Drawer {
     Material.roundedScale: theme.radius
     background: Rectangle { color: Colors.surface }
 
-    onOpened: voice.forceActiveFocus()
+    onOpened: engine.forceActiveFocus()
 
     function languageName(code) {
         switch (code) {
@@ -24,8 +24,31 @@ Drawer {
         case "ja": return qsTr("Japanese")
         case "pt-br": return qsTr("Brazilian Portuguese")
         case "cmn": return qsTr("Mandarin Chinese")
+        // Qwen3-TTS names its languages in English.
+        case "Auto": return qsTr("Detect from the text")
+        case "English": return qsTr("English")
+        case "Portuguese": return qsTr("Portuguese")
+        case "Spanish": return qsTr("Spanish")
+        case "French": return qsTr("French")
+        case "German": return qsTr("German")
+        case "Italian": return qsTr("Italian")
+        case "Russian": return qsTr("Russian")
+        case "Chinese": return qsTr("Chinese")
+        case "Japanese": return qsTr("Japanese")
+        case "Korean": return qsTr("Korean")
         }
         return code
+    }
+
+    // A tuning value as the panel shows it: "110%", "0.45 s", "0.90".
+    function formatValue(item, value) {
+        const decimals = item.step >= 1 ? 0 : item.step >= 0.1 ? 1 : 2
+        const number = Number(value).toLocaleString(Qt.locale(), 'f', decimals)
+        if (item.unit === "%")
+            return qsTr("%1%").arg(number)
+        if (item.unit === "s")
+            return qsTr("%1 s").arg(number)
+        return number
     }
 
     ScrollView {
@@ -45,24 +68,62 @@ Drawer {
                 color: Colors.text
             }
 
-            ComboBox {
+            Label { Layout.leftMargin: 16; text: qsTr("Engine"); color: Colors.body }
+            ChoiceBox {
+                id: engine
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                model: narrator.engines.map(e => ({
+                    id: e.id,
+                    label: e.available ? e.name : qsTr("%1 (not installed)").arg(e.name)
+                }))
+                selected: narrator.engine
+                onChosen: value => narrator.engine = value
+            }
+
+            Label { Layout.leftMargin: 16; Layout.topMargin: 6; text: qsTr("Voice"); color: Colors.body }
+            ChoiceBox {
                 id: voice
                 Layout.fillWidth: true
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
-                model: narrator.voices
-                textRole: "label"
-                valueRole: "id"
                 // Labels carry the language, since a voice reads its own language best.
-                Component.onCompleted: {
-                    const voices = narrator.voices
-                    const labelled = []
-                    for (let i = 0; i < voices.length; ++i)
-                        labelled.push({ id: voices[i].id, label: qsTr("%1 · %2").arg(voices[i].name).arg(panel.languageName(voices[i].language)) })
-                    model = labelled
-                    currentIndex = indexOfValue(narrator.voice)
-                }
-                onActivated: narrator.voice = currentValue
+                model: narrator.voices.map(v => ({
+                    id: v.id,
+                    label: qsTr("%1 · %2").arg(v.name).arg(panel.languageName(v.language))
+                }))
+                selected: narrator.voice
+                onChosen: value => narrator.voice = value
+            }
+            Label {
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                readonly property var current: narrator.voices.find(v => v.id === narrator.voice)
+                visible: text.length > 0
+                text: current && current.description ? qsTr(current.description) : ""
+                wrapMode: Text.Wrap
+                font.pixelSize: 12
+                color: Colors.muted
+            }
+
+            Label {
+                Layout.leftMargin: 16
+                Layout.topMargin: 6
+                visible: narrator.languages.length > 0
+                text: qsTr("Language")
+                color: Colors.body
+            }
+            ChoiceBox {
+                id: language
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                visible: narrator.languages.length > 0
+                model: narrator.languages.map(l => ({ id: l.id, label: panel.languageName(l.id) }))
+                selected: narrator.language
+                onChosen: value => narrator.language = value
             }
 
             Label {
@@ -82,11 +143,122 @@ Drawer {
                 onMoved: narrator.speed = value
             }
 
-            // Where Kokoros is, or what's missing.
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                spacing: 8
+                AccentButton {
+                    text: narrator.previewing ? qsTr("Stop preview") : qsTr("Preview")
+                    enabled: narrator.available
+                    onClicked: narrator.previewing ? narrator.stopPreview() : narrator.preview()
+                }
+                Button {
+                    flat: true
+                    text: qsTr("Reset to recommended")
+                    enabled: narrator.tuned
+                    onClicked: narrator.resetTuning()
+                }
+                Item { Layout.fillWidth: true }
+            }
+            Label {
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                visible: narrator.error.length > 0 && panel.opened
+                text: narrator.error
+                wrapMode: Text.Wrap
+                font.pixelSize: 12
+                color: "#f2d4d6"
+            }
+
+            // Tuning lives behind a disclosure so the everyday choices stay simple.
+            ItemDelegate {
+                id: advancedToggle
+                property bool expanded: false
+                Layout.fillWidth: true
+                Layout.leftMargin: 8
+                Layout.rightMargin: 8
+                Layout.topMargin: 4
+                text: (expanded ? "▾  " : "▸  ") + qsTr("Advanced")
+                onClicked: expanded = !expanded
+            }
+
+            Repeater {
+                model: advancedToggle.expanded ? narrator.tuning : []
+                delegate: ColumnLayout {
+                    id: setting
+                    required property var modelData
+                    readonly property var item: modelData
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 16
+                    Layout.rightMargin: 16
+                    Layout.bottomMargin: 6
+                    visible: item.visible
+                    spacing: 2
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Label {
+                            Layout.fillWidth: true
+                            text: qsTr(setting.item.label)
+                            color: Colors.body
+                            elide: Text.ElideRight
+                        }
+                        Label {
+                            visible: setting.item.kind === "number"
+                            text: panel.formatValue(setting.item, setting.item.value)
+                            color: Colors.text
+                            font.features: { "tnum": 1 }
+                        }
+                    }
+                    Slider {
+                        visible: setting.item.kind === "number"
+                        Layout.fillWidth: true
+                        Layout.leftMargin: -8
+                        Layout.rightMargin: -8
+                        from: setting.item.minimum
+                        to: setting.item.maximum
+                        stepSize: setting.item.step
+                        value: setting.item.value
+                        onMoved: narrator.setTuning(setting.item.key, value)
+                    }
+                    ChoiceBox {
+                        visible: setting.item.kind === "choice"
+                        Layout.fillWidth: true
+                        model: setting.item.choices.map(c => ({ id: c.value, label: qsTr(c.label) }))
+                        selected: setting.item.value
+                        onChosen: value => narrator.setTuning(setting.item.key, value)
+                    }
+                    TextField {
+                        visible: setting.item.kind === "text"
+                        Layout.fillWidth: true
+                        text: setting.item.value
+                        placeholderText: qsTr("calm, warm audiobook narration")
+                        onEditingFinished: narrator.setTuning(setting.item.key, text)
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: {
+                            const description = qsTr(setting.item.description)
+                            if (setting.item.kind !== "number" || setting.item.value === setting.item.recommended)
+                                return description
+                            return qsTr("%1 Recommended: %2.").arg(description)
+                                .arg(panel.formatValue(setting.item, setting.item.recommended))
+                        }
+                        wrapMode: Text.Wrap
+                        font.pixelSize: 12
+                        color: Colors.muted
+                    }
+                }
+            }
+
+            // Where the engine is, or what's missing, and what the hardware allows.
             Rectangle {
                 Layout.fillWidth: true
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
+                Layout.topMargin: 6
                 implicitHeight: status.implicitHeight + 24
                 radius: theme.radius
                 color: Colors.raised
@@ -103,8 +275,16 @@ Drawer {
                     }
                     Label {
                         Layout.fillWidth: true
+                        visible: narrator.hardwareAdvice.length > 0
+                        text: narrator.hardwareAdvice
+                        wrapMode: Text.Wrap
+                        font.pixelSize: 12
+                        color: Colors.body
+                    }
+                    Label {
+                        Layout.fillWidth: true
                         visible: narrator.available
-                        text: narrator.setup.koko + "\n" + narrator.setup.model
+                        text: narrator.setup.paths || ""
                         wrapMode: Text.WrapAnywhere
                         font.family: "monospace"
                         font.pixelSize: 11

@@ -4,3 +4,4 @@
 /pkgbuild/*.tar.*
 *.pkg.tar.*
 /dist/
+__pycache__/

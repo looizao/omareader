@@ -13,10 +13,13 @@
         <file alias="HelpOverlay.qml">HelpOverlay.qml</file>
         <file alias="MediaIcon.qml">MediaIcon.qml</file>
         <file alias="AccentButton.qml">AccentButton.qml</file>
+        <file alias="ChoiceBox.qml">ChoiceBox.qml</file>
         <file alias="ExportDialog.qml">ExportDialog.qml</file>
         <file alias="PasteDialog.qml">PasteDialog.qml</file>
         <file alias="skill.md">skill.md</file>
         <file alias="setup-kokoros.sh">setup-kokoros.sh</file>
+        <file alias="setup-qwen.sh">setup-qwen.sh</file>
+        <file alias="qwen-worker.py">qwen-worker.py</file>
         <file alias="i18n/en.json">i18n/en.json</file>
         <file alias="i18n/pt-BR.json">i18n/pt-BR.json</file>
     </qresource>

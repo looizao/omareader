@@ -71,7 +71,7 @@ double Reader::progress() const {
 int Reader::audioMinutes(double speed) const {
     if (!m_book)
         return 0;
-    // Kokoro speaks about 160 words a minute at normal speed.
+    // Both voices speak about 160 words a minute at normal speed.
     return int(std::ceil(m_book->wordCount() / (160.0 * qBound(0.5, speed, 2.0))));
 }
 
@@ -79,13 +79,13 @@ void Reader::exportAudio() {
     if (!m_book || !m_exporter || m_exporter->running())
         return;
     Exporter::Options options;
+    // The export keeps a copy of the voice as it is now; changing the voice
+    // while it runs only affects listening.
     if (m_narrator) {
         m_narrator->refreshSetup();
-        options.setup = m_narrator->kokoroSetup();
-        options.voice = m_narrator->voice();
-        options.speed = m_narrator->speed();
+        options.synthesis = m_narrator->synthesisOptions();
     } else {
-        options.setup = KokoroSetup::find();
+        options.synthesis = Synthesis::optionsFor(VoiceSettings::loadSelected());
     }
     options.layout = Exporter::Layout(m_exporter->layout());
     options.format = Exporter::Format(m_exporter->format());
@@ -101,7 +101,7 @@ int Reader::minutesLeftInChapter() const {
     int words = 0;
     for (int i = qMax(m_sentence, m_book->chapterFirstSentence.at(m_chapter)); i < end; ++i)
         words += int(m_book->sentences.at(i).words.size());
-    // Kokoro speaks about 160 words a minute at normal speed.
+    // Both voices speak about 160 words a minute at normal speed.
     const double speed = m_narrator ? m_narrator->speed() : 1.0;
     return int(std::ceil(words / (160.0 * speed)));
 }

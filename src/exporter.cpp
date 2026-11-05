@@ -49,12 +49,6 @@ void writeFormatArguments(QStringList &arguments, Exporter::Format format) {
 }
 
 Exporter::Exporter(QObject *parent) : QObject(parent) {
-    connect(&m_runner, &KokoroRunner::sentenceReady, this, &Exporter::onSentenceReady);
-    connect(&m_runner, &KokoroRunner::sentenceFailed, this, [this](int id) {
-        m_failed.insert(id);
-        writeReady();
-    });
-    connect(&m_runner, &KokoroRunner::finished, this, &Exporter::onRunFinished);
     QSettings settings;
     m_layout = qBound(0, settings.value("export/layout", int(SingleFile)).toInt(), int(ChapterFiles));
     m_format = qBound(0, settings.value("export/format", int(Mp3)).toInt(), int(M4b));
@@ -281,8 +275,9 @@ bool Exporter::start(BookPtr book, const Options &options) {
         fail(tr("This book has nothing to read aloud."));
         return false;
     }
-    if (!options.setup.ready()) {
-        fail(options.setup.problem());
+    const QString problem = Synthesizer::problem(options.synthesis);
+    if (!problem.isEmpty()) {
+        fail(problem);
         return false;
     }
     if (m_options.ffmpeg.isEmpty())
@@ -305,6 +300,17 @@ bool Exporter::start(BookPtr book, const Options &options) {
     m_cover = writeCover();
     for (const Track &track : std::as_const(m_tracks))
         m_totalWords += track.words;
+
+    // Exports run at a lower priority than anything someone is listening to.
+    m_options.synthesis.background = true;
+    m_options.synthesis.preview = false;
+    m_synth = Synthesizer::create(m_options.synthesis.voice.engine);
+    connect(m_synth.get(), &Synthesizer::sentenceReady, this, &Exporter::onSentenceReady);
+    connect(m_synth.get(), &Synthesizer::sentenceFailed, this, [this](int id) {
+        m_failed.insert(id);
+        writeReady();
+    });
+    connect(m_synth.get(), &Synthesizer::finished, this, &Exporter::onRunFinished);
 
     m_running = true;
     emit runningChanged();
@@ -352,21 +358,17 @@ void Exporter::startTrack() {
         assemble();
         return;
     }
-    QList<KokoroRunner::Line> lines;
+    QList<Synthesizer::Line> lines;
     for (const int sentence : std::as_const(m_tracks.at(m_track).sentences))
         lines.append({sentence, m_book->sentenceText(sentence)});
-    m_runner.start({m_options.setup, m_options.voice, m_options.speed, true}, lines);
+    m_synth->start(m_options.synthesis, lines);
 }
 
-void Exporter::onSentenceReady(int id, const QString &wav, const QString &tsv) {
-    Audio audio;
-    const bool ok = Speech::readWav(wav, &audio, nullptr);
-    // Exports don't need the word timings, and a long book's worth of WAVs
-    // would fill the temporary directory.
-    QFile::remove(wav);
-    QFile::remove(tsv);
-    if (ok && audio.frames() > 0)
-        m_ready.insert(id, audio);
+void Exporter::onSentenceReady(int id, const SpokenSentence &sentence) {
+    if (!m_running)
+        return;
+    if (sentence.audio.frames() > 0)
+        m_ready.insert(id, sentence.audio);
     else
         m_failed.insert(id);
     writeReady();
@@ -379,7 +381,7 @@ void Exporter::onRunFinished(bool ok, const QString &error) {
         fail(error);
         return;
     }
-    // Sentences Kokoros never reported on are left out rather than waited for.
+    // Sentences the engine never reported on are left out rather than waited for.
     const Track &track = m_tracks.at(m_track);
     for (int k = m_next; k < track.sentences.size(); ++k)
         if (!m_ready.contains(track.sentences.at(k)))
@@ -400,24 +402,14 @@ void Exporter::writeReady() {
             auto it = m_ready.find(id);
             if (it == m_ready.end())
                 break;
-            if (!m_encoder && !startEncoder(it->sampleRate))
+            // Every engine delivers at the same rate, whatever it speaks at.
+            if (!m_encoder && !startEncoder(Synthesizer::SampleRate))
                 return;
-            if (it->sampleRate != m_sampleRate) {
-                fail(tr("Kokoros produced %1 Hz audio partway through; the export expects %2 Hz.")
-                         .arg(it->sampleRate)
-                         .arg(m_sampleRate));
-                return;
-            }
             writeSamples(it->samples);
             m_ready.erase(it);
-            const bool lastInParagraph = id + 1 >= m_book->sentenceCount()
-                                         || m_book->sentences.at(id + 1).paragraph != sentence.paragraph
-                                         || m_book->sentences.at(id + 1).chapter != sentence.chapter;
-            if (lastInParagraph) {
-                const int level = m_book->chapters.at(sentence.chapter).paragraphs.at(sentence.paragraph).level;
-                const double pause = level > 0 ? HeadingPause : ParagraphPause;
+            const double pause = Synthesis::pauseAfter(*m_book, id, m_options.synthesis.voice);
+            if (pause > 0)
                 writeSamples(QByteArray(qsizetype(pause * m_sampleRate) * qsizetype(sizeof(float)), '\0'));
-            }
         }
         m_doneWords += int(sentence.words.size());
         ++m_next;
@@ -473,7 +465,7 @@ bool Exporter::startEncoder(int sampleRate) {
 
 void Exporter::finishEncoder() {
     if (!m_encoder) {
-        // Kokoros said nothing for this chapter, so it gets no file.
+        // The voice said nothing for this chapter, so it gets no file.
         startTrack();
         return;
     }
@@ -505,7 +497,7 @@ void Exporter::onEncoderFinished(int code, QProcess::ExitStatus status) {
 
 void Exporter::assemble() {
     if (m_trackFiles.isEmpty()) {
-        fail(tr("Kokoros produced no audio for this book."));
+        fail(tr("The voice produced no audio for this book."));
         return;
     }
     const QString bookName = safeName(m_book->title);
@@ -620,7 +612,12 @@ void Exporter::succeed(const QString &path) {
 
 void Exporter::reset() {
     m_running = false;
-    m_runner.stop();
+    if (m_synth) {
+        m_synth->stop();
+        // reset() can run inside one of the synthesizer's own signals.
+        m_synth->disconnect(this);
+        m_synth.release()->deleteLater();
+    }
     for (std::unique_ptr<QProcess> *process : {&m_encoder, &m_joiner}) {
         if (!*process)
             continue;
