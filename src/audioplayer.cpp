@@ -24,12 +24,9 @@ bool AudioPlayer::open(int sampleRate) {
         emit errorOccurred(m_error);
         return false;
     }
-    m_format = QAudioFormat();
-    m_format.setSampleRate(sampleRate);
-    m_format.setChannelCount(1);
-    m_format.setSampleFormat(QAudioFormat::Float);
+    m_format = narrationFormat(sampleRate, QAudioFormat::Float);
     if (!device.isFormatSupported(m_format))
-        m_format.setSampleFormat(QAudioFormat::Int16);
+        m_format = narrationFormat(sampleRate, QAudioFormat::Int16);
     if (!device.isFormatSupported(m_format)) {
         m_error = tr("The audio output %1 can't play %2 Hz mono audio.").arg(device.description()).arg(sampleRate);
         emit errorOccurred(m_error);
@@ -50,6 +47,17 @@ bool AudioPlayer::open(int sampleRate) {
     m_paused = false;
     m_pump.start();
     return true;
+}
+
+QAudioFormat AudioPlayer::narrationFormat(int sampleRate, QAudioFormat::SampleFormat sampleFormat) {
+    QAudioFormat format;
+    format.setSampleRate(sampleRate);
+    // A bare channel count leaves the layout unknown, and PipeWire then
+    // exposes the stream as an unpositioned AUX0 channel wired to one
+    // speaker. Saying it's mono lets it play centred through both sides.
+    format.setChannelConfig(QAudioFormat::ChannelConfigMono);
+    format.setSampleFormat(sampleFormat);
+    return format;
 }
 
 void AudioPlayer::close() {

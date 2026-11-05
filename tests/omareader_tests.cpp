@@ -13,6 +13,7 @@
 #include <QtEndian>
 #include <QtTest>
 
+#include "audioplayer.h"
 #include "book.h"
 #include "bookloader.h"
 #include "exporter.h"
@@ -425,6 +426,20 @@ private slots:
         QCOMPARE(reinterpret_cast<const float *>(audio.samples.constData())[1], -0.5f);
 
         QVERIFY(!Speech::parseWav("garbage", &audio, &error));
+    }
+
+    // The narration is mono, but its channel must be positioned: an unknown
+    // layout reaches PipeWire as AUX0, which plays in one ear only.
+    void narrationFormatIsPositionedMono() {
+        for (const auto sampleFormat : {QAudioFormat::Float, QAudioFormat::Int16}) {
+            const QAudioFormat format = AudioPlayer::narrationFormat(24000, sampleFormat);
+            QCOMPARE(format.channelConfig(), QAudioFormat::ChannelConfigMono);
+            QCOMPARE(format.channelCount(), 1);
+            QCOMPARE(format.sampleRate(), 24000);
+            QCOMPARE(format.sampleFormat(), sampleFormat);
+            QCOMPARE(format.bytesPerFrame(), sampleFormat == QAudioFormat::Float ? 4 : 2);
+            QCOMPARE(format.framesForDuration(1000000), qint64(24000));
+        }
     }
 
     // Kokoros.

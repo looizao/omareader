@@ -36,6 +36,10 @@ public:
     qint64 playedFrames() const;
     QString error() const { return m_error; }
 
+    // The format the sink is opened with: positioned mono at sampleRate in
+    // the given sample format.
+    static QAudioFormat narrationFormat(int sampleRate, QAudioFormat::SampleFormat sampleFormat);
+
 signals:
     void errorOccurred(const QString &message);
 
