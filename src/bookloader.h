@@ -3,6 +3,7 @@
 #include "book.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 
 struct PdfOutlineItem {
     int page = 0; // 1-based
@@ -30,6 +31,8 @@ public:
                                       int pagesPerChapter = 10);
     static QList<PdfOutlineItem> pdfOutline(const QString &pdftohtmlXml);
     static QString decodeText(const QByteArray &bytes);
+    // Text pasted into the library, as the JSON file that keeps it.
+    static QByteArray pastedText(const QString &title, const QString &text, const QDateTime &created);
 
 private:
     static bool loadEpub(Book &book, QString *error);
@@ -37,5 +40,6 @@ private:
     static bool loadDocx(Book &book, QString *error);
     static bool loadOdt(Book &book, QString *error);
     static bool loadPdf(Book &book, QString *error);
+    static bool loadPastedText(Book &book, const QByteArray &data, QString *error);
     static bool loadConverted(Book &book, QString *error);
 };

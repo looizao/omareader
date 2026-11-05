@@ -5,6 +5,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QStandardPaths>
@@ -1032,6 +1034,29 @@ bool BookLoader::loadPdf(Book &book, QString *error) {
     return true;
 }
 
+// Pasted text is kept as JSON so its title travels with it, and marked so
+// any other JSON file is turned away rather than read as a book.
+QByteArray BookLoader::pastedText(const QString &title, const QString &text, const QDateTime &created) {
+    return QJsonDocument(QJsonObject{{"kind", "omareader-text"},
+                                     {"version", 1},
+                                     {"title", title},
+                                     {"created", created.toUTC().toString(Qt::ISODate)},
+                                     {"text", text}})
+        .toJson();
+}
+
+bool BookLoader::loadPastedText(Book &book, const QByteArray &data, QString *error) {
+    const QJsonObject o = QJsonDocument::fromJson(data).object();
+    if (o.value("kind").toString() != "omareader-text" || !o.value("text").isString()) {
+        *error = tr("omareader can't open .%1 files.").arg("json");
+        return false;
+    }
+    book.format = "text";
+    book.title = o.value("title").toString().simplified();
+    book.chapters = textChapters(o.value("text").toString());
+    return true;
+}
+
 bool BookLoader::loadConverted(Book &book, QString *error) {
     const QString converter = QStandardPaths::findExecutable("ebook-convert");
     const QString suffix = QFileInfo(book.path).suffix().toUpper();
@@ -1134,6 +1159,12 @@ std::shared_ptr<Book> BookLoader::load(const QString &path, QString *error) {
             book->chapters = textChapters(text);
             ok = true;
         }
+    } else if (suffix == "json") {
+        if (info.size() > 256 * 1024 * 1024) {
+            *error = tr("This file is too large to open as text.");
+            return nullptr;
+        }
+        ok = loadPastedText(*book, file.readAll(), error);
     } else if (convertedExtensions().contains(suffix)) {
         ok = loadConverted(*book, error);
     } else {

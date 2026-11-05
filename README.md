@@ -54,6 +54,23 @@ Every format becomes the same reflowable text in your chosen size, spacing,
 column width and typeface. Books are never modified or copied; the library
 only remembers where they are and where you stopped.
 
+## Pasted text
+
+For an article, a note or a message with no book file, press N in the library
+(or Ctrl+V to paste the clipboard straight in), or click Add text. The text is
+saved in `~/.local/share/omareader/texts`, readable only by you, and reads
+aloud like any book, with its place remembered. Forgetting it with Delete
+moves it to the trash, so it can still be restored.
+
+The title starts as the text's first few words, and you can type your own.
+If a coding agent with a read-only headless mode is installed (Claude Code,
+Codex, Gemini or Cursor, with Omarchy's default agent first), the dialog
+offers to have it suggest a title. That is off until you tick it, because the
+agent sends the start of the text to its provider; omareader itself still
+makes no network connection. The agent runs one turn in an empty folder with
+no tools, and if it isn't signed in, fails or takes longer than 45 seconds,
+the first words stay as the title.
+
 ## Reading aloud
 
 Press Space. Kokoros synthesises ahead of you in batches of sentences, and as
@@ -98,8 +115,9 @@ replaced. Exports need `ffmpeg`.
 | E | Export as audio |
 | + / − | Bigger / smaller text |
 | O | Open a book |
+| N, Ctrl+V | In the library: add pasted text |
 | B or Backspace | Back to the library |
-| Enter, Delete | In the library: open, forget a book (the file stays) |
+| Enter, Delete | In the library: open, forget a book (the file stays; pasted text goes to the trash) |
 | Esc | Close panels and messages |
 | ? | Show every shortcut |
 | Q | Quit |
@@ -129,6 +147,8 @@ omareader skill install                  # agent skill for ~/.claude/skills
 - `src/speech.cpp` matches Kokoro's words back onto the words on the page and
   decodes the audio; `src/narrator.cpp` plays the sentences as one stream and
   maps the playback position to the word being heard.
+- `src/library.cpp` keeps pasted text as small JSON files the loader reads
+  like plain text; `src/titleagent.cpp` asks a coding agent for a title.
 - `src/highlight.cpp` colours that word inside the paragraph without changing
   its layout.
 - `src/exporter.cpp` runs Kokoros once per chapter for exports and pipes the

@@ -35,7 +35,9 @@ ApplicationWindow {
         sequence: "Escape"
         context: Qt.ApplicationShortcut
         onActivated: {
-            if (win.helpVisible)
+            if (pasteDialog.opened)
+                pasteDialog.close()
+            else if (win.helpVisible)
                 win.helpVisible = false
             else if (win.message !== "")
                 win.dismissMessage()
@@ -57,6 +59,8 @@ ApplicationWindow {
             anchors.fill: parent
             visible: !reader.hasBook
             focus: visible
+            pasteOpen: pasteDialog.opened
+            onAddTextRequested: fromClipboard => pasteDialog.start(fromClipboard)
         }
 
         ReaderView {
@@ -194,6 +198,11 @@ ApplicationWindow {
         ExportDialog {
             id: exportDialog
             objectName: "exportDialog"
+        }
+
+        PasteDialog {
+            id: pasteDialog
+            objectName: "pasteDialog"
         }
 
         HelpOverlay {

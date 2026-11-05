@@ -22,6 +22,7 @@ Rectangle {
         ["E", qsTr("Export as audio")],
         ["+ / −", qsTr("Bigger / smaller text")],
         ["O", qsTr("Open a book")],
+        ["N", qsTr("Add pasted text to the library")],
         ["B", qsTr("Back to the library")],
         ["Esc", qsTr("Close panels and messages")],
         ["?", qsTr("Show or hide this help")],

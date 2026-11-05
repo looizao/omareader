@@ -17,6 +17,7 @@
 #include "portalfilepicker.h"
 #include "reader.h"
 #include "theme.h"
+#include "titleagent.h"
 #include "translator.h"
 
 #ifndef OMAREADER_VERSION
@@ -58,6 +59,7 @@ int main(int argc, char *argv[]) {
     Exporter exporter;
     exporter.setPicker(&picker);
     reader.setExporter(&exporter);
+    TitleAgent titleAgent;
 
     qmlRegisterType<ReadingHighlight>("Omareader", 1, 0, "ReadingHighlight");
     qmlRegisterUncreatableType<Narrator>("Omareader", 1, 0, "Narrator", "Use the narrator context property.");
@@ -71,6 +73,7 @@ int main(int argc, char *argv[]) {
     engine.rootContext()->setContextProperty("narrator", &narrator);
     engine.rootContext()->setContextProperty("reader", &reader);
     engine.rootContext()->setContextProperty("exporter", &exporter);
+    engine.rootContext()->setContextProperty("titleAgent", &titleAgent);
     engine.load(QUrl("qrc:/Main.qml"));
     if (engine.rootObjects().isEmpty())
         return 1;

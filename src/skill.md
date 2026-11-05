@@ -22,4 +22,6 @@ With `--json` the result is a single JSON object on stdout.
 
 The text is what the narrator speaks: formatting, images, and footnote markers
 are dropped, and headings come out as their own paragraphs. omareader never
-modifies books; its library lives in `~/.local/share/omareader/library.json`.
+modifies books; its library lives in `~/.local/share/omareader/library.json`,
+and text pasted into it in `~/.local/share/omareader/texts/*.json`, which
+`info` and `text` read like any book.

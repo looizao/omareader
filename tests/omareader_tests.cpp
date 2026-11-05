@@ -25,6 +25,7 @@
 #include "reader.h"
 #include "speech.h"
 #include "theme.h"
+#include "titleagent.h"
 #include "translator.h"
 
 // Every book here is made up inside the test, so nothing personal or
@@ -771,6 +772,244 @@ private slots:
         QVERIFY(!reader.hasBook());
     }
 
+    // Text pasted into the library.
+
+    void pastedTitleIsTheFirstWords() {
+        QCOMPARE(PastedTitle::fromText("  Short   note.\n"), QString("Short note."));
+        QCOMPARE(PastedTitle::fromText("One two three four five six seven eight nine ten"),
+                 QString("One two three four five six seven eight…"));
+        QCOMPARE(PastedTitle::fromText("Café com leite,\n\npão de queijo e mais coisas boas para o lanche"),
+                 QString("Café com leite, pão de queijo e mais…"));
+        QCOMPARE(PastedTitle::fromText("Hello, world, again", 2), QString("Hello, world…"));
+        const QString longWord = QString(200, 'x');
+        QCOMPARE(PastedTitle::fromText(longWord).size(), 60);
+        QVERIFY(PastedTitle::fromText(longWord).endsWith(QChar(0x2026)));
+        QVERIFY(PastedTitle::fromText(" \n\t ").isEmpty());
+    }
+
+    void agentRepliesBecomeBareTitles() {
+        QCOMPARE(PastedTitle::fromAgentReply("\n  The Arctic Tern's Journey\n"), QString("The Arctic Tern's Journey"));
+        QCOMPARE(PastedTitle::fromAgentReply("Title: \"Arctic Terns\"\nThey fly far."), QString("Arctic Terns"));
+        QCOMPARE(PastedTitle::fromAgentReply("# **Título:** “Pão de Queijo”."), QString("Pão de Queijo"));
+        QCOMPARE(PastedTitle::fromAgentReply("`Notes on Qt`"), QString("Notes on Qt"));
+        QVERIFY(PastedTitle::fromAgentReply("\n \n").isEmpty());
+        QVERIFY(PastedTitle::fromAgentReply("\"\"").isEmpty());
+        QCOMPARE(PastedTitle::fromAgentReply(QString(300, 'a')).size(), 100);
+    }
+
+    void libraryKeepsPastedText() {
+        QTemporaryDir dir;
+        const QString file = dir.filePath("library.json");
+        const QString text = "Olá, mundo! Ünïcödé text.\nSame paragraph.\n\n日本語の段落。\n\nThird paragraph.";
+        QString path;
+        {
+            Library library(file, dir.filePath("covers"));
+            QVERIFY(library.addText("Notes", "  \n\t ").isEmpty());
+            QVERIFY(library.addText("Notes", {}).isEmpty());
+            QCOMPARE(library.count(), 0);
+            QVERIFY(!QFileInfo::exists(library.textDirectory()) || QDir(library.textDirectory()).isEmpty());
+
+            path = library.addText("  My   notes ", text);
+            QVERIFY(!path.isEmpty());
+            QVERIFY(library.isText(path));
+            QCOMPARE(QFileInfo(path).permissions() & (QFile::ReadOther | QFile::ReadGroup), QFileDevice::Permissions());
+            QCOMPARE(library.count(), 1);
+            QCOMPARE(library.entry(path).title, QString("My notes"));
+            QCOMPARE(library.books().first().toMap().value("format").toString(), QString("TEXT"));
+            QVERIFY(!library.books().first().toMap().value("missing").toBool());
+        }
+
+        // Still there after a restart, word for word.
+        Library library(file, dir.filePath("covers"));
+        QCOMPARE(library.count(), 1);
+        QCOMPARE(library.entry(path).title, QString("My notes"));
+        QFile saved(path);
+        QVERIFY(saved.open(QIODevice::ReadOnly));
+        QCOMPARE(QJsonDocument::fromJson(saved.readAll()).object().value("text").toString(), text);
+
+        QString error;
+        const auto book = BookLoader::load(path, &error);
+        QVERIFY2(book, qPrintable(error));
+        QCOMPARE(book->title, QString("My notes"));
+        QCOMPARE(book->format, QString("text"));
+        QCOMPARE(book->chapters.size(), 1);
+        QCOMPARE(book->chapters.first().title, QString("My notes"));
+        const auto &paragraphs = book->chapters.first().paragraphs;
+        QCOMPARE(paragraphs.size(), 3);
+        QCOMPARE(paragraphs.at(0).text, QString("Olá, mundo! Ünïcödé text. Same paragraph."));
+        QCOMPARE(paragraphs.at(1).text, QString("日本語の段落。"));
+        QVERIFY(book->sentenceCount() >= 4);
+
+        // Without a title, the first words name it.
+        const QString untitled = library.addText(" ", "First words of a message\nthat goes on");
+        QCOMPARE(library.entry(untitled).title, QString("First words of a message that goes on"));
+
+        // Forgetting pasted text moves it to the trash rather than deleting it.
+        // The trash lives in ~/.local/share, which a real home already has.
+        const QString trash = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/Trash/files";
+        QDir().mkpath(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation));
+        library.remove(path);
+        QVERIFY(!library.contains(path));
+        QVERIFY(!QFileInfo::exists(path));
+        QVERIFY(QFileInfo::exists(trash + "/" + QFileInfo(path).fileName()));
+    }
+
+    void loaderTurnsAwayOtherJson() {
+        QTemporaryDir dir;
+        write(dir.filePath("data.json"), R"({"text": "not ours"})");
+        QString error;
+        QVERIFY(!BookLoader::load(dir.filePath("data.json"), &error));
+        QVERIFY(error.contains(".json"));
+    }
+
+    void readerAddsPastedTextAndResumesIt() {
+        QTemporaryDir dir;
+        const QString file = dir.filePath("library.json");
+        QString path;
+        {
+            Library library(file, dir.filePath("covers"));
+            Reader reader(&library, nullptr, nullptr);
+            QVERIFY(!reader.addText("Empty", "\n \n"));
+            QCOMPARE(library.count(), 0);
+            QVERIFY(reader.error().isEmpty());
+
+            QVERIFY(reader.addText("Letter", "Dear friend. How are you?\n\nI am well. Thank you."));
+            QTRY_VERIFY(reader.hasBook());
+            path = reader.path();
+            QCOMPARE(reader.title(), QString("Letter"));
+            QCOMPARE(reader.paragraphs().size(), 2);
+            reader.setVisibleParagraph(1);
+            QCOMPARE(reader.sentence(), 2);
+            reader.saveNow();
+            reader.closeBook();
+        }
+
+        Library library(file, dir.filePath("covers"));
+        QCOMPARE(library.entry(path).sentence, 2);
+        QCOMPARE(library.entry(path).sentenceCount, 4);
+        Reader reader(&library, nullptr, nullptr);
+        reader.open(path);
+        QTRY_VERIFY(reader.hasBook());
+        QCOMPARE(reader.title(), QString("Letter"));
+        QCOMPARE(reader.sentence(), 2);
+    }
+
+    void titleAgentPrefersOmarchysDefault() {
+        QTemporaryDir dir;
+        const QString defaults = dir.filePath("agent");
+        QVERIFY(!TitleAgent::find(defaults, {dir.path()}).isValid());
+        fakeAgent(dir, "claude", "echo Claude");
+        fakeAgent(dir, "codex", "echo Codex");
+        fakeAgent(dir, "pi", "echo Pi");
+        QCOMPARE(TitleAgent::find(defaults, {dir.path()}).id, QString("claude"));
+        write(defaults, "codex\n");
+        QCOMPARE(TitleAgent::find(defaults, {dir.path()}).id, QString("codex"));
+        QCOMPARE(TitleAgent::find(defaults, {dir.path()}).name, QString("Codex"));
+        // An agent without a safe headless mode is passed over.
+        write(defaults, "pi\n");
+        QCOMPARE(TitleAgent::find(defaults, {dir.path()}).id, QString("claude"));
+
+        // Every supported agent gets a read-only, one-turn command line.
+        for (const QString &id : TitleAgent::supportedAgents()) {
+            const QStringList arguments = TitleAgent::arguments(id, "PROMPT");
+            QCOMPARE(arguments.last(), QString("PROMPT"));
+        }
+        QVERIFY(TitleAgent::arguments("codex", "x").join(' ').contains("--sandbox read-only"));
+        QCOMPARE(TitleAgent::arguments("claude", "x").at(TitleAgent::arguments("claude", "x").indexOf("--tools") + 1), QString());
+        QVERIFY(TitleAgent::prompt(QString(10000, 'a')).size() < 4500);
+    }
+
+    void titleAgentSuggestsOnlyWhenAllowed() {
+        QTemporaryDir dir;
+        const QString defaults = dir.filePath("agent");
+        write(defaults, "codex\n");
+        fakeAgent(dir, "codex",
+                  "printf '%s\\n' \"$@\" > '" + dir.filePath("arguments").toUtf8() + "'\n"
+                  "pwd > '" + dir.filePath("cwd").toUtf8() + "'\n"
+                  "echo 'Title: \"Arctic Terns\"'\n");
+        TitleAgent agent(defaults, {dir.path()});
+        agent.setEnabled(false);
+        QVERIFY(agent.available());
+        QSignalSpy suggested(&agent, &TitleAgent::suggested);
+        QSignalSpy failed(&agent, &TitleAgent::failed);
+
+        // Off by default: nothing is sent anywhere.
+        agent.suggest("Terns fly from pole to pole.");
+        QVERIFY(!agent.busy());
+        QVERIFY(!QFileInfo::exists(dir.filePath("arguments")));
+
+        agent.setEnabled(true);
+        QVERIFY(QSettings().value("titles/useAgent").toBool());
+        agent.suggest("   ");
+        QVERIFY(!agent.busy());
+        agent.suggest("Terns fly from pole to pole.");
+        QVERIFY(agent.busy());
+        QTRY_COMPARE(suggested.size(), 1);
+        QCOMPARE(suggested.first().first().toString(), QString("Arctic Terns"));
+        QVERIFY(!agent.busy());
+        QVERIFY(failed.isEmpty());
+        QFile arguments(dir.filePath("arguments"));
+        QVERIFY(arguments.open(QIODevice::ReadOnly));
+        const QString passed = QString::fromUtf8(arguments.readAll());
+        QVERIFY(passed.startsWith("exec\n"));
+        QVERIFY(passed.contains("Terns fly from pole to pole."));
+        // It runs in an empty directory of its own, removed afterwards.
+        QFile cwd(dir.filePath("cwd"));
+        QVERIFY(cwd.open(QIODevice::ReadOnly));
+        const QString workDirectory = QString::fromUtf8(cwd.readAll()).trimmed();
+        QVERIFY(workDirectory != dir.path());
+        QVERIFY(!QFileInfo::exists(workDirectory));
+        agent.setEnabled(false);
+    }
+
+    void titleAgentFailuresFallBack() {
+        QTemporaryDir dir;
+        const QString defaults = dir.filePath("agent");
+        write(defaults, "claude\n");
+        const QString script = dir.filePath("claude");
+        fakeAgent(dir, "claude", "echo 'not logged in' >&2\nexit 1\n");
+        TitleAgent agent(defaults, {dir.path()});
+        agent.setEnabled(true);
+        QSignalSpy suggested(&agent, &TitleAgent::suggested);
+        QSignalSpy failed(&agent, &TitleAgent::failed);
+
+        agent.suggest("Some text.");
+        QTRY_COMPARE(failed.size(), 1);
+        QVERIFY(failed.first().first().toString().contains("Claude Code"));
+
+        // An empty answer is no title.
+        fakeAgent(dir, "claude", "printf '\\n\\n'\n");
+        agent.suggest("Some text.");
+        QTRY_COMPARE(failed.size(), 2);
+
+        // One that never answers is stopped.
+        fakeAgent(dir, "claude", "sleep 30\n");
+        agent.setTimeout(300);
+        QElapsedTimer timer;
+        timer.start();
+        agent.suggest("Some text.");
+        QTRY_COMPARE(failed.size(), 3);
+        QVERIFY(timer.elapsed() < 5000);
+        QVERIFY(!agent.busy());
+
+        // A request dropped part way through reports nothing.
+        agent.suggest("Some text.");
+        QVERIFY(agent.busy());
+        agent.cancel();
+        QVERIFY(!agent.busy());
+        QTest::qWait(500);
+        QCOMPARE(failed.size(), 3);
+        QVERIFY(suggested.isEmpty());
+
+        // An agent removed since it was found fails rather than hangs.
+        QFile::remove(script);
+        agent.suggest("Some text.");
+        QTRY_COMPARE(failed.size(), 4);
+        agent.refresh();
+        QVERIFY(!agent.available());
+        agent.setEnabled(false);
+    }
+
     void readerAppearanceIsBounded() {
         Reader reader(nullptr, nullptr, nullptr);
         reader.setFontSize(200);
@@ -787,6 +1026,13 @@ private:
         QFile file(path);
         QVERIFY(file.open(QIODevice::WriteOnly));
         file.write(contents);
+    }
+
+    // A stand-in agent CLI: a shell script with the given body.
+    static void fakeAgent(QTemporaryDir &dir, const QString &name, const QByteArray &body) {
+        const QString path = dir.filePath(name);
+        write(path, "#!/bin/sh\n" + body);
+        QFile::setPermissions(path, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
     }
 
     static QByteArray wavHeader(quint16 format, quint16 channels, quint32 rate, quint16 bits, quint32 dataSize) {

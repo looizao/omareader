@@ -27,6 +27,7 @@ HEADERS += \
     src/reader.h \
     src/speech.h \
     src/theme.h \
+    src/titleagent.h \
     src/translator.h
 
 SOURCES += \
@@ -44,6 +45,7 @@ SOURCES += \
     src/reader.cpp \
     src/speech.cpp \
     src/theme.cpp \
+    src/titleagent.cpp \
     src/translator.cpp
 
 RESOURCES += src/resources.qrc

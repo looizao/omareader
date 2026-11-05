@@ -1,5 +1,8 @@
 #include "library.h"
 
+#include "bookloader.h"
+#include "titleagent.h"
+
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -11,13 +14,15 @@
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <QUrl>
+#include <QUuid>
 
 Library::Library(const QString &file, const QString &coverDirectory, QObject *parent)
     : QObject(parent),
       m_file(file.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/library.json" : file),
       m_coverDirectory(coverDirectory.isEmpty()
                            ? QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/covers"
-                           : coverDirectory) {
+                           : coverDirectory),
+      m_textDirectory(QFileInfo(m_file).absolutePath() + "/texts") {
     load();
 }
 
@@ -155,15 +160,54 @@ void Library::savePosition(const QString &path, int chapter, int paragraph, int 
     emit changed();
 }
 
+bool Library::isText(const QString &path) const {
+    return QFileInfo(path).absolutePath() == QFileInfo(m_textDirectory).absoluteFilePath();
+}
+
+QString Library::addText(const QString &title, const QString &text) {
+    if (text.trimmed().isEmpty())
+        return {};
+    // Pasted text can be private, so only its owner can read it.
+    if (!QDir().mkpath(m_textDirectory))
+        return {};
+    QFile::setPermissions(m_textDirectory, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    const QString path = m_textDirectory + "/" + now.toString("yyyyMMdd-HHmmss") + "-"
+                         + QUuid::createUuid().toString(QUuid::Id128).left(8) + ".json";
+    const QString name = title.simplified().isEmpty() ? PastedTitle::fromText(text) : title.simplified();
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly))
+        return {};
+    file.setPermissions(QFile::ReadOwner | QFile::WriteOwner);
+    file.write(BookLoader::pastedText(name, text, now));
+    if (!file.commit())
+        return {};
+
+    // In the library straight away, even before it is first opened.
+    LibraryEntry e;
+    e.path = path;
+    e.title = name;
+    e.format = "text";
+    e.opened = now;
+    m_entries.append(e);
+    sort();
+    save();
+    emit changed();
+    return path;
+}
+
 void Library::remove(const QString &path) {
     const int i = indexOf(path);
     if (i < 0)
         return;
-    // Forgets the book only; the file itself is left alone.
+    // Forgets the book only; the file itself is left alone. Pasted text has
+    // no other copy, so it goes to the trash, where it can still be restored.
     const QString cover = m_entries.at(i).cover;
     m_entries.removeAt(i);
     if (!cover.isEmpty() && cover.startsWith(m_coverDirectory))
         QFile::remove(cover);
+    if (isText(path) && QFileInfo::exists(path))
+        QFile::moveToTrash(path);
     save();
     emit changed();
 }

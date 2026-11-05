@@ -7,6 +7,21 @@ import QtQuick.Layouts
 FocusScope {
     id: root
 
+    // Whether the dialog for pasted text is up, which owns the keys then.
+    property bool pasteOpen: false
+    signal addTextRequested(bool fromClipboard)
+
+    Shortcut {
+        sequence: "N"
+        enabled: root.visible && !root.pasteOpen
+        onActivated: root.addTextRequested(false)
+    }
+    Shortcut {
+        sequence: StandardKey.Paste
+        enabled: root.visible && !root.pasteOpen
+        onActivated: root.addTextRequested(true)
+    }
+
     Keys.onPressed: event => {
         if (grid.count === 0)
             return
@@ -43,6 +58,14 @@ FocusScope {
             }
             Rectangle { width: 8; height: 8; radius: 4; color: theme.accent; Layout.alignment: Qt.AlignBaseline }
             Item { Layout.fillWidth: true }
+            Button {
+                objectName: "addTextButton"
+                flat: true
+                text: qsTr("Add text")
+                onClicked: root.addTextRequested(false)
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Paste text to read aloud (N, or Ctrl+V to paste right away)")
+            }
             AccentButton {
                 text: qsTr("Open book")
                 onClicked: reader.openDialog()
@@ -190,7 +213,7 @@ FocusScope {
                     width: parent.width
                     horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.Wrap
-                    text: qsTr("Press O or drop a file here to open an EPUB, PDF, FB2, DOCX, ODT, Markdown, HTML or text book. Kindle formats open through Calibre.")
+                    text: qsTr("Press O or drop a file here to open an EPUB, PDF, FB2, DOCX, ODT, Markdown, HTML or text book. Kindle formats open through Calibre. Press N to paste text instead.")
                     color: Colors.muted
                 }
             }
@@ -199,7 +222,7 @@ FocusScope {
         Label {
             Layout.fillWidth: true
             visible: grid.count > 0
-            text: qsTr("Enter opens · Delete forgets a book (the file stays) · ? shows every shortcut")
+            text: qsTr("Enter opens · N adds text · Delete forgets a book (the file stays, pasted text goes to the trash) · ? shows every shortcut")
             color: Colors.muted
             font.pixelSize: 12
             horizontalAlignment: Text.AlignHCenter

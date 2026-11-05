@@ -53,7 +53,9 @@ user asks.
   everything.
 - The app never touches the network. Kokoros downloads a missing model on
   its own, so synthesis only starts once both model files exist
-  (`KokoroSetup`). `omareader setup` is the one networked step.
+  (`KokoroSetup`). `omareader setup` is the one networked step. The title
+  agent for pasted text (`TitleAgent`) runs a coding agent that may use the
+  network, so it stays off until the user turns it on in the dialog.
 - Never modify the user's books; save app data atomically (`QSaveFile`).
 - Comments explain why, in full sentences. No em dashes in prose.
 
