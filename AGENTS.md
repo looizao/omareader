@@ -30,11 +30,12 @@ in order, before it counts as done:
 3. **Push it to main** and wait for the full CI run on GitHub
    (`.github/workflows/ci.yml`) to finish green: every job, not just the
    first. Fix anything it reports, push again, and wait again.
-4. **Install it locally** so the user can test it: run `bin/install`. If sudo
-   needs a password, build the package with
-   `cd pkgbuild && makepkg -f --noconfirm` and give the user the exact
-   `sudo pacman -U pkgbuild/omareader-<version>-<rel>-x86_64.pkg.tar.zst`
-   command to run.
+4. **Install it locally** so the user can test it: run `bin/install`. It
+   needs no sudo: it builds and copies the binary to `~/.local/bin` and the
+   icon and launcher entry under `~/.local/share`. If it reports missing
+   dependencies, give the user the `sudo pacman -S` command it prints rather
+   than running it. Check that `omareader version` resolves to
+   `~/.local/bin/omareader`.
 
 Then tell the user what changed, how it was tested, and what to try.
 

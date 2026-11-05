@@ -1,7 +1,64 @@
 #!/bin/sh
+# Builds omareader and installs it for the current user, without sudo:
+# the binary in ~/.local/bin, the icon and launcher entry under
+# $XDG_DATA_HOME. `bin/install --uninstall` removes those files again.
 set -eu
 
 ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
+BIN_DIR="$HOME/.local/bin"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
+BINARY="$BIN_DIR/omareader"
+ICON="$DATA_DIR/icons/hicolor/scalable/apps/omareader.svg"
+DESKTOP="$DATA_DIR/applications/omareader.desktop"
+
+refresh_launcher() {
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database -q "$DATA_DIR/applications" || true
+  fi
+  # A user icon theme directory only has a cache when it has an index.
+  if [ -f "$DATA_DIR/icons/hicolor/index.theme" ] && command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q "$DATA_DIR/icons/hicolor" || true
+  fi
+}
+
+case "${1:-}" in
+  --uninstall)
+    rm -f "$BINARY" "$ICON" "$DESKTOP"
+    refresh_launcher
+    echo "Removed omareader from $BIN_DIR and $DATA_DIR."
+    exit 0
+    ;;
+  "") ;;
+  *)
+    echo "Usage: bin/install [--uninstall]" >&2
+    exit 2
+    ;;
+esac
+
+# The PKGBUILD stays the one list of runtime dependencies. Installing them
+# needs root, so only report what is missing.
+if command -v pacman >/dev/null 2>&1; then
+  missing="$(cd "$ROOT/pkgbuild" && makepkg --printsrcinfo | sed -n 's/^\tdepends = //p' | xargs pacman -T || true)"
+  if [ -n "$missing" ]; then
+    echo "Missing dependencies; install them with:" >&2
+    echo "  sudo pacman -S --needed $(echo "$missing" | tr '\n' ' ')" >&2
+    exit 1
+  fi
+fi
+
 "$ROOT/bin/build"
-cd "$ROOT/pkgbuild"
-exec makepkg -fsi "$@"
+
+install -Dm755 "$ROOT/build/omareader" "$BINARY"
+install -Dm644 "$ROOT/pkgbuild/omareader.svg" "$ICON"
+# The launcher may not search ~/.local/bin, so point it at the binary itself.
+mkdir -p "$(dirname -- "$DESKTOP")"
+sed "s|^Exec=omareader |Exec=$BINARY |" "$ROOT/pkgbuild/omareader.desktop" >"$DESKTOP.tmp"
+chmod 644 "$DESKTOP.tmp"
+mv -f "$DESKTOP.tmp" "$DESKTOP"
+refresh_launcher
+
+echo "Installed $("$BINARY" version) to $BINARY."
+if command -v pacman >/dev/null 2>&1 && pacman -Q omareader >/dev/null 2>&1; then
+  echo "Note: the omareader package is also installed system-wide. This copy" >&2
+  echo "takes precedence; remove the package with: sudo pacman -R omareader" >&2
+fi

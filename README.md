@@ -19,9 +19,15 @@ runs on the CPU.
 ```sh
 git clone https://github.com/looizao/omareader.git
 cd omareader
-bin/install          # builds the Arch package and installs it
+bin/install          # builds it and installs it for you, no sudo
 omareader setup      # once: builds Kokoros and downloads the model
 ```
+
+`bin/install` puts the binary in `~/.local/bin` and the icon and launcher
+entry in `~/.local/share`; `bin/install --uninstall` removes them. It needs
+the packages in the PKGBUILD's `depends` and prints the `pacman` command for
+any that are missing. To install system-wide instead, build the package with
+`cd pkgbuild && makepkg -si`, or use the one from a GitHub release.
 
 `omareader setup` is the only step that uses the network. It builds the `koko`
 command into `~/.local/bin` from a pinned Kokoros commit and downloads the
@@ -134,7 +140,7 @@ omareader skill install                  # agent skill for ~/.claude/skills
 ```sh
 bin/build        # build/omareader
 bin/test         # Qt Test suite, offscreen
-bin/install      # makepkg -fsi
+bin/install      # ~/.local/bin and ~/.local/share, no sudo
 ```
 
 CI builds and tests every push and pull request in an Arch Linux container and
