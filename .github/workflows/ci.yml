@@ -1,6 +1,8 @@
 # Builds and tests every push and pull request on Arch Linux (what Omarchy
 # runs), builds the Arch package and the Android app, and on main publishes a
-# GitHub release whenever VERSION names a version that has no tag yet.
+# GitHub release whenever VERSION names a version that has no tag yet. A new
+# release also goes to Play's internal testing track, and so does main when
+# the workflow is run by hand with "play" ticked (docs/play.md).
 name: CI
 
 on:
@@ -9,6 +11,11 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      play:
+        description: Send the Android app to Play internal testing
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -91,8 +98,10 @@ jobs:
     name: Android app
     runs-on: ubuntu-latest
     steps:
+      # The version code counts the commits, so it needs the whole history.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       # The runner comes with JDK 21 and the Android SDK; the Gradle wrapper
@@ -116,6 +125,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      published: ${{ steps.version.outputs.publish }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -170,3 +181,70 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "omareader $VERSION" \
             --generate-notes
+
+  # Signs the bundle with the upload key and sends it to internal testing.
+  # The key lives in the "play" environment, which only main can use, and the
+  # Play API is reached through workload identity federation, so no Google
+  # key is stored here. Until that is set up, the run stops after the signed
+  # bundle, which is what the first, manual upload to Play needs.
+  play:
+    name: Play internal testing
+    needs: [test, android, release]
+    if: >-
+      !cancelled() && needs.test.result == 'success' && needs.android.result == 'success' &&
+      github.ref == 'refs/heads/main' &&
+      (needs.release.outputs.published == 'true' || (github.event_name == 'workflow_dispatch' && inputs.play))
+    runs-on: ubuntu-latest
+    environment: play
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build the signed bundle
+        env:
+          UPLOAD_KEYSTORE: ${{ secrets.UPLOAD_KEYSTORE }}
+          UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.UPLOAD_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$UPLOAD_KEYSTORE" ] || [ -z "$UPLOAD_KEYSTORE_PASSWORD" ]; then
+            echo "The play environment has no upload key; see docs/play.md."
+            exit 1
+          fi
+          export JAVA_HOME="$JAVA_HOME_21_X64"
+          umask 077
+          printf '%s' "$UPLOAD_KEYSTORE" | base64 -d > "$RUNNER_TEMP/upload.p12"
+          printf 'storeFile=%s\nstorePassword=%s\nkeyAlias=upload\nkeyPassword=%s\n' \
+            "$RUNNER_TEMP/upload.p12" "$UPLOAD_KEYSTORE_PASSWORD" "$UPLOAD_KEYSTORE_PASSWORD" \
+            > android/keystore.properties
+          bin/android bundle
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-bundle
+          path: android/app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+
+      - name: Sign in to Google
+        id: google
+        if: vars.PLAY_SERVICE_ACCOUNT != ''
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.PLAY_WIF_PROVIDER }}
+          service_account: ${{ vars.PLAY_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/androidpublisher
+          create_credentials_file: false
+
+      - name: Send it to internal testing
+        if: vars.PLAY_SERVICE_ACCOUNT != ''
+        env:
+          PLAY_ACCESS_TOKEN: ${{ steps.google.outputs.access_token }}
+        run: bin/android publish
+
+      - name: Remove the upload key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/upload.p12" android/keystore.properties

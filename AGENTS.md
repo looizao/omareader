@@ -54,8 +54,14 @@ Then tell the user what changed, how it was tested, and what to try.
 ## Releases
 
 `bin/release <x.y.z>` bumps `VERSION` and `pkgbuild/PKGBUILD` and pushes;
-CI tags `v<x.y.z>` and publishes the GitHub release. Only release when the
-user asks.
+CI tags `v<x.y.z>`, publishes the GitHub release, and sends the Android app
+to Play internal testing. Only release when the user asks.
+
+Beta testers install the Android app from Play's internal testing track
+(`docs/play.md`). To send main to them between releases, run CI with
+`gh workflow run ci.yml -f play=true`, but only when the user asks: it goes
+straight to their testers' phones. The upload key lives in the `play`
+environment's secrets; never print it or commit it.
 
 ## Conventions
 

@@ -4,12 +4,18 @@ plugins {
     id("com.android.application")
 }
 
-// VERSION at the top of the repository is the one version for the desktop
-// and the phone; 1.2.3 becomes version code 10203.
+// VERSION at the top of the repository is the version people see, the same
+// for the desktop and the phone.
 val appVersion = rootProject.file("../VERSION").readText().trim()
-val appVersionCode = appVersion.split(".").map { it.toInt() }.let { (major, minor, patch) ->
-    major * 10000 + minor * 100 + patch
-}
+
+// Play wants a new, higher version code for every upload, including test
+// builds between releases, so the code is the number of commits: each push
+// to main raises it, and the same commit always builds the same code. A
+// shallow clone counts too few, which is why CI fetches the whole history.
+val appVersionCode = runCatching {
+    providers.exec { commandLine("git", "rev-list", "--count", "HEAD") }
+        .standardOutput.asText.get().trim().toInt()
+}.getOrDefault(1)
 
 // A release is signed with the key named in keystore.properties when there is
 // one (kept out of git), otherwise with the debug key, which is enough to

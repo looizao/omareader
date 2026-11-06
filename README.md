@@ -165,6 +165,11 @@ install it on a phone with USB debugging on, run `bin/android install`; the
 release is signed with your debug key unless `android/keystore.properties`
 names another (`storeFile`, `storePassword`, `keyAlias`, `keyPassword`).
 
+Beta testers get it from Google Play's internal testing track: each release,
+or a run of CI with **play** ticked, sends the build there. Setting that up
+is in [docs/play.md](docs/play.md); the privacy policy Play links to is
+[docs/privacy.md](docs/privacy.md).
+
 ## Keyboard
 
 | Key | Action |
@@ -250,6 +255,8 @@ bin/test         # Qt Test suite, offscreen
 bin/install      # ~/.local/bin and ~/.local/share, no sudo
 bin/android test     # the Android app's unit tests and lint
 bin/android install  # build the APK and install it over adb
+bin/android bundle   # the signed bundle for Google Play
+bin/android publish  # send it to Play internal testing (docs/play.md)
 ```
 
 The Android build needs a JDK and the Android SDK (`ANDROID_HOME`, or
