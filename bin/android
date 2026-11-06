@@ -1,0 +1,43 @@
+#!/bin/sh
+# Builds, tests and installs the Android app in android/.
+#   bin/android test      JVM unit tests and lint
+#   bin/android build     the release APK (R8-shrunk), printed path
+#   bin/android install   builds it and installs it on the phone or
+#                         emulator adb sees
+# Needs a JDK and the Android SDK, found through ANDROID_HOME or
+# ~/Android/Sdk; Gradle itself comes through the wrapper.
+set -eu
+
+ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
+if [ -z "${ANDROID_HOME:-}" ] && [ -d "$HOME/Android/Sdk" ]; then
+  ANDROID_HOME="$HOME/Android/Sdk"
+fi
+if [ -z "${ANDROID_HOME:-}" ]; then
+  echo "The Android SDK was not found; set ANDROID_HOME." >&2
+  exit 1
+fi
+export ANDROID_HOME
+APK="$ROOT/android/app/build/outputs/apk/release/app-release.apk"
+
+gradle() {
+  (cd "$ROOT/android" && ./gradlew --console=plain "$@")
+}
+
+case "${1:-}" in
+  test)
+    gradle testDebugUnitTest lintRelease
+    ;;
+  build)
+    gradle assembleRelease
+    echo "Built $APK ($(du -h "$APK" | cut -f1))"
+    ;;
+  install)
+    gradle assembleRelease
+    "$ANDROID_HOME/platform-tools/adb" install -r "$APK"
+    echo "Installed $APK"
+    ;;
+  *)
+    echo "Usage: bin/android test|build|install" >&2
+    exit 2
+    ;;
+esac

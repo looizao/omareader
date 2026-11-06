@@ -16,7 +16,9 @@ class FilePicker;
 // Turns a whole book into audio files for listening elsewhere, such as a
 // podcast or audiobook app on a phone. The voice reads one chapter per run and
 // ffmpeg encodes each chapter as it arrives; at the end the chapters become
-// either one file with chapter markers or a folder with one file per chapter.
+// either one file with chapter markers, a folder with one file per chapter,
+// or a phone bundle: the chapters' AAC audio with their text and the time of
+// every word, so the omareader phone app can highlight along as it plays.
 // Everything is built in a hidden folder beside the destination and renamed
 // into place, so an export that fails or is cancelled leaves nothing behind
 // and never replaces an existing file.
@@ -38,7 +40,7 @@ class Exporter : public QObject {
 public:
     enum Layout { SingleFile, ChapterFiles };
     Q_ENUM(Layout)
-    enum Format { Mp3, M4b };
+    enum Format { Mp3, M4b, Phone };
     Q_ENUM(Format)
 
     struct Options {
@@ -109,6 +111,17 @@ public:
     static QStringList joinArguments(Format format, const QString &list, const QString &metadata,
                                      const QString &coverPath, const QString &output);
 
+    // The phone bundle (see docs/omabook.md): where each chapter's files sit
+    // inside it, its manifest, and one chapter's text with its word timings
+    // as a flat list of paragraph, offset, length, start and end (in ms),
+    // plus the index of each sentence's first word.
+    static QString phoneEntryName(const QString &folder, int number, const QString &extension);
+    static QString phoneBookId(const Book &book);
+    static QByteArray phoneManifest(const Book &book, const VoiceSettings &voice, const QStringList &chapterTitles,
+                                    const QList<qint64> &frames, int sampleRate, bool hasCover);
+    static QByteArray phoneChapter(const Book &book, int chapter, const QString &title, const QList<int> &words,
+                                   const QList<int> &sentences);
+
 signals:
     void runningChanged();
     void progressChanged();
@@ -123,11 +136,13 @@ private:
     void onRunFinished(bool ok, const QString &error);
     void writeReady();
     void writeSamples(const QByteArray &samples);
+    void recordWords(int sentence, const SpokenSentence &spoken);
     bool startEncoder(int sampleRate);
     void finishEncoder();
     void onEncoderFinished(int code, QProcess::ExitStatus status);
     void assemble();
     void onJoinFinished(int code, QProcess::ExitStatus status);
+    void assemblePhone();
     void fail(const QString &message);
     void succeed(const QString &path);
     void reset();
@@ -155,7 +170,7 @@ private:
     std::unique_ptr<QProcess> m_joiner;
     int m_track = -1;
     int m_next = 0; // index into the track's sentences of the next one to write
-    QHash<int, Audio> m_ready;
+    QHash<int, SpokenSentence> m_ready;
     QSet<int> m_failed;
     bool m_runDone = false;
     int m_sampleRate = 0;
@@ -163,4 +178,11 @@ private:
     QStringList m_trackFiles;
     QStringList m_trackTitles;
     QList<qint64> m_trackLengths;
+    // For the phone bundle: the words timed so far in the chapter being
+    // encoded, then each finished chapter's words and book chapter.
+    QList<int> m_trackWords;
+    QList<int> m_trackSentences;
+    QList<QList<int>> m_trackTimings;
+    QList<QList<int>> m_trackSentenceStarts;
+    QList<int> m_trackChapters;
 };

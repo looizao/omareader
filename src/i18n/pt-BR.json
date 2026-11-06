@@ -235,5 +235,8 @@
   "Youthful Beijing male voice with a clear, natural timbre": "Voz masculina jovem de Pequim, de timbre claro e natural",
   "Lively Chengdu male voice with a slightly husky brightness": "Voz masculina animada de Chengdu, brilhante e um pouco rouca",
   "Playful Japanese female voice with a light, nimble timbre": "Voz feminina japonesa brincalhona, de timbre leve e ágil",
-  "Warm Korean female voice with rich emotion": "Voz feminina coreana calorosa, cheia de emoção"
+  "Warm Korean female voice with rich emotion": "Voz feminina coreana calorosa, cheia de emoção",
+  "omareader for Android, with the words highlighted": "omareader para Android, com as palavras destacadas",
+  "Save it in a Google Drive or Dropbox folder, then open the .omabook file on your phone with omareader.": "Salve numa pasta do Google Drive ou do Dropbox e abra o arquivo .omabook no celular com o omareader.",
+  "Could not write the phone bundle: %1": "Não foi possível gravar o pacote para o celular: %1"
 }

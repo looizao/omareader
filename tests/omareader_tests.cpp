@@ -30,6 +30,7 @@
 #include "titleagent.h"
 #include "translator.h"
 #include "voicesettings.h"
+#include "zipwriter.h"
 
 // Every book here is made up inside the test, so nothing personal or
 // copyrighted is checked in.
@@ -1259,6 +1260,147 @@ private slots:
         QVERIFY(QFileInfo(exporter.result()).permissions() & QFile::ReadOther);
     }
 
+    void zipWriterWritesStoredEntries() {
+        QCOMPARE(ZipWriter::crc32("123456789"), 0xCBF43926u);
+        QCOMPARE(ZipWriter::crc32("6789", ZipWriter::crc32("12345")), 0xCBF43926u);
+        QTemporaryDir dir;
+        QByteArray big(3 * 1024 * 1024 + 17, '\0');
+        for (int i = 0; i < big.size(); ++i)
+            big[i] = char((i * 31) ^ (i >> 7));
+        write(dir.filePath("big.bin"), big);
+        const QString path = dir.filePath("out.zip");
+        ZipWriter zip(path);
+        QVERIFY(zip.open());
+        QVERIFY(zip.addData("manifest.json", "{\"a\":1}"));
+        QVERIFY(zip.addFile("audio/001.m4a", dir.filePath("big.bin")));
+        QVERIFY(zip.addData("ã.txt", ""));
+        QVERIFY(!zip.addFile("missing", dir.filePath("nope")));
+        QVERIFY(!zip.error().isEmpty());
+
+        ZipWriter good(path);
+        QVERIFY(good.open());
+        QVERIFY(good.addData("manifest.json", "{\"a\":1}"));
+        QVERIFY(good.addFile("audio/001.m4a", dir.filePath("big.bin")));
+        QVERIFY(good.addData("ã.txt", ""));
+        QVERIFY(good.finish());
+        QStringList names;
+        const QHash<QString, QByteArray> entries = readZip(path, &names);
+        QCOMPARE(names, (QStringList{"manifest.json", "audio/001.m4a", "ã.txt"}));
+        QCOMPARE(entries.value("audio/001.m4a"), big);
+        QCOMPARE(entries.value("manifest.json"), QByteArray("{\"a\":1}"));
+
+        // An independent reader agrees, when one is installed.
+        const QString python = QStandardPaths::findExecutable("python3");
+        if (!python.isEmpty()) {
+            QProcess check;
+            check.start(python, {"-I", "-c",
+                                 "import sys, zipfile\n"
+                                 "z = zipfile.ZipFile(sys.argv[1])\n"
+                                 "assert z.testzip() is None\n"
+                                 "print('|'.join(z.namelist()))",
+                                 path});
+            QVERIFY(check.waitForFinished());
+            QCOMPARE(check.exitCode(), 0);
+            QCOMPARE(QString::fromUtf8(check.readAllStandardOutput()).trimmed(),
+                     QString("manifest.json|audio/001.m4a|ã.txt"));
+        }
+    }
+
+    void phoneBundleDescribesTheBookAndItsWords() {
+        QTemporaryDir dir;
+        Book book = sampleBook(dir.filePath("a.txt"));
+        book.author = "Ann";
+        QCOMPARE(Exporter::extension(Exporter::Phone, Exporter::ChapterFiles), QString("omabook"));
+        QCOMPARE(Exporter::phoneEntryName("audio", 3, "m4a"), QString("audio/003.m4a"));
+        QCOMPARE(Exporter::phoneBookId(book).size(), 16);
+        Book other = book;
+        other.author = "Bob";
+        QVERIFY(Exporter::phoneBookId(other) != Exporter::phoneBookId(book));
+
+        VoiceSettings voice = VoiceSettings::recommended(Engine::Kokoro);
+        const QJsonObject manifest =
+            QJsonDocument::fromJson(Exporter::phoneManifest(book, voice, {"One", "Two"}, {36000, 12000}, 24000, true))
+                .object();
+        QCOMPARE(manifest.value("format").toString(), QString("omabook"));
+        QCOMPARE(manifest.value("version").toInt(), 1);
+        QCOMPARE(manifest.value("id").toString(), Exporter::phoneBookId(book));
+        QCOMPARE(manifest.value("author").toString(), QString("Ann"));
+        QCOMPARE(manifest.value("cover").toString(), QString("cover.jpg"));
+        QCOMPARE(manifest.value("voice").toObject().value("engine").toString(), QString("kokoro"));
+        const QJsonArray chapters = manifest.value("chapters").toArray();
+        QCOMPARE(chapters.size(), 2);
+        QCOMPARE(chapters.at(0).toObject().value("duration").toInteger(), 1500);
+        QCOMPARE(chapters.at(1).toObject().value("audio").toString(), QString("audio/002.m4a"));
+        QCOMPARE(chapters.at(1).toObject().value("text").toString(), QString("text/002.json"));
+        QVERIFY(!QJsonDocument::fromJson(Exporter::phoneManifest(book, voice, {"One"}, {1}, 24000, false))
+                     .object()
+                     .contains("cover"));
+
+        const QJsonObject chapter =
+            QJsonDocument::fromJson(Exporter::phoneChapter(book, 0, "One", {1, 0, 5, 10, 400}, {0})).object();
+        QCOMPARE(chapter.value("title").toString(), QString("One"));
+        QCOMPARE(chapter.value("paragraphs").toArray().size(), 2);
+        QCOMPARE(chapter.value("paragraphs").toArray().at(1).toObject().value("text").toString(), QString("Third."));
+        QCOMPARE(chapter.value("words").toArray().size(), 5);
+        QCOMPARE(chapter.value("words").toArray().at(4).toInt(), 400);
+        QCOMPARE(chapter.value("sentences").toArray(), QJsonArray{0});
+    }
+
+    void exportWritesAPhoneBundle() {
+        if (Exporter::findFfmpeg().isEmpty())
+            QSKIP("ffmpeg is not installed");
+        QTemporaryDir dir;
+        Exporter exporter;
+        QSignalSpy finished(&exporter, &Exporter::finished);
+        Exporter::Options options;
+        options.synthesis.kokoro = fakeKoko(dir);
+        options.folder = dir.filePath("out");
+        options.format = Exporter::Phone;
+        options.layout = Exporter::ChapterFiles; // a bundle is one file whatever the layout
+        QVERIFY(options.synthesis.voice.set("paragraphPause", 0.5));
+        QVERIFY(exporter.start(std::make_shared<Book>(sampleBook(dir.filePath("a.txt"))), options));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 20000);
+        QVERIFY2(finished.first().at(0).toBool(), qPrintable(finished.first().at(1).toString()));
+        QCOMPARE(exporter.result(), dir.filePath("out/Sample.omabook"));
+        QCOMPARE(QDir(options.folder).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden),
+                 QStringList{"Sample.omabook"});
+
+        QStringList names;
+        const QHash<QString, QByteArray> entries = readZip(exporter.result(), &names);
+        QCOMPARE(names, (QStringList{"manifest.json", "audio/001.m4a", "text/001.json", "audio/002.m4a",
+                                     "text/002.json"}));
+        const QJsonObject manifest = QJsonDocument::fromJson(entries.value("manifest.json")).object();
+        QCOMPARE(manifest.value("title").toString(), QString("Sample"));
+        const QJsonArray chapters = manifest.value("chapters").toArray();
+        QCOMPARE(chapters.size(), 2);
+        QCOMPARE(chapters.at(1).toObject().value("title").toString(), QString("Two"));
+        QVERIFY(chapters.at(0).toObject().value("duration").toInteger() > 0);
+        // An MP4 file starts with its ftyp box.
+        QCOMPARE(entries.value("audio/001.m4a").mid(4, 4), QByteArray("ftyp"));
+
+        // "First. Second." and "Third.": three words, in reading order, each
+        // pointing at its paragraph and its characters there.
+        const QJsonObject one = QJsonDocument::fromJson(entries.value("text/001.json")).object();
+        const QJsonArray words = one.value("words").toArray();
+        QCOMPARE(words.size(), 3 * 5);
+        QCOMPARE(words.at(0).toInt(), 0);
+        QCOMPARE(words.at(1).toInt(), 0);
+        QCOMPARE(words.at(2).toInt(), 5);
+        QCOMPARE(words.at(5).toInt(), 0);
+        QCOMPARE(words.at(6).toInt(), 7);
+        QCOMPARE(words.at(10).toInt(), 1);
+        QCOMPARE(one.value("sentences").toArray(), (QJsonArray{0, 1, 2}));
+        int previous = -1;
+        for (int i = 0; i < words.size(); i += 5) {
+            QVERIFY(words.at(i + 3).toInt() >= previous);
+            QVERIFY(words.at(i + 4).toInt() >= words.at(i + 3).toInt());
+            previous = words.at(i + 3).toInt();
+        }
+        // The words sit on the chapter's timeline: "Third." comes after the
+        // paragraph pause, not at the start of its own sentence's audio.
+        QVERIFY(words.at(13).toInt() >= 500);
+    }
+
     void exportCancelLeavesNothingBehind() {
         QTemporaryDir dir;
         Exporter exporter;
@@ -1325,7 +1467,7 @@ private slots:
         QCOMPARE(exporter.format(), int(Exporter::M4b));
         QCOMPARE(exporter.folder(), QString("/tmp/somewhere"));
         exporter.setFormat(42);
-        QCOMPARE(exporter.format(), int(Exporter::M4b));
+        QCOMPARE(exporter.format(), int(Exporter::Phone));
     }
 
     void readerExportsTheOpenBook() {
@@ -1717,6 +1859,36 @@ private:
         QDir().mkpath(setup.model);
         QDir().mkpath(setup.aligner);
         return setup;
+    }
+
+    // Reads the stored entries of an archive ZipWriter wrote, checking each
+    // one's checksum; empty if anything is off.
+    static QHash<QString, QByteArray> readZip(const QString &path, QStringList *names = nullptr) {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly))
+            return {};
+        const QByteArray data = file.readAll();
+        const auto u16 = [&](qsizetype at) { return qFromLittleEndian<quint16>(data.constData() + at); };
+        const auto u32 = [&](qsizetype at) { return qFromLittleEndian<quint32>(data.constData() + at); };
+        QHash<QString, QByteArray> entries;
+        qsizetype pos = 0;
+        while (pos + 30 <= data.size() && u32(pos) == 0x04034b50) {
+            const quint32 crc = u32(pos + 14);
+            const quint32 size = u32(pos + 18);
+            const int nameLength = u16(pos + 26);
+            const int extra = u16(pos + 28);
+            if (u16(pos + 8) != 0 || u32(pos + 22) != size)
+                return {};
+            const QString name = QString::fromUtf8(data.mid(pos + 30, nameLength));
+            const QByteArray content = data.mid(pos + 30 + nameLength + extra, size);
+            if (ZipWriter::crc32(content) != crc)
+                return {};
+            entries.insert(name, content);
+            if (names)
+                names->append(name);
+            pos += 30 + nameLength + extra + size;
+        }
+        return u32(pos) == 0x02014b50 ? entries : QHash<QString, QByteArray>{};
     }
 
     static Book sampleBook(const QString &path) {

@@ -2,6 +2,8 @@
 
 omareader is an offline ebook reader for Omarchy (C++17, Qt 6 Quick, qmake)
 that reads books aloud with Kokoros and highlights each word as it's spoken.
+`android/` is its Android companion (Kotlin, platform views, Media3), which
+plays the `.omabook` bundles the desktop exports (`docs/omabook.md`).
 `README.md` covers what it does and how the pieces fit together.
 
 ## How every change ships
@@ -25,6 +27,15 @@ in order, before it counts as done:
    - For changes to how books are parsed, check `omareader info` and
      `omareader text` against real books, such as the ones in
      `~/Documents/books`.
+   - For the Android app, add tests in `android/app/src/test` and run
+     `bin/android test` (unit tests and lint). When it touches a screen or
+     playback, run it on the emulator (`~/Android/Sdk/emulator/emulator -avd
+     <name> -no-window`, `bin/android install`, `adb exec-out screencap -p`)
+     with a real export, and check the screenshots.
+   - A change to the bundle format touches both sides: update
+     `docs/omabook.md`, and regenerate `android/app/src/test/resources/
+     fixture.omabook` with the real exporter so the contract test stays
+     honest.
 2. **Commit it** with a short imperative message ("Skip code listings in
    PDFs").
 3. **Push it to main** and wait for the full CI run on GitHub
@@ -35,7 +46,8 @@ in order, before it counts as done:
    icon and launcher entry under `~/.local/share`. If it reports missing
    dependencies, give the user the `sudo pacman -S` command it prints rather
    than running it. Check that `omareader version` resolves to
-   `~/.local/bin/omareader`.
+   `~/.local/bin/omareader`. For Android changes, also run
+   `bin/android install` when `adb devices` lists the user's phone.
 
 Then tell the user what changed, how it was tested, and what to try.
 
@@ -51,6 +63,9 @@ user asks.
   keys, every visible string goes through `qsTr()`/`tr()` with a pt-BR entry
   in `src/i18n/pt-BR.json`, and the theme accent and `theme.radius` style
   everything.
+- The Android app keeps the same rules: no network permission, every visible
+  string in `res/values/strings.xml` with a pt-BR entry in
+  `res/values-pt-rBR`, and no libraries beyond Media3 without a reason.
 - The app never touches the network. Kokoros downloads a missing model on
   its own, so synthesis only starts once both model files exist
   (`KokoroSetup`). `omareader setup` is the one networked step. The title

@@ -240,7 +240,7 @@ int exportAudio(const QStringList &arguments) {
     Command command("export", "Read a book aloud into audio files, for a phone or a podcast app.");
     command.parser.addPositionalArgument("book", "The book file");
     command.parser.addOption({"split", "One file per chapter in a folder named after the book"});
-    command.parser.addOption({"format", "mp3 (the default) or m4b", "format", "mp3"});
+    command.parser.addOption({"format", "mp3 (the default), m4b, or omabook for the omareader phone app", "format", "mp3"});
     addVoiceOptions(command.parser);
     command.parser.addOption({"output", "The folder to write to (the current one by default)", "folder"});
     command.parser.addOption({"chapters", "Only these chapters, such as 3 or 2-5", "range"});
@@ -249,7 +249,7 @@ int exportAudio(const QStringList &arguments) {
         return command.parser.isSet("help") ? 0 : 1;
     const QStringList positional = command.parser.positionalArguments();
     if (positional.size() != 1)
-        return fail("Use: omareader export <book> [--split] [--format mp3|m4b] [--engine kokoro|qwen] [--voice ID] "
+        return fail("Use: omareader export <book> [--split] [--format mp3|m4b|omabook] [--engine kokoro|qwen] [--voice ID] "
                     "[--language L] [--speed X] [--tune key=value] [--output DIR] [--chapters N-M] [--json]");
 
     // The window's engine, voice and tuning unless the command names others.
@@ -259,9 +259,9 @@ int exportAudio(const QStringList &arguments) {
     Exporter::Options options;
     options.synthesis = Synthesis::optionsFor(voice);
     const QString format = command.parser.value("format").toLower();
-    if (format != "mp3" && format != "m4b")
-        return fail("The format is mp3 or m4b.");
-    options.format = format == "m4b" ? Exporter::M4b : Exporter::Mp3;
+    if (format != "mp3" && format != "m4b" && format != "omabook")
+        return fail("The format is mp3, m4b or omabook.");
+    options.format = format == "m4b" ? Exporter::M4b : format == "omabook" ? Exporter::Phone : Exporter::Mp3;
     options.layout = command.parser.isSet("split") ? Exporter::ChapterFiles : Exporter::SingleFile;
     options.folder = QDir(command.parser.isSet("output") ? command.parser.value("output") : QDir::currentPath())
                          .absolutePath();

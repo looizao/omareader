@@ -1,6 +1,6 @@
 # Builds and tests every push and pull request on Arch Linux (what Omarchy
-# runs), builds the Arch package, and on main publishes a GitHub release
-# whenever VERSION names a version that has no tag yet.
+# runs), builds the Arch package and the Android app, and on main publishes a
+# GitHub release whenever VERSION names a version that has no tag yet.
 name: CI
 
 on:
@@ -87,9 +87,31 @@ jobs:
           path: pkgbuild/omareader-*.pkg.tar.zst
           if-no-files-found: error
 
+  android:
+    name: Android app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The runner comes with JDK 21 and the Android SDK; the Gradle wrapper
+      # checks its download against the SHA-256 sum in its properties.
+      - name: Test, lint and build the release APK
+        run: |
+          export JAVA_HOME="$JAVA_HOME_21_X64"
+          bin/android test
+          bin/android build
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+
   release:
     name: Release
-    needs: package
+    needs: [package, android]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     permissions:

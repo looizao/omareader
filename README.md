@@ -123,7 +123,8 @@ sentence you are on.
 Press E (or the ⤓ button) to turn the whole book into audio for your phone, a
 podcast app or an audiobook player. Choose one file with chapter markers or a
 folder with one file per chapter, as MP3 (plays everywhere) or M4B (an AAC
-audiobook). The files use the voice and speed you read with, carry the title,
+audiobook), or a bundle for omareader on Android, which highlights the words
+as they play (see below). The files use the voice and speed you read with, carry the title,
 author, track numbers and cover, and land in `~/Music/Audiobooks` unless you
 pick another folder.
 
@@ -135,6 +136,34 @@ going after you close the dialog, at a lower priority so reading aloud stays
 smooth. It is built in a hidden folder and renamed into place at the end, so
 a cancelled export leaves nothing behind and an earlier export is never
 replaced. Exports need `ffmpeg`.
+
+## On your phone
+
+`android/` is omareader for Android: the same read-along, from audio the
+desktop already made. The phone synthesises nothing, so it needs no model,
+no GPU and no network; the app has no internet permission at all.
+
+1. On the desktop, press E and choose **omareader for Android**. The export
+   is one `.omabook` file: each chapter's audio as AAC, the text, and the time
+   of every word (the format is in [docs/omabook.md](docs/omabook.md)).
+2. Save it into a Google Drive or Dropbox folder (or copy it over any way you
+   like). Syncing is yours to run; omareader just writes the file.
+3. On the phone, open the file from Drive or Dropbox with omareader, or press
+   + in the app and pick it. The book is copied into the app.
+
+Press play and the words light up as they are heard, like on the desktop.
+Tap a word to read from there; scroll away and the view stays put until you
+tap **Back to the voice**. The buttons move by chapter and by sentence, and
+the speed and text size are in the top bar. Playback carries on with the
+screen off, with the lock screen, headphone and Bluetooth controls, and each
+book remembers where it stopped. Exporting a book again, with another voice or
+speed, replaces it on the phone and keeps your place.
+
+The app is about 0.8 MB: Kotlin with the platform's own views and Media3's
+player trimmed to AAC audio, no AppCompat, Compose or other libraries. To
+install it on a phone with USB debugging on, run `bin/android install`; the
+release is signed with your debug key unless `android/keystore.properties`
+names another (`storeFile`, `storePassword`, `keyAlias`, `keyPassword`).
 
 ## Keyboard
 
@@ -170,6 +199,7 @@ omareader info book.epub --json          # metadata and chapters
 omareader text book.epub --chapter 3     # the text as omareader reads it
 omareader export book.epub --split       # audio, one MP3 per chapter
 omareader export book.epub --format m4b  # one M4B audiobook with chapters
+omareader export book.epub --format omabook  # for omareader on Android
 omareader export book.epub --engine qwen --voice ryan --tune temperature=0.7
 omareader voices --engine qwen           # voices, languages and tuning ranges
 omareader doctor --json                  # is read-aloud ready?
@@ -203,7 +233,14 @@ omareader skill install                  # agent skill for ~/.claude/skills
   its layout.
 - `src/exporter.cpp` synthesises the book for exports and pipes the
   samples into `ffmpeg`, then joins the chapters into one file with chapter
-  markers, or keeps them as a folder of tracks.
+  markers, or keeps them as a folder of tracks. For the phone it also keeps
+  every word's time, and `src/zipwriter.cpp` packs the chapters' audio and
+  text into one `.omabook`.
+- `android/` imports a bundle into the app's storage
+  (`BundleImporter.kt`), plays it in a media session service
+  (`PlaybackService.kt`), and on each frame looks up the word at the playback
+  position by binary search and moves one highlight span
+  (`ReaderActivity.kt`).
 
 ## Development
 
@@ -211,10 +248,15 @@ omareader skill install                  # agent skill for ~/.claude/skills
 bin/build        # build/omareader
 bin/test         # Qt Test suite, offscreen
 bin/install      # ~/.local/bin and ~/.local/share, no sudo
+bin/android test     # the Android app's unit tests and lint
+bin/android install  # build the APK and install it over adb
 ```
 
-CI builds and tests every push and pull request in an Arch Linux container and
-builds the package. To release, run `bin/release 0.2.0` on a clean main: it
+The Android build needs a JDK and the Android SDK (`ANDROID_HOME`, or
+`~/Android/Sdk`); the Gradle wrapper fetches the rest.
+
+CI builds and tests every push and pull request in an Arch Linux container,
+builds the package, and tests and builds the Android app. To release, run `bin/release 0.2.0` on a clean main: it
 bumps `VERSION` and the PKGBUILD and pushes, and CI tags `v0.2.0` and publishes
 a GitHub release with the source tarball, the Arch package, and a PKGBUILD
 that builds from the tarball.

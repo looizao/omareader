@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name" translatable="false">omareader</string>
+    <string name="add_book">Add a book</string>
+    <string name="library_empty">No books yet.\n\nOn your computer, open a book in omareader, press E and export it as “omareader for Android”. Put the .omabook file in Google Drive or Dropbox, then add it here, or open it from there with omareader.</string>
+    <string name="importing">Adding the book…</string>
+    <string name="imported">Added %1$s</string>
+    <string name="error_not_a_bundle">That file is not an omareader book. Export one from omareader on your computer as “omareader for Android”.</string>
+    <string name="error_too_new">This book was exported by a newer omareader. Update the app to open it.</string>
+    <string name="error_damaged">This book file is damaged or incomplete. Export it again.</string>
+    <string name="error_unreadable">The file could not be read, or the phone is out of space.</string>
+    <string name="book_missing">This book is no longer on the phone.</string>
+    <string name="remove_title">Remove %1$s?</string>
+    <string name="remove_message">The book and its audio are deleted from this phone. The file you added it from stays where it is.</string>
+    <string name="remove">Remove</string>
+    <string name="cancel">Cancel</string>
+    <string name="not_started">Not started</string>
+    <string name="chapter_of">Chapter %1$d of %2$d</string>
+    <string name="contents">Contents</string>
+    <string name="speed">Playback speed</string>
+    <string name="speed_value">%1$s×</string>
+    <string name="text_size">Text size</string>
+    <string name="text_size_small">Small</string>
+    <string name="text_size_medium">Medium</string>
+    <string name="text_size_large">Large</string>
+    <string name="text_size_larger">Larger</string>
+    <string name="text_size_largest">Largest</string>
+    <string name="back">Back</string>
+    <string name="back_to_voice">Back to the voice</string>
+    <string name="play">Read aloud</string>
+    <string name="pause">Pause</string>
+    <string name="previous_sentence">Previous sentence</string>
+    <string name="next_sentence">Next sentence</string>
+    <string name="previous_chapter">Previous chapter</string>
+    <string name="next_chapter">Next chapter</string>
+    <string name="time_left">−%1$s</string>
+    <string name="playback_error">The audio could not be played: %1$s</string>
+</resources>

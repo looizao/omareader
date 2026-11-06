@@ -31,7 +31,8 @@ HEADERS += \
     src/theme.h \
     src/titleagent.h \
     src/translator.h \
-    src/voicesettings.h
+    src/voicesettings.h \
+    src/zipwriter.h
 
 SOURCES += \
     src/main.cpp \
@@ -52,6 +53,7 @@ SOURCES += \
     src/theme.cpp \
     src/titleagent.cpp \
     src/translator.cpp \
-    src/voicesettings.cpp
+    src/voicesettings.cpp \
+    src/zipwriter.cpp
 
 RESOURCES += src/resources.qrc

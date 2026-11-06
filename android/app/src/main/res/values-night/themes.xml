@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Base.Omareader" parent="android:Theme.Material.NoActionBar">
+        <item name="android:colorPrimary">@color/background</item>
+        <item name="android:colorAccent">@color/control</item>
+        <item name="android:colorControlActivated">@color/control</item>
+        <item name="android:windowBackground">@color/background</item>
+        <item name="android:textColorPrimary">@color/text</item>
+        <item name="android:textColorSecondary">@color/muted</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">@bool/light_bars</item>
+    </style>
+</resources>
