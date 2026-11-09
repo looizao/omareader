@@ -33,5 +33,9 @@
     <string name="previous_chapter">Capítulo anterior</string>
     <string name="next_chapter">Capítulo seguinte</string>
     <string name="time_left">−%1$s</string>
+    <string name="no_book_named">Nenhum livro chamado “%1$s” neste celular.</string>
+    <string name="car_books">Livros</string>
+    <string name="seek_back">Voltar 10 segundos</string>
+    <string name="seek_forward">Avançar 30 segundos</string>
     <string name="playback_error">Não foi possível tocar o áudio: %1$s</string>
 </resources>

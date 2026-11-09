@@ -28,8 +28,11 @@ in order, before it counts as done:
      `omareader text` against real books, such as the ones in
      `~/Documents/books`.
    - For the Android app, add tests in `android/app/src/test` and run
-     `bin/android test` (unit tests and lint). When it touches a screen or
-     playback, run it on the emulator (`~/Android/Sdk/emulator/emulator -avd
+     `bin/android test` (unit tests and lint). Behaviour only Android can
+     show, such as the media library Android Auto browses, has device tests
+     in `android/app/src/androidTest`: run `bin/android device-test` with the
+     emulator up. When it touches a screen or playback, run it on the
+     emulator (`~/Android/Sdk/emulator/emulator -avd
      <name> -no-window`, `bin/android install`, `adb exec-out screencap -p`)
      with a real export, and check the screenshots.
    - A change to the bundle format touches both sides: update

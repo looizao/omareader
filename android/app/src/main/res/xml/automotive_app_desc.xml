@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- omareader is a media app in the car: Android Auto draws its screens from
+     the library PlaybackService offers. -->
+<automotiveApp>
+    <uses name="media" />
+</automotiveApp>

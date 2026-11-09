@@ -126,6 +126,15 @@ apps to testing tracks**, and nothing else.
 Try it with `gh workflow run ci.yml -f play=true`: the run ends with "Sent
 x.y.z (n) to internal testing", and testers get the update.
 
+## In the car
+
+Testers who install from internal testing see omareader in Android Auto
+straight away: Android Auto trusts apps from Play, and internal testing
+skips review. A build installed with `bin/android install` is not from Play,
+so Android Auto hides it until its developer settings allow unknown sources
+(Android Auto settings, tap the version ten times, the menu, Developer
+settings, Unknown sources).
+
 ## When it goes wrong
 
 `bin/android publish` prints Play's own explanation and leaves nothing half

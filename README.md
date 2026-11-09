@@ -159,6 +159,13 @@ screen off, with the lock screen, headphone and Bluetooth controls, and each
 book remembers where it stopped. Exporting a book again, with another voice or
 speed, replaces it on the phone and keeps your place.
 
+In the car, omareader shows up in Android Auto as a media app: your books
+as a grid of covers with how far you have got, each playing from where you
+left it at your reading speed. The chapters are in the queue, the buttons
+beside play go back 10 seconds and forward 30, and "Hey Google, play Dune on
+omareader" finds a book by its title or author. Pressing play when the car
+connects, or on headphones with the app closed, picks up the last book.
+
 The app is about 0.8 MB: Kotlin with the platform's own views and Media3's
 player trimmed to AAC audio, no AppCompat, Compose or other libraries. To
 install it on a phone with USB debugging on, run `bin/android install`; the
@@ -255,6 +262,7 @@ bin/test         # Qt Test suite, offscreen
 bin/install      # ~/.local/bin and ~/.local/share, no sudo
 bin/android test     # the Android app's unit tests and lint
 bin/android install  # build the APK and install it over adb
+bin/android device-test  # the tests that need Android, on an emulator
 bin/android bundle   # the signed bundle for Google Play
 bin/android publish  # send it to Play internal testing (docs/play.md)
 ```

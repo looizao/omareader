@@ -14,6 +14,7 @@ class Library(context: Context) {
     private val app = context.applicationContext
     private val importer = BundleImporter(File(app.filesDir, "books"))
     private val prefs = app.getSharedPreferences("library", Context.MODE_PRIVATE)
+    private val reader = app.getSharedPreferences("reader", Context.MODE_PRIVATE)
 
     // Most recently opened first, then newest import.
     fun books(): List<StoredBook> =
@@ -38,6 +39,14 @@ class Library(context: Context) {
         prefs.edit().putLong(OPENED + id, System.currentTimeMillis()).apply()
     }
 
+    // The reading speed is one setting for every book, kept with the reader's
+    // other settings; the car plays at the speed chosen on the phone.
+    fun speed(): Float = reader.getFloat(SPEED, 1f).coerceIn(SPEEDS.first(), SPEEDS.last())
+
+    fun setSpeed(speed: Float) {
+        reader.edit().putFloat(SPEED, speed).apply()
+    }
+
     // Copies the bundle in. A new export of a book already here replaces it
     // and keeps the place reached, moved onto the new export's timings.
     fun import(uri: Uri): StoredBook {
@@ -59,9 +68,11 @@ class Library(context: Context) {
 
     fun cleanUp() = importer.cleanUp()
 
-    private companion object {
-        const val POSITION = "position:"
-        const val OPENED = "opened:"
+    companion object {
+        val SPEEDS = listOf(0.75f, 0.9f, 1f, 1.1f, 1.25f, 1.5f, 1.75f, 2f)
+        private const val POSITION = "position:"
+        private const val OPENED = "opened:"
+        private const val SPEED = "speed"
     }
 }
 

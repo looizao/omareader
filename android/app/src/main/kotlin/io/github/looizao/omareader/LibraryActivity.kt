@@ -8,6 +8,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
 import android.view.View
 import android.view.ViewGroup
 import android.widget.BaseAdapter
@@ -60,6 +61,10 @@ class LibraryActivity : Activity() {
     }
 
     private fun handle(intent: Intent?) {
+        if (intent?.action == MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH) {
+            playFromSearch(intent.getStringExtra(android.app.SearchManager.QUERY))
+            return
+        }
         val uri: Uri? = when (intent?.action) {
             Intent.ACTION_VIEW -> intent.data
             Intent.ACTION_SEND -> if (Build.VERSION.SDK_INT >= 33) {
@@ -125,8 +130,25 @@ class LibraryActivity : Activity() {
         },
     )
 
-    private fun open(book: StoredBook) {
-        startActivity(Intent(this, ReaderActivity::class.java).putExtra(ReaderActivity.EXTRA_BOOK, book.id))
+    private fun open(book: StoredBook, play: Boolean = false) {
+        startActivity(
+            Intent(this, ReaderActivity::class.java)
+                .putExtra(ReaderActivity.EXTRA_BOOK, book.id)
+                .putExtra(ReaderActivity.EXTRA_PLAY, play),
+        )
+    }
+
+    // The book the assistant heard, read aloud from where it was left; with
+    // no title, the book opened last.
+    private fun playFromSearch(query: String?) {
+        Background.run({ CarCatalog.find(library.books(), query) }) { result ->
+            val book = result.getOrNull()
+            if (book != null) {
+                open(book, play = true)
+            } else {
+                Toast.makeText(this, getString(R.string.no_book_named, query.orEmpty()), Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     private fun confirmRemove(book: StoredBook) {

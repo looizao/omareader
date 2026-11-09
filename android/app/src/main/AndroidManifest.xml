@@ -35,6 +35,11 @@
                 <data android:mimeType="application/octet-stream" />
                 <data android:mimeType="application/vnd.omareader.omabook" />
             </intent-filter>
+            <!-- "Play Dune on omareader" said to the assistant on the phone. -->
+            <intent-filter>
+                <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
 
         <activity
@@ -43,13 +48,39 @@
             android:exported="false"
             android:launchMode="singleTop" />
 
+        <!-- Exported so the system, Android Auto and Bluetooth can reach the
+             session; PlaybackService decides which apps may list the books. -->
         <service
             android:name=".PlaybackService"
             android:exported="true"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
-                <action android:name="androidx.media3.session.MediaSessionService" />
+                <action android:name="androidx.media3.session.MediaLibraryService" />
+                <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
+
+        <!-- A play button pressed with the app closed (in the car, on
+             headphones) resumes the last book. -->
+        <receiver
+            android:name="androidx.media3.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Covers for the car and the system's media controls. Not exported:
+             only apps PlaybackService grants access may read them. -->
+        <provider
+            android:name=".CoverProvider"
+            android:authorities="${applicationId}.covers"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+
+        <!-- Tells Android Auto this is a media app it can show in the car. -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
     </application>
 </manifest>

@@ -179,13 +179,20 @@ class ReaderActivity : Activity() {
             if (playing != null) library.savePosition(playing.first, Position(c.currentMediaItemIndex, c.currentPosition))
             val place = library.position(stored.id)
             c.setMediaItems(
-                chapters.indices.map { PlaybackService.chapterItem(stored, it) },
+                chapters.indices.map { PlaybackService.chapterItem(this, stored, it) },
                 place.chapter.coerceIn(chapters.indices),
                 place.ms,
             )
             c.prepare()
         }
         c.setPlaybackSpeed(speed())
+        // Opened by a voice request: read aloud straight away, once, so a
+        // rotation or a return to the screen does not start it again.
+        if (intent.getBooleanExtra(EXTRA_PLAY, false)) {
+            intent.removeExtra(EXTRA_PLAY)
+            if (c.playbackState == Player.STATE_IDLE) c.prepare()
+            c.play()
+        }
         following = true
         follow.visibility = View.GONE
         updatePlayButton()
@@ -399,7 +406,7 @@ class ReaderActivity : Activity() {
             .show()
     }
 
-    private fun speed() = prefs.getFloat(SPEED, 1f).coerceIn(SPEEDS.first(), SPEEDS.last())
+    private fun speed() = library.speed()
 
     private fun formatSpeed(value: Float) =
         getString(R.string.speed_value, NumberFormat.getNumberInstance().apply { maximumFractionDigits = 2 }.format(value))
@@ -414,7 +421,7 @@ class ReaderActivity : Activity() {
             .setTitle(R.string.speed)
             .setSingleChoiceItems(SPEEDS.map { formatSpeed(it) }.toTypedArray(), current) { dialog, which ->
                 dialog.dismiss()
-                prefs.edit().putFloat(SPEED, SPEEDS[which]).apply()
+                library.setSpeed(SPEEDS[which])
                 controller?.setPlaybackSpeed(SPEEDS[which])
                 showSpeed()
             }
@@ -531,9 +538,9 @@ class ReaderActivity : Activity() {
 
     companion object {
         const val EXTRA_BOOK = "book"
-        private const val SPEED = "speed"
+        const val EXTRA_PLAY = "play"
         private const val TEXT_SIZE = "textSize"
-        private val SPEEDS = listOf(0.75f, 0.9f, 1f, 1.1f, 1.25f, 1.5f, 1.75f, 2f)
+        private val SPEEDS = Library.SPEEDS
         private val TEXT_SIZES = listOf(15f, 17f, 19f, 22f, 26f)
     }
 }

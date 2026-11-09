@@ -33,7 +33,11 @@ android {
         targetSdk = 36
         versionCode = appVersionCode
         versionName = appVersion
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
+
+    // The device tests import the same real export the JVM tests read.
+    sourceSets.getByName("androidTest").assets.directories.add("src/test/resources")
 
     signingConfigs {
         if (keystoreFile.exists()) {
@@ -80,4 +84,9 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     // Android's org.json is a stub in local unit tests; this is the real one.
     testImplementation("org.json:json:20260814")
+
+    // Device tests (bin/android device-test) drive the media library the way
+    // Android Auto does; they run on an emulator and never ship in the app.
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
 }
