@@ -4,6 +4,8 @@
 #include "fixtures.h"
 
 #include <QFile>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <private/qzipwriter_p.h>
 
 namespace {
@@ -137,3 +139,47 @@ while True:
     reply({"event": "done", "req": request["req"], "items": results})
 )PY";
 }
+
+FakeHttpServer::FakeHttpServer(Handler handler) : m_handler(std::move(handler)), m_server(new QTcpServer) {
+    m_server->listen(QHostAddress::LocalHost, 0);
+    QObject::connect(m_server.get(), &QTcpServer::newConnection, m_server.get(), [this] {
+        while (QTcpSocket *socket = m_server->nextPendingConnection()) {
+            auto buffer = std::make_shared<QByteArray>();
+            QObject::connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+            QObject::connect(socket, &QTcpSocket::readyRead, socket, [this, socket, buffer] {
+                buffer->append(socket->readAll());
+                const qsizetype end = buffer->indexOf("\r\n\r\n");
+                if (end < 0)
+                    return;
+                Request request;
+                const QList<QByteArray> lines = buffer->left(end).split('\n');
+                const QList<QByteArray> first = lines.value(0).trimmed().split(' ');
+                request.method = first.value(0);
+                request.target = first.value(1);
+                for (qsizetype i = 1; i < lines.size(); ++i) {
+                    const qsizetype colon = lines.at(i).indexOf(':');
+                    if (colon > 0)
+                        request.headers.insert(lines.at(i).left(colon).trimmed().toLower(),
+                                               lines.at(i).mid(colon + 1).trimmed());
+                }
+                const qsizetype length = request.headers.value("content-length").toLongLong();
+                if (buffer->size() < end + 4 + length)
+                    return;
+                request.body = buffer->mid(end + 4, length);
+                buffer->clear();
+                requests.append(request);
+                const Response response = m_handler(request);
+                QByteArray out = "HTTP/1.1 " + QByteArray::number(response.status) + " X\r\n";
+                for (const auto &[name, value] : response.headers)
+                    out += name + ": " + value + "\r\n";
+                out += "Content-Length: " + QByteArray::number(response.body.size()) + "\r\nConnection: close\r\n\r\n";
+                socket->write(out + response.body);
+                socket->disconnectFromHost();
+            });
+        }
+    });
+}
+
+FakeHttpServer::~FakeHttpServer() = default;
+
+QString FakeHttpServer::url() const { return QStringLiteral("http://127.0.0.1:%1").arg(m_server->serverPort()); }

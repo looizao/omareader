@@ -19,6 +19,9 @@ ApplicationWindow {
     Material.roundedScale: theme.radius
 
     property bool helpVisible: false
+
+    // Coming back to the window is when another device has most likely moved on.
+    onActiveChanged: if (active) sync.windowActivated()
     readonly property string message: reader.error !== "" ? reader.error
                                     : narrator.error !== "" ? narrator.error : exporter.error
 
@@ -191,6 +194,39 @@ ApplicationWindow {
                     onClicked: exporter.clearResult()
                     ToolTip.visible: hovered
                     ToolTip.text: qsTr("Dismiss (Esc)")
+                }
+            }
+        }
+
+        // Says why the page jumped: the place came from another device.
+        Rectangle {
+            id: syncNotice
+            visible: false
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.top
+            anchors.topMargin: 64
+            width: Math.min(syncLabel.implicitWidth + 24, parent.width - 48)
+            height: syncLabel.implicitHeight + 16
+            radius: theme.radius
+            color: Colors.raised
+            border.color: theme.accent
+            Label {
+                id: syncLabel
+                anchors.centerIn: parent
+                text: qsTr("Moved to where you stopped on another device")
+                color: Colors.text
+                font.pixelSize: 13
+            }
+            Timer {
+                id: syncNoticeTimer
+                interval: 4000
+                onTriggered: syncNotice.visible = false
+            }
+            Connections {
+                target: reader
+                function onMovedBySync() {
+                    syncNotice.visible = true
+                    syncNoticeTimer.restart()
                 }
             }
         }

@@ -9,8 +9,9 @@ word as it's spoken, so you can follow along. Inspired by
 window, C++ and Qt Quick, driven from the keyboard, following your theme and
 language.
 
-Everything runs on your machine. omareader has no accounts, no sync, and no
-network code: books are parsed locally and the voice is
+Everything runs on your machine. omareader has no accounts and talks to the
+network only when you ask it to (setup, and Dropbox sync if you turn it on):
+books are parsed locally and the voice is
 [Kokoros](https://github.com/lucasjinreal/Kokoros), a Rust build of Kokoro that
 runs on the CPU. If you have an NVIDIA GPU, you can add
 [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) as a second voice engine,
@@ -140,14 +141,16 @@ replaced. Exports need `ffmpeg`.
 ## On your phone
 
 `android/` is omareader for Android: the same read-along, from audio the
-desktop already made. The phone synthesises nothing, so it needs no model,
-no GPU and no network; the app has no internet permission at all.
+desktop already made. The phone synthesises nothing, so it needs no model
+and no GPU. It uses the network only for Dropbox sync, and only once you
+connect it.
 
 1. On the desktop, press E and choose **omareader for Android**. The export
    is one `.omabook` file: each chapter's audio as AAC, the text, and the time
    of every word (the format is in [docs/omabook.md](docs/omabook.md)).
-2. Save it into a Google Drive or Dropbox folder (or copy it over any way you
-   like). Syncing is yours to run; omareader just writes the file.
+2. With Dropbox sync on (below), that's all: the book arrives on the phone
+   by itself. Otherwise save it into a Google Drive or Dropbox folder, or
+   copy it over any way you like.
 3. On the phone, open the file from Drive or Dropbox with omareader, or press
    + in the app and pick it. The book is copied into the app.
 
@@ -158,6 +161,25 @@ the speed and text size are in the top bar. Playback carries on with the
 screen off, with the lock screen, headphone and Bluetooth controls, and each
 book remembers where it stopped. Exporting a book again, with another voice or
 speed, replaces it on the phone and keeps your place.
+
+### Sync through Dropbox
+
+Connect Dropbox in the desktop's settings (A, at the bottom) and in the
+phone's sync screen (the arrows beside +), and the two keep in step:
+
+- Books you export for the phone go to it, and download there on Wi-Fi
+  (or on mobile data, if you allow it).
+- Your place in each book follows you, both ways. When the desktop jumps to
+  where you stopped on the phone, it says so.
+- Removing a book on one removes it from the other.
+- The listening speed is shared; the text size is kept per kind of device.
+
+Whichever change was made last wins. omareader sees only its own folder,
+`Apps/omareader` in your Dropbox, and keeps the sign-in in your keyring (the
+Android Keystore on the phone). Disconnecting revokes it. Sync runs at
+start, when you come back to the window, shortly after a change and every
+15 minutes. `omareader sync status` shows how it's going. The details are in
+[docs/sync.md](docs/sync.md).
 
 In the car, omareader shows up in Android Auto as a media app: your books
 as a grid of covers with how far you have got, each playing from where you
@@ -215,6 +237,7 @@ omareader export book.epub --format omabook  # for omareader on Android
 omareader export book.epub --engine qwen --voice ryan --tune temperature=0.7
 omareader voices --engine qwen           # voices, languages and tuning ranges
 omareader doctor --json                  # is read-aloud ready?
+omareader sync status                    # Dropbox sync, if connected
 omareader skill install                  # agent skill for ~/.claude/skills
 ```
 
@@ -248,6 +271,12 @@ omareader skill install                  # agent skill for ~/.claude/skills
   markers, or keeps them as a folder of tracks. For the phone it also keeps
   every word's time, and `src/zipwriter.cpp` packs the chapters' audio and
   text into one `.omabook`.
+- `src/syncstate.cpp` and `src/syncengine.cpp` merge each book's place and
+  presence, and the settings, as timestamped registers where the newest
+  change wins; `src/dropbox.cpp` speaks Dropbox's API and its sign-in, and
+  `src/sync.cpp` runs a sync on a worker thread and applies what came back.
+  The Android side (`Sync.kt`, `SyncEngine.kt`, `Dropbox.kt`) does the same
+  against the same fixtures (`android/app/src/test/resources/sync`).
 - `android/` imports a bundle into the app's storage
   (`BundleImporter.kt`), plays it in a media session service
   (`PlaybackService.kt`), and on each frame looks up the word at the playback
@@ -269,6 +298,11 @@ bin/android publish  # send it to Play internal testing (docs/play.md)
 
 The Android build needs a JDK and the Android SDK (`ANDROID_HOME`, or
 `~/Android/Sdk`); the Gradle wrapper fetches the rest.
+
+Sync needs a Dropbox app (set up as in [docs/sync.md](docs/sync.md)) whose
+key goes in `DROPBOX_APP_KEY`; both builds read it, and leave sync out when
+it is empty. `OMAREADER_DROPBOX_KEY` overrides it at run time on the
+desktop.
 
 CI builds and tests every push and pull request in an Arch Linux container,
 builds the package, and tests and builds the Android app. To release, run `bin/release 0.2.0` on a clean main: it

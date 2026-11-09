@@ -65,7 +65,12 @@ If Play asks for app content before it will roll out, the answers are:
 
 - Privacy policy: <https://github.com/looizao/omareader/blob/main/docs/privacy.md>
 - Ads: none
-- Data safety: no data collected or shared
+- Data safety: review this before the next release. Until Dropbox sync the
+  answer was "no data collected or shared". Sync now sends, at the user's
+  request and to the user's own Dropbox: books, reading positions and two
+  settings, all over HTTPS. Check Play's current definitions of "collected"
+  and "shared" against that, and keep the answer in step with
+  [privacy.md](privacy.md)
 - App access: everything works without an account
 - Content rating questionnaire: a reference app with none of the listed content
 - Target audience: 13 and over

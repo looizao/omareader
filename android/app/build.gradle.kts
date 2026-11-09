@@ -17,6 +17,15 @@ val appVersionCode = runCatching {
         .standardOutput.asText.get().trim().toInt()
 }.getOrDefault(1)
 
+// The Dropbox app key, public by design (PKCE needs no secret), lives in
+// DROPBOX_APP_KEY beside VERSION so the desktop reads the same one. Empty
+// means this build has no sync. A dropboxAppKey Gradle property overrides
+// it, for trying the sync screen before the real app exists.
+val dropboxAppKey = (providers.gradleProperty("dropboxAppKey").orNull
+    ?: rootProject.file("../DROPBOX_APP_KEY").takeIf { it.exists() }?.readText())
+    .orEmpty().trim()
+require(dropboxAppKey.matches(Regex("[A-Za-z0-9]*"))) { "DROPBOX_APP_KEY holds an unexpected value" }
+
 // A release is signed with the key named in keystore.properties when there is
 // one (kept out of git), otherwise with the debug key, which is enough to
 // install it on your own phone.
@@ -34,6 +43,11 @@ android {
         versionCode = appVersionCode
         versionName = appVersion
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "DROPBOX_APP_KEY", "\"$dropboxAppKey\"")
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     // The device tests import the same real export the JVM tests read.

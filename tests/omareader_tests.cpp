@@ -9,13 +9,16 @@
 #include <QSettings>
 #include <QSignalSpy>
 #include <QStandardPaths>
+#include <QTcpSocket>
 #include <QTemporaryDir>
+#include <QUrlQuery>
 #include <QtEndian>
 #include <QtTest>
 
 #include "audioplayer.h"
 #include "book.h"
 #include "bookloader.h"
+#include "dropbox.h"
 #include "exporter.h"
 #include "filepicker.h"
 #include "fixtures.h"
@@ -25,9 +28,13 @@
 #include "qwen.h"
 #include "reader.h"
 #include "speech.h"
+#include "sync.h"
+#include "syncengine.h"
+#include "syncstate.h"
 #include "synthesizer.h"
 #include "theme.h"
 #include "titleagent.h"
+#include "tokenstore.h"
 #include "translator.h"
 #include "voicesettings.h"
 #include "zipwriter.h"
@@ -669,6 +676,28 @@ private slots:
         shown << "No second voice";
         for (const QString &text : std::as_const(shown))
             QVERIFY2(catalog.contains(text), qPrintable("No pt-BR entry for: " + text));
+    }
+
+    // The sync screens and messages are new; check each of their strings so
+    // none ships in English to a Portuguese reader.
+    void everySyncStringHasAPortugueseTranslation() {
+        QFile file(QString(OMAREADER_SOURCE) + "/src/i18n/pt-BR.json");
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QJsonObject catalog = QJsonDocument::fromJson(file.readAll()).object();
+        static const QRegularExpression call("\\b(?:qsTr|tr)\\(\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+        int found = 0;
+        for (const QString name : {"src/SettingsPanel.qml", "src/ExportDialog.qml", "src/sync.cpp", "src/dropbox.cpp"}) {
+            QFile source(QString(OMAREADER_SOURCE) + "/" + name);
+            QVERIFY(source.open(QIODevice::ReadOnly));
+            const QString text = QString::fromUtf8(source.readAll());
+            for (auto it = call.globalMatch(text); it.hasNext();) {
+                QString key = it.next().captured(1);
+                key.replace("\\\"", "\"").replace("\\n", "\n");
+                ++found;
+                QVERIFY2(catalog.contains(key), qPrintable(name + ": no pt-BR entry for: " + key));
+            }
+        }
+        QVERIFY(found > 20);
     }
 
     void kokoroBlendsVoicesInTenths() {
@@ -1319,7 +1348,8 @@ private slots:
 
         VoiceSettings voice = VoiceSettings::recommended(Engine::Kokoro);
         const QJsonObject manifest =
-            QJsonDocument::fromJson(Exporter::phoneManifest(book, voice, {"One", "Two"}, {36000, 12000}, 24000, true))
+            QJsonDocument::fromJson(
+                Exporter::phoneManifest(book, voice, {"One", "Two"}, {36000, 12000}, 24000, true, {1, 3}))
                 .object();
         QCOMPARE(manifest.value("format").toString(), QString("omabook"));
         QCOMPARE(manifest.value("version").toInt(), 1);
@@ -1332,6 +1362,10 @@ private slots:
         QCOMPARE(chapters.at(0).toObject().value("duration").toInteger(), 1500);
         QCOMPARE(chapters.at(1).toObject().value("audio").toString(), QString("audio/002.m4a"));
         QCOMPARE(chapters.at(1).toObject().value("text").toString(), QString("text/002.json"));
+        // Each bundle chapter knows its chapter in the book, skipping the
+        // ones with nothing to read, so sync can carry a position across.
+        QCOMPARE(chapters.at(0).toObject().value("chapter").toInt(-1), 1);
+        QCOMPARE(chapters.at(1).toObject().value("chapter").toInt(-1), 3);
         QVERIFY(!QJsonDocument::fromJson(Exporter::phoneManifest(book, voice, {"One"}, {1}, 24000, false))
                      .object()
                      .contains("cover"));
@@ -1779,9 +1813,528 @@ private slots:
         QCOMPARE(reader.lineHeight(), 1.0);
     }
 
+    // Sync through Dropbox (docs/sync.md).
+
+    void syncMergesAsThePhoneDoes() {
+        // The same cases the Android tests check, so both apps agree.
+        const QJsonObject vectors = readJson(syncFixture("sync/merge.json"));
+        const QJsonArray cases = vectors.value("cases").toArray();
+        QVERIFY(!cases.isEmpty());
+        for (const QJsonValue &value : cases) {
+            const QJsonObject c = value.toObject();
+            BookState local, remote, merged;
+            QVERIFY(BookState::fromJson(QJsonDocument(c.value("local").toObject()).toJson(), &local));
+            QVERIFY(BookState::fromJson(QJsonDocument(c.value("remote").toObject()).toJson(), &remote));
+            QVERIFY(BookState::fromJson(QJsonDocument(c.value("merged").toObject()).toJson(), &merged));
+            QVERIFY2(BookState::merge(local, remote) == merged, qPrintable(c.value("name").toString()));
+            QVERIFY2(BookState::merge(remote, local) == merged, qPrintable(c.value("name").toString()));
+            BookState again;
+            QVERIFY(BookState::fromJson(merged.toJson(), &again));
+            QVERIFY(again == merged);
+        }
+        const QJsonObject settings = vectors.value("settings").toObject();
+        SyncSettings local, remote, merged;
+        QVERIFY(SyncSettings::fromJson(QJsonDocument(settings.value("local").toObject()).toJson(), &local));
+        QVERIFY(SyncSettings::fromJson(QJsonDocument(settings.value("remote").toObject()).toJson(), &remote));
+        QVERIFY(SyncSettings::fromJson(QJsonDocument(settings.value("merged").toObject()).toJson(), &merged));
+        QVERIFY(SyncSettings::merge(local, remote) == merged);
+        QVERIFY(SyncSettings::merge(remote, local) == merged);
+        QCOMPARE(merged.value("future.setting").value.toString(), QString("kept"));
+
+        const QJsonObject hashes = vectors.value("contentHash").toObject();
+        QFile bundle(syncFixture(hashes.value("file").toString()));
+        QVERIFY(bundle.open(QIODevice::ReadOnly));
+        QCOMPARE(SyncFormat::contentHash(&bundle), hashes.value("hash").toString());
+        const QJsonObject pattern = hashes.value("pattern").toObject();
+        QByteArray data(pattern.value("size").toInt(), Qt::Uninitialized);
+        for (qsizetype i = 0; i < data.size(); ++i)
+            data[i] = char(i % 251);
+        QCOMPARE(SyncFormat::contentHash(data), pattern.value("hash").toString());
+    }
+
+    void syncStateRefusesWhatItCantRead() {
+        BookState state;
+        QVERIFY(!BookState::fromJson("{\"format\":\"omareader-state\",\"version\":2,\"id\":\"abc\"}", &state));
+        QVERIFY(!BookState::fromJson("{\"format\":\"omareader-state\",\"version\":1,\"id\":\"../x\"}", &state));
+        QVERIFY(!BookState::fromJson("not json", &state));
+        QVERIFY(BookState::fromJson("{\"format\":\"omareader-state\",\"version\":1,\"id\":\"abc\"}", &state));
+        QVERIFY(!state.present.isSet() && !state.hasPosition());
+        // A newer change beats an older one; on a tie the larger device id wins.
+        const Register older{true, 1, "b"}, newer{false, 2, "a"}, tie{false, 2, "c"};
+        QVERIFY(newer.beats(older) && !older.beats(newer));
+        QVERIFY(tie.beats(newer));
+        QVERIFY(older.beats(Register{}));
+    }
+
+    void syncHeaderStaysAscii() {
+        const QByteArray json = SyncFormat::headerJson(
+            QJsonObject{{"path", QString::fromUtf8("/state/café") + QChar(0x7F) + QString::fromUtf8("\U0001F600")}});
+        QCOMPARE(json, QByteArray("{\"path\":\"/state/caf\\u00e9\\u007f\\ud83d\\ude00\"}"));
+        QCOMPARE(SyncFormat::idFromPath("/state/7218324797ea94e3.json", "state", ".json"), QString("7218324797ea94e3"));
+        QCOMPARE(SyncFormat::idFromPath("/books/7218324797ea94e3.omabook", "books", ".omabook"),
+                 QString("7218324797ea94e3"));
+        QVERIFY(SyncFormat::idFromPath("/state/../x.json", "state", ".json").isEmpty());
+        QVERIFY(SyncFormat::idFromPath("/other/a.json", "state", ".json").isEmpty());
+        QCOMPARE(SyncFormat::newDeviceId().size(), 16);
+    }
+
+    void syncReadsABundlesManifest() {
+        const QJsonObject manifest = SyncFormat::bundleManifest(syncFixture("fixture.omabook"));
+        QCOMPARE(manifest.value("id").toString(), QString("7218324797ea94e3"));
+        QCOMPARE(SyncFormat::bookId(manifest.value("title").toString(), manifest.value("author").toString()),
+                 QString("7218324797ea94e3"));
+        QTemporaryDir dir;
+        write(dir.filePath("not.omabook"), "PK nothing");
+        QVERIFY(SyncFormat::bundleManifest(dir.filePath("not.omabook")).isEmpty());
+    }
+
+    void libraryStampsOnlyRealMoves() {
+        QTemporaryDir dir;
+        Library library(dir.filePath("library.json"), dir.filePath("covers"));
+        Book book = sampleBook(dir.filePath("a.txt"));
+        library.opened(book);
+        QVERIFY(library.entry(book.path).addedAt > 0);
+        library.savePosition(book.path, 0, 1, 2, book.sentenceCount(), 0);
+        const qint64 moved = library.entry(book.path).positionAt;
+        QVERIFY(moved > 0);
+        // The same place saved again, with the sentence count filled in, is
+        // not a move.
+        QTest::qWait(5);
+        library.savePosition(book.path, 0, 1, 2, book.sentenceCount() + 1, 0);
+        QCOMPARE(library.entry(book.path).positionAt, moved);
+
+        QSignalSpy synced(&library, &Library::positionSynced);
+        library.applySyncedPosition(book.path, 1, 0, 0, 1.0, 1234);
+        QCOMPARE(synced.count(), 1);
+        QCOMPARE(library.entry(book.path).positionAt, qint64(1234));
+        QCOMPARE(library.entry(book.path).chapter, 1);
+
+        QSignalSpy removed(&library, &Library::removed);
+        library.forget(book.path);
+        QCOMPARE(removed.count(), 0); // a removal from elsewhere isn't sent back
+        library.opened(book);
+        library.remove(book.path);
+        QCOMPARE(removed.count(), 1);
+    }
+
+    void readerFollowsASyncedPlace() {
+        QTemporaryDir dir;
+        Library library(dir.filePath("library.json"), dir.filePath("covers"));
+        Book book = sampleBook(dir.filePath("a.txt"));
+        library.opened(book);
+        Reader reader(&library, nullptr, nullptr);
+        reader.openBook(std::make_shared<Book>(book));
+        QCOMPARE(reader.sentence(), 0);
+        QSignalSpy moved(&reader, &Reader::movedBySync);
+        // "Second." starts at offset 7 of the first paragraph; a phone
+        // stopping on its word lands in that sentence.
+        library.applySyncedPosition(book.path, 0, 0, 8, 0.3, 1000);
+        QCOMPARE(moved.count(), 1);
+        QCOMPARE(reader.sentence(), 1);
+        // Saving keeps the phone's finer place, so it doesn't sync back as new.
+        reader.saveNow();
+        QCOMPARE(library.entry(book.path).offset, 8);
+        QCOMPARE(library.entry(book.path).positionAt, qint64(1000));
+        reader.closeBook();
+
+        // Reopened, it resumes from the offset.
+        Reader again(&library, nullptr, nullptr);
+        again.openBook(std::make_shared<Book>(book));
+        QCOMPARE(again.sentence(), 1);
+    }
+
+    void syncEngineSendsAndSettles() {
+        MemoryRemote remote;
+        SyncInput in = syncInput("aaaaaaaaaaaaaaaa");
+        in.local.insert("7218324797ea94e3", bookState("7218324797ea94e3", true, 100, "aaaaaaaaaaaaaaaa"));
+        in.settings.values.insert("speed", Register{1.25, 50, "aaaaaaaaaaaaaaaa"});
+        SyncOutput out = SyncEngine::run(in, remote);
+        QVERIFY2(out.ok, qPrintable(out.error));
+        QCOMPARE(out.writtenFiles, 2);
+        QVERIFY(remote.files.contains("/state/7218324797ea94e3.json"));
+        QVERIFY(remote.files.contains("/settings.json"));
+
+        // Nothing changed: nothing is read again or written.
+        in.cache = out.cache;
+        in.settingsRev = out.settingsRev;
+        in.settingsCache = out.settingsCache;
+        remote.downloads = 0;
+        out = SyncEngine::run(in, remote);
+        QVERIFY(out.ok);
+        QCOMPARE(out.writtenFiles, 0);
+        QCOMPARE(remote.downloads, 0);
+    }
+
+    void syncEngineTakesNewerChangesAndRemovesBundles() {
+        MemoryRemote remote;
+        const QString id = "7218324797ea94e3";
+        BookState phone = bookState(id, false, 300, "bbbbbbbbbbbbbbbb");
+        phone.position = Register{SyncPosition{2, 1, 4, 0.9}.toJson(), 250, "bbbbbbbbbbbbbbbb"};
+        remote.put("/state/" + id + ".json", phone.toJson());
+        remote.put("/books/" + id + ".omabook", "bundle");
+        SyncInput in = syncInput("aaaaaaaaaaaaaaaa");
+        BookState mine = bookState(id, true, 100, "aaaaaaaaaaaaaaaa");
+        mine.position = Register{SyncPosition{1, 0, 0, 0.5}.toJson(), 400, "aaaaaaaaaaaaaaaa"};
+        in.local.insert(id, mine);
+        const SyncOutput out = SyncEngine::run(in, remote);
+        QVERIFY(out.ok);
+        const BookState merged = out.merged.value(id);
+        QVERIFY(merged.isRemoved());                       // the phone's removal is newer
+        QCOMPARE(merged.syncPosition().chapter, 1);         // this device's place is newer
+        QCOMPARE(out.removedBundles, 1);
+        QVERIFY(!remote.files.contains("/books/" + id + ".omabook"));
+        BookState written;
+        QVERIFY(BookState::fromJson(remote.files.value("/state/" + id + ".json").data, &written));
+        QVERIFY(written == merged);
+    }
+
+    void syncEngineRetriesWhenAnotherDeviceWrites() {
+        MemoryRemote remote;
+        const QString id = "7218324797ea94e3";
+        remote.put("/state/" + id + ".json", bookState(id, true, 100, "bbbbbbbbbbbbbbbb").toJson());
+        // Just before this device writes, the phone moves on.
+        BookState phone = bookState(id, true, 100, "bbbbbbbbbbbbbbbb");
+        phone.position = Register{SyncPosition{2, 0, 0, 0.8}.toJson(), 900, "bbbbbbbbbbbbbbbb"};
+        remote.beforeUpload = [&](const QString &path) {
+            if (path == "/state/" + id + ".json") {
+                remote.put(path, phone.toJson());
+                remote.beforeUpload = nullptr;
+            }
+        };
+        SyncInput in = syncInput("aaaaaaaaaaaaaaaa");
+        BookState mine;
+        mine.id = id;
+        mine.position = Register{SyncPosition{1, 0, 0, 0.5}.toJson(), 500, "aaaaaaaaaaaaaaaa"};
+        in.local.insert(id, mine);
+        const SyncOutput out = SyncEngine::run(in, remote);
+        QVERIFY2(out.ok, qPrintable(out.error));
+        QCOMPARE(remote.conflicts, 1);
+        QCOMPARE(out.merged.value(id).syncPosition().chapter, 2); // the phone's later move
+    }
+
+    void syncEngineLeavesNewerFilesAlone() {
+        MemoryRemote remote;
+        const QString id = "7218324797ea94e3";
+        const QByteArray future = "{\"format\":\"omareader-state\",\"version\":9,\"id\":\"7218324797ea94e3\"}";
+        remote.put("/state/" + id + ".json", future);
+        SyncInput in = syncInput("aaaaaaaaaaaaaaaa");
+        in.local.insert(id, bookState(id, true, 100, "aaaaaaaaaaaaaaaa"));
+        SyncEngine::run(in, remote);
+        QCOMPARE(remote.files.value("/state/" + id + ".json").data, future);
+    }
+
+    void syncEngineUploadsExports() {
+        QTemporaryDir dir;
+        MemoryRemote remote;
+        const QString id = "7218324797ea94e3";
+        remote.put("/state/" + id + ".json", bookState(id, false, 100, "bbbbbbbbbbbbbbbb").toJson());
+        write(dir.filePath("book.omabook"), "bundle bytes");
+        SyncInput in = syncInput("aaaaaaaaaaaaaaaa");
+        in.now = 200;
+        in.uploads = {{id, "fixture", "", dir.filePath("book.omabook")}, {"gone", "x", "", dir.filePath("gone")}};
+        const SyncOutput out = SyncEngine::run(in, remote);
+        QVERIFY(out.ok);
+        QCOMPARE(out.uploadsDone, (QStringList{id, "gone"}));
+        QCOMPARE(remote.files.value("/books/" + id + ".omabook").data, QByteArray("bundle bytes"));
+        // Exporting again brings a removed book back.
+        QVERIFY(out.merged.value(id).isPresent());
+    }
+
+    void syncServiceAppliesWhatOtherDevicesDid() {
+        QTemporaryDir dir;
+        Library library(dir.filePath("library.json"), dir.filePath("covers"));
+        Book book = sampleBook(dir.filePath("a.txt"));
+        library.opened(book);
+        library.savePosition(book.path, 0, 0, 1, book.sentenceCount(), 7);
+        QVERIFY(library.entry(book.path).positionAt > 0);
+        const QString id = SyncFormat::bookId(book.title, book.author);
+
+        auto remote = std::make_shared<MemoryRemote>();
+        MemoryTokenStore tokens;
+        SyncService sync(&library, &tokens, dir.filePath("sync.json"));
+        sync.setRemoteFactory([remote](const QString &) { return std::make_unique<SharedRemote>(remote); });
+        sync.setSynchronous(true);
+        Reader reader(&library, nullptr, nullptr);
+        sync.setReader(&reader);
+        QVERIFY(sync.connectWith("refresh"));
+        QVERIFY2(sync.error().isEmpty(), qPrintable(sync.error()));
+        QVERIFY(remote->files.contains("/state/" + id + ".json"));
+        QVERIFY(remote->files.contains("/settings.json"));
+
+        // The phone reached chapter two later on, and asked for bigger text
+        // on desktops.
+        BookState phone;
+        QVERIFY(BookState::fromJson(remote->files.value("/state/" + id + ".json").data, &phone));
+        const qint64 later = library.entry(book.path).positionAt + 1;
+        phone.position = Register{SyncPosition{1, 0, 0, 1.0}.toJson(), later, "ffffffffffffffff"};
+        remote->put("/state/" + id + ".json", phone.toJson());
+        SyncSettings settings;
+        QVERIFY(SyncSettings::fromJson(remote->files.value("/settings.json").data, &settings));
+        settings.values.insert("textSize.desktop", Register{30, later, "ffffffffffffffff"});
+        remote->put("/settings.json", settings.toJson());
+        sync.syncNow();
+        QVERIFY2(sync.error().isEmpty(), qPrintable(sync.error()));
+        QCOMPARE(library.entry(book.path).chapter, 1);
+        QCOMPARE(library.entry(book.path).positionAt, later);
+        QCOMPARE(reader.fontSize(), 30);
+        // Taking those changes wrote nothing back.
+        const int writes = remote->writes;
+        sync.syncNow();
+        QCOMPARE(remote->writes, writes);
+
+        // Removed on the phone: forgotten here, file untouched.
+        phone.position = Register{SyncPosition{1, 0, 0, 1.0}.toJson(), later, "ffffffffffffffff"};
+        phone.present = Register{false, later + 1, "ffffffffffffffff"};
+        remote->put("/state/" + id + ".json", phone.toJson());
+        sync.syncNow();
+        QVERIFY(!library.contains(book.path));
+        QVERIFY(QFile::exists(book.path));
+
+        // Opened again here: back in the library, and Dropbox hears of it.
+        QTest::qWait(5);
+        library.opened(book);
+        sync.syncNow();
+        QVERIFY(stateOf(remote->files.value("/state/" + id + ".json").data).isPresent());
+
+        // Removed here: the removal goes to Dropbox.
+        library.remove(book.path);
+        sync.syncNow();
+        QVERIFY(stateOf(remote->files.value("/state/" + id + ".json").data).isRemoved());
+
+        sync.disconnectDropbox();
+        QVERIFY(!sync.connected());
+        QVERIFY(tokens.read().isEmpty());
+    }
+
+    void dropboxClientSpeaksDropbox() {
+        int tokenCalls = 0;
+        QByteArray stateFile = "{\"format\":\"omareader-state\"}";
+        FakeHttpServer server([&](const FakeHttpServer::Request &r) -> FakeHttpServer::Response {
+            if (r.target == "/oauth2/token") {
+                ++tokenCalls;
+                return {200, "{\"access_token\":\"fresh\",\"expires_in\":14400}", {}};
+            }
+            if (r.headers.value("authorization") != "Bearer fresh")
+                return {401, "{\"error_summary\":\"expired_access_token/\"}", {}};
+            if (r.target == "/2/files/list_folder")
+                return {200, "{\"entries\":[{\".tag\":\"file\",\"path_lower\":\"/state/a.json\",\"rev\":\"1\","
+                             "\"content_hash\":\"h\",\"size\":3},{\".tag\":\"folder\",\"path_lower\":\"/state\"}],"
+                             "\"cursor\":\"c1\",\"has_more\":true}",
+                        {}};
+            if (r.target == "/2/files/list_folder/continue")
+                return {200, "{\"entries\":[{\".tag\":\"file\",\"path_lower\":\"/settings.json\",\"rev\":\"2\"}],"
+                             "\"cursor\":\"c2\",\"has_more\":false}",
+                        {}};
+            if (r.target == "/2/files/download")
+                return {200, stateFile, {{"Dropbox-API-Result", "{\"rev\":\"7\"}"}}};
+            if (r.target == "/2/files/upload") {
+                const QJsonObject arg = QJsonDocument::fromJson(r.headers.value("dropbox-api-arg")).object();
+                if (arg.value("mode").toObject().value("update").toString() == "stale")
+                    return {409, "{\"error_summary\":\"path/conflict/file/..\"}", {}};
+                return {200, "{\"rev\":\"8\"}", {}};
+            }
+            if (r.target == "/2/files/upload_session/start")
+                return {200, "{\"session_id\":\"s\"}", {}};
+            if (r.target == "/2/files/upload_session/append_v2")
+                return {200, "null", {}};
+            if (r.target == "/2/files/upload_session/finish")
+                return {200, "{\"rev\":\"9\"}", {}};
+            if (r.target == "/2/files/delete_v2")
+                return {409, "{\"error_summary\":\"path_lookup/not_found/..\"}", {}};
+            return {404, "", {}};
+        });
+        DropboxHosts hosts;
+        hosts.api = hosts.content = server.url();
+        DropboxRemote remote("key", "refresh", hosts);
+        remote.setAccessToken("stale", QDateTime::currentMSecsSinceEpoch() + 100000);
+
+        QList<RemoteFile> files;
+        QCOMPARE(remote.list(&files), SyncRemote::Ok);
+        QCOMPARE(tokenCalls, 1); // the 401 refreshed the token once
+        QCOMPARE(files.size(), 2);
+        QCOMPARE(files.at(0).path, QString("/state/a.json"));
+        QCOMPARE(files.at(1).rev, QString("2"));
+        QByteArray data;
+        QString rev;
+        QCOMPARE(remote.download("/state/a.json", &data, &rev), SyncRemote::Ok);
+        QCOMPARE(data, stateFile);
+        QCOMPARE(rev, QString("7"));
+        QCOMPARE(remote.upload("/state/a.json", "{}", "stale", &rev), SyncRemote::Conflict);
+        QCOMPARE(remote.upload("/state/b.json", "{}", {}, &rev), SyncRemote::Ok);
+        QCOMPARE(rev, QString("8"));
+        const auto &add = server.requests.last();
+        QCOMPARE(QJsonDocument::fromJson(add.headers.value("dropbox-api-arg")).object().value("mode").toString(),
+                 QString("add"));
+        QCOMPARE(remote.remove("/books/x.omabook"), SyncRemote::NotFound);
+
+        // A bundle larger than one piece goes through an upload session.
+        QTemporaryDir dir;
+        write(dir.filePath("big.omabook"), QByteArray(25, 'x'));
+        remote.setChunkSize(10);
+        QCOMPARE(remote.uploadFile("/books/x.omabook", dir.filePath("big.omabook"), &rev), SyncRemote::Ok);
+        QCOMPARE(rev, QString("9"));
+        QStringList calls;
+        qsizetype bytes = 0;
+        for (const auto &r : server.requests)
+            if (r.target.startsWith("/2/files/upload_session/")) {
+                calls.append(QString::fromLatin1(r.target.mid(24)));
+                bytes += r.body.size();
+            }
+        QCOMPARE(calls, (QStringList{"start", "append_v2", "finish"}));
+        QCOMPARE(bytes, 25);
+        const QJsonObject finish = QJsonDocument::fromJson(server.requests.last().headers.value("dropbox-api-arg")).object();
+        QCOMPARE(finish.value("cursor").toObject().value("offset").toInt(), 20);
+        QCOMPARE(finish.value("commit").toObject().value("mode").toString(), QString("overwrite"));
+    }
+
+    void dropboxSignInUsesPkceOnLocalhost() {
+        QByteArray tokenRequest;
+        FakeHttpServer server([&](const FakeHttpServer::Request &r) -> FakeHttpServer::Response {
+            tokenRequest = r.body;
+            return {200, "{\"refresh_token\":\"r\",\"access_token\":\"a\",\"expires_in\":100}", {}};
+        });
+        DropboxHosts hosts;
+        hosts.api = server.url();
+        DropboxAuth auth("key", nullptr, hosts);
+        const QUrl url(auth.start());
+        if (url.isEmpty())
+            QSKIP("Ports 53682 to 53684 are all in use here.");
+        const QUrlQuery query(url);
+        QCOMPARE(query.queryItemValue("code_challenge_method"), QString("S256"));
+        QCOMPARE(query.queryItemValue("token_access_type"), QString("offline"));
+        QCOMPARE(query.queryItemValue("redirect_uri", QUrl::FullyDecoded),
+                 QString("http://localhost:%1/dropbox").arg(auth.port()));
+        QCOMPARE(DropboxAuth::challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+                 QString("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"));
+
+        QSignalSpy connected(&auth, &DropboxAuth::connected);
+        // Someone else's request is turned away.
+        QCOMPARE(httpGet(auth.port(), "/dropbox?code=evil&state=wrong").left(12), QByteArray("HTTP/1.1 404"));
+        QCOMPARE(httpGet(auth.port(), "/dropbox?code=good&state=" + QUrl::toPercentEncoding(auth.state())).left(12),
+                 QByteArray("HTTP/1.1 200"));
+        QTRY_COMPARE(connected.count(), 1);
+        QCOMPARE(connected.first().value(0).toString(), QString("r"));
+        const QUrlQuery sent(QString::fromUtf8(tokenRequest));
+        QCOMPARE(sent.queryItemValue("code"), QString("good"));
+        QCOMPARE(sent.queryItemValue("client_id"), QString("key"));
+        QCOMPARE(sent.queryItemValue("code_verifier").size(), 64);
+        QVERIFY(!auth.running()); // it stopped listening
+    }
+
 private:
     QTemporaryDir m_settings;
     QTemporaryDir m_home;
+
+    static QString syncFixture(const QString &name) {
+        return QStringLiteral(OMAREADER_SOURCE "/android/app/src/test/resources/") + name;
+    }
+
+    static QJsonObject readJson(const QString &path) {
+        QFile file(path);
+        return file.open(QIODevice::ReadOnly) ? QJsonDocument::fromJson(file.readAll()).object() : QJsonObject{};
+    }
+
+    static SyncInput syncInput(const QString &device) {
+        SyncInput in;
+        in.device = device;
+        in.now = 1000;
+        return in;
+    }
+
+    static BookState bookState(const QString &id, bool present, qint64 at, const QString &by) {
+        BookState state;
+        state.id = id;
+        state.title = "fixture";
+        state.present = Register{present, at, by};
+        return state;
+    }
+
+    static BookState stateOf(const QByteArray &json) {
+        BookState state;
+        BookState::fromJson(json, &state);
+        return state;
+    }
+
+    // An app folder in memory, counting what the engine does with it.
+    struct MemoryRemote : SyncRemote {
+        struct File {
+            QByteArray data;
+            QString rev;
+        };
+        QHash<QString, File> files;
+        int revs = 0, downloads = 0, writes = 0, conflicts = 0;
+        std::function<void(const QString &)> beforeUpload;
+
+        void put(const QString &path, const QByteArray &data) { files.insert(path, {data, QString::number(++revs)}); }
+        Status list(QList<RemoteFile> *out) override {
+            out->clear();
+            for (auto it = files.cbegin(); it != files.cend(); ++it)
+                out->append({it.key(), it.value().rev, SyncFormat::contentHash(it.value().data), it.value().data.size()});
+            return Ok;
+        }
+        Status download(const QString &path, QByteArray *data, QString *rev) override {
+            ++downloads;
+            if (!files.contains(path))
+                return NotFound;
+            *data = files.value(path).data;
+            *rev = files.value(path).rev;
+            return Ok;
+        }
+        Status upload(const QString &path, const QByteArray &data, const QString &rev, QString *newRev) override {
+            if (beforeUpload)
+                beforeUpload(path);
+            const bool exists = files.contains(path);
+            if ((rev.isEmpty() && exists) || (!rev.isEmpty() && (!exists || files.value(path).rev != rev))) {
+                ++conflicts;
+                return Conflict;
+            }
+            put(path, data);
+            ++writes;
+            *newRev = files.value(path).rev;
+            return Ok;
+        }
+        Status uploadFile(const QString &path, const QString &localFile, QString *newRev) override {
+            QFile file(localFile);
+            if (!file.open(QIODevice::ReadOnly))
+                return Failed;
+            put(path, file.readAll());
+            ++writes;
+            *newRev = files.value(path).rev;
+            return Ok;
+        }
+        Status remove(const QString &path) override { return files.remove(path) ? Ok : NotFound; }
+        QString error() const override { return {}; }
+    };
+
+    // The same folder for every sync a service runs.
+    struct SharedRemote : SyncRemote {
+        explicit SharedRemote(std::shared_ptr<MemoryRemote> remote) : m(std::move(remote)) {}
+        std::shared_ptr<MemoryRemote> m;
+        Status list(QList<RemoteFile> *files) override { return m->list(files); }
+        Status download(const QString &p, QByteArray *d, QString *r) override { return m->download(p, d, r); }
+        Status upload(const QString &p, const QByteArray &d, const QString &r, QString *n) override {
+            return m->upload(p, d, r, n);
+        }
+        Status uploadFile(const QString &p, const QString &f, QString *n) override { return m->uploadFile(p, f, n); }
+        Status remove(const QString &p) override { return m->remove(p); }
+        QString error() const override { return {}; }
+    };
+
+    // A browser coming back from Dropbox, without blocking the event loop the
+    // listener runs on.
+    static QByteArray httpGet(quint16 port, const QByteArray &target) {
+        QTcpSocket socket;
+        socket.connectToHost(QHostAddress::LocalHost, port);
+        if (!QTest::qWaitFor([&] { return socket.state() == QAbstractSocket::ConnectedState; }, 5000))
+            return {};
+        socket.write("GET " + target + " HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        QByteArray reply;
+        QTest::qWaitFor([&] {
+            reply += socket.readAll();
+            return socket.state() == QAbstractSocket::UnconnectedState;
+        }, 5000);
+        return reply + socket.readAll();
+    }
 
     static void write(const QString &path, const QByteArray &contents) {
         QFile file(path);

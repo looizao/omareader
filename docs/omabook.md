@@ -37,7 +37,7 @@ an empty section has no entry. A reader rejects any other entry name.
   "voice": {"engine": "kokoro", "voice": "af_heart", "language": "", "speed": 1.0},
   "cover": "cover.jpg",
   "chapters": [
-    {"title": "Acknowledgments", "audio": "audio/001.m4a", "text": "text/001.json", "duration": 101775}
+    {"title": "Acknowledgments", "chapter": 2, "audio": "audio/001.m4a", "text": "text/001.json", "duration": 101775}
   ]
 }
 ```
@@ -46,6 +46,10 @@ an empty section has no entry. A reader rejects any other entry name.
   again, with another voice or speed, replaces it on the phone and keeps the
   place reached.
 - `duration` is in milliseconds.
+- `chapter` is the chapter's index in the book, counting the chapters left
+  out for having nothing to read aloud, which is how a synced reading
+  position names a chapter ([sync.md](sync.md)). Bundles exported before it
+  was added don't have it; a reader treats it as optional.
 - `cover` is absent when there is none.
 - A reader refuses a `version` newer than it knows.
 

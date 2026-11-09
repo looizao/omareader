@@ -11,7 +11,16 @@ class BundleException(val reason: Reason) : Exception(reason.name) {
     enum class Reason { NotABundle, TooNew, Damaged, Unreadable }
 }
 
-class ChapterInfo(val title: String, val audio: String, val text: String, val durationMs: Long)
+// bookChapter is the chapter's index in the desktop book, counting chapters
+// the bundle left out for having nothing to read; synced positions name
+// chapters that way. Bundles exported before it existed have -1.
+class ChapterInfo(
+    val title: String,
+    val audio: String,
+    val text: String,
+    val durationMs: Long,
+    val bookChapter: Int = -1,
+)
 
 class Manifest(
     val id: String,
@@ -19,7 +28,14 @@ class Manifest(
     val author: String,
     val cover: String?,
     val chapters: List<ChapterInfo>,
+    // The speed the voice was synthesised at; the player divides the
+    // listening speed by it, so a book exported fast is not sped up twice.
+    val voiceSpeed: Double = 1.0,
 ) {
+    // Whether every chapter says where it sits in the book, which a synced
+    // position needs.
+    val knowsBookChapters get() = chapters.all { it.bookChapter >= 0 }
+
     companion object {
         const val VERSION = 1
 
@@ -44,11 +60,12 @@ class Manifest(
                 if (!ENTRY.matches(audio) || !audio.startsWith("audio/") || !ENTRY.matches(text) ||
                     !text.startsWith("text/")
                 ) throw BundleException(BundleException.Reason.Damaged)
-                ChapterInfo(c.optString("title"), audio, text, c.optLong("duration"))
+                ChapterInfo(c.optString("title"), audio, text, c.optLong("duration"), c.optInt("chapter", -1))
             }
             if (chapters.isEmpty()) throw BundleException(BundleException.Reason.Damaged)
             val cover = root.optString("cover").takeIf { it == "cover.jpg" }
-            Manifest(id, root.optString("title"), root.optString("author"), cover, chapters)
+            val speed = root.optJSONObject("voice")?.optDouble("speed", 1.0)?.takeIf { it in 0.25..4.0 } ?: 1.0
+            Manifest(id, root.optString("title"), root.optString("author"), cover, chapters, speed)
         } catch (e: JSONException) {
             throw BundleException(BundleException.Reason.NotABundle)
         }

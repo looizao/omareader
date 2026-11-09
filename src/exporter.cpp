@@ -1,6 +1,7 @@
 #include "exporter.h"
 
 #include "filepicker.h"
+#include "syncstate.h"
 #include "zipwriter.h"
 
 #include <QCoreApplication>
@@ -270,20 +271,26 @@ QString Exporter::phoneEntryName(const QString &folder, int number, const QStrin
 QString Exporter::phoneBookId(const Book &book) {
     // The same book exported again, with any voice or speed, keeps its id, so
     // the phone replaces it and keeps the place it was at.
-    const QByteArray key = (book.title.simplified() + '\n' + book.author.simplified()).toUtf8();
-    return QString::fromLatin1(QCryptographicHash::hash(key, QCryptographicHash::Sha1).toHex().left(16));
+    return SyncFormat::bookId(book.title, book.author);
 }
 
 QByteArray Exporter::phoneManifest(const Book &book, const VoiceSettings &voice, const QStringList &chapterTitles,
-                                   const QList<qint64> &frames, int sampleRate, bool hasCover) {
+                                   const QList<qint64> &frames, int sampleRate, bool hasCover,
+                                   const QList<int> &chapterIndices) {
     QJsonArray chapters;
-    for (int i = 0; i < chapterTitles.size() && i < frames.size(); ++i)
-        chapters.append(QJsonObject{
+    for (int i = 0; i < chapterTitles.size() && i < frames.size(); ++i) {
+        QJsonObject chapter{
             {"title", chapterTitles.at(i)},
             {"audio", phoneEntryName("audio", i + 1, "m4a")},
             {"text", phoneEntryName("text", i + 1, "json")},
             {"duration", sampleRate > 0 ? qint64(qRound64(frames.at(i) * 1000.0 / sampleRate)) : 0},
-        });
+        };
+        // Bundle chapters skip the book's empty ones, so a synced position,
+        // which counts the book's chapters, needs to know which this is.
+        if (i < chapterIndices.size())
+            chapter.insert("chapter", chapterIndices.at(i));
+        chapters.append(chapter);
+    }
     QJsonObject manifest{
         {"format", "omabook"},
         {"version", 1},
@@ -642,7 +649,8 @@ void Exporter::assemblePhone() {
     ZipWriter zip(output);
     bool ok = zip.open()
               && zip.addData("manifest.json", phoneManifest(*m_book, m_options.synthesis.voice, m_trackTitles,
-                                                            m_trackLengths, m_sampleRate, !m_cover.isEmpty()));
+                                                            m_trackLengths, m_sampleRate, !m_cover.isEmpty(),
+                                                            m_trackChapters));
     if (ok && !m_cover.isEmpty())
         ok = zip.addFile("cover.jpg", m_cover);
     for (int i = 0; ok && i < m_trackFiles.size(); ++i)
@@ -659,7 +667,9 @@ void Exporter::assemblePhone() {
         fail(tr("Could not move the audio into %1.").arg(target));
         return;
     }
+    const BookPtr book = m_book;
     succeed(target);
+    emit phoneBundleReady(target, phoneBookId(*book), book->title, book->author);
 }
 
 void Exporter::onJoinFinished(int code, QProcess::ExitStatus status) {

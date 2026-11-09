@@ -1,0 +1,80 @@
+{
+  "comment": "Merge cases both apps must agree on (docs/sync.md). Each case merges local with remote; merged is the result, the same in either order.",
+  "cases": [
+    {
+      "name": "the newer position wins and the older presence loses",
+      "local": {
+        "format": "omareader-state", "version": 1, "id": "7218324797ea94e3", "title": "fixture", "author": "",
+        "present": {"value": true, "at": 1762690000000, "by": "4f1c2a9e0b7d3c55"},
+        "position": {"chapter": 1, "paragraph": 1, "offset": 13, "progress": 0.2, "at": 1762693512000, "by": "4f1c2a9e0b7d3c55"}
+      },
+      "remote": {
+        "format": "omareader-state", "version": 1, "id": "7218324797ea94e3", "title": "fixture", "author": "",
+        "present": {"value": false, "at": 1762690000001, "by": "a03be71c9d2e4f60"},
+        "position": {"chapter": 2, "paragraph": 1, "offset": 0, "progress": 0.8, "at": 1762600000000, "by": "a03be71c9d2e4f60"}
+      },
+      "merged": {
+        "format": "omareader-state", "version": 1, "id": "7218324797ea94e3", "title": "fixture", "author": "",
+        "present": {"value": false, "at": 1762690000001, "by": "a03be71c9d2e4f60"},
+        "position": {"chapter": 1, "paragraph": 1, "offset": 13, "progress": 0.2, "at": 1762693512000, "by": "4f1c2a9e0b7d3c55"}
+      }
+    },
+    {
+      "name": "a tie in time goes to the larger device id",
+      "local": {
+        "format": "omareader-state", "version": 1, "id": "7218324797ea94e3", "title": "fixture", "author": "",
+        "position": {"chapter": 1, "paragraph": 2, "offset": 0, "progress": 0.5, "at": 1762693512000, "by": "4f1c2a9e0b7d3c55"}
+      },
+      "remote": {
+        "format": "omareader-state", "version": 1, "id": "7218324797ea94e3", "title": "fixture", "author": "",
+        "position": {"chapter": 2, "paragraph": 1, "offset": 4, "progress": 0.9, "at": 1762693512000, "by": "a03be71c9d2e4f60"}
+      },
+      "merged": {
+        "format": "omareader-state", "version": 1, "id": "7218324797ea94e3", "title": "fixture", "author": "",
+        "position": {"chapter": 2, "paragraph": 1, "offset": 4, "progress": 0.9, "at": 1762693512000, "by": "a03be71c9d2e4f60"}
+      }
+    },
+    {
+      "name": "a register only one side has is kept",
+      "local": {
+        "format": "omareader-state", "version": 1, "id": "7218324797ea94e3", "title": "fixture", "author": "",
+        "present": {"value": true, "at": 1762690000000, "by": "4f1c2a9e0b7d3c55"}
+      },
+      "remote": {
+        "format": "omareader-state", "version": 1, "id": "7218324797ea94e3", "title": "fixture", "author": "",
+        "position": {"chapter": 0, "paragraph": 0, "offset": 2, "progress": 0.05, "at": 1762600000000, "by": "a03be71c9d2e4f60"}
+      },
+      "merged": {
+        "format": "omareader-state", "version": 1, "id": "7218324797ea94e3", "title": "fixture", "author": "",
+        "present": {"value": true, "at": 1762690000000, "by": "4f1c2a9e0b7d3c55"},
+        "position": {"chapter": 0, "paragraph": 0, "offset": 2, "progress": 0.05, "at": 1762600000000, "by": "a03be71c9d2e4f60"}
+      }
+    }
+  ],
+  "settings": {
+    "local": {
+      "format": "omareader-settings", "version": 1,
+      "speed": {"value": 1.25, "at": 1762693512000, "by": "4f1c2a9e0b7d3c55"},
+      "textSize.desktop": {"value": 22, "at": 1762600000000, "by": "4f1c2a9e0b7d3c55"}
+    },
+    "remote": {
+      "format": "omareader-settings", "version": 1,
+      "speed": {"value": 1.5, "at": 1762690000000, "by": "a03be71c9d2e4f60"},
+      "textSize.phone": {"value": 19, "at": 1762650000000, "by": "a03be71c9d2e4f60"},
+      "future.setting": {"value": "kept", "at": 1762650000000, "by": "a03be71c9d2e4f60"}
+    },
+    "merged": {
+      "format": "omareader-settings", "version": 1,
+      "speed": {"value": 1.25, "at": 1762693512000, "by": "4f1c2a9e0b7d3c55"},
+      "textSize.desktop": {"value": 22, "at": 1762600000000, "by": "4f1c2a9e0b7d3c55"},
+      "textSize.phone": {"value": 19, "at": 1762650000000, "by": "a03be71c9d2e4f60"},
+      "future.setting": {"value": "kept", "at": 1762650000000, "by": "a03be71c9d2e4f60"}
+    }
+  },
+  "contentHash": {
+    "comment": "Dropbox content_hash of the fixture bundle beside this folder, for checking downloads",
+    "file": "fixture.omabook",
+    "pattern": {"comment": "9 MiB and one byte, byte i being i % 251: three blocks", "size": 9437185, "hash": "040a6fa5f007f1f3df8bd13fec85bcbfc26fe3a288b75c0e2f0bad4b9ce279a2"},
+    "hash": "00cb311ca43b37168b30b9a1d6d74b86cbfdb39b7368518b9eff7b1a2f0d80af"
+  }
+}

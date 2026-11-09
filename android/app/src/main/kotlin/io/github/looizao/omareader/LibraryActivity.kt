@@ -19,7 +19,8 @@ import android.widget.Toast
 
 // The books on the phone, most recently opened first. Books arrive through
 // the system file picker (which lists Google Drive, Dropbox and any other
-// installed storage) or through "Open with" from those apps.
+// installed storage), through "Open with" from those apps, or by themselves
+// through Dropbox sync once it is connected.
 class LibraryActivity : Activity() {
     private lateinit var library: Library
     private lateinit var list: ListView
@@ -42,6 +43,10 @@ class LibraryActivity : Activity() {
             true
         }
         findViewById<View>(R.id.add).setOnClickListener { pick() }
+        findViewById<View>(R.id.sync).apply {
+            visibility = if (SyncAccount.available) View.VISIBLE else View.GONE
+            setOnClickListener { startActivity(Intent(this@LibraryActivity, SyncActivity::class.java)) }
+        }
         findViewById<View>(R.id.empty_add).setOnClickListener { pick() }
 
         Background.run({ library.cleanUp() }) {}
@@ -58,6 +63,22 @@ class LibraryActivity : Activity() {
     override fun onResume() {
         super.onResume()
         refresh()
+        SyncScheduler.start(this)
+    }
+
+    // Books that sync brought, replaced or removed show up straight away.
+    private val syncListener: (SyncEvents.Change, String?) -> Unit = { change, _ ->
+        if (change == SyncEvents.Change.Library || change == SyncEvents.Change.Position) refresh()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        SyncEvents.listen(syncListener)
+    }
+
+    override fun onStop() {
+        SyncEvents.stop(syncListener)
+        super.onStop()
     }
 
     private fun handle(intent: Intent?) {
@@ -154,7 +175,7 @@ class LibraryActivity : Activity() {
     private fun confirmRemove(book: StoredBook) {
         AlertDialog.Builder(this)
             .setTitle(getString(R.string.remove_title, book.manifest.title))
-            .setMessage(R.string.remove_message)
+            .setMessage(if (SyncAccount.connected(this)) R.string.remove_message_synced else R.string.remove_message)
             .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.remove) { _, _ ->
                 Background.run({ library.delete(book) }) { refresh() }

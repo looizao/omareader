@@ -42,6 +42,26 @@ Reader::Reader(Library *library, Narrator *narrator, FilePicker *picker, QObject
     }
     if (m_narrator)
         connect(m_narrator, &Narrator::positionChanged, this, &Reader::followNarrator);
+    if (m_library)
+        connect(m_library, &Library::positionSynced, this, &Reader::followSync);
+}
+
+void Reader::followSync(const QString &path) {
+    // While the voice reads, this device's place is the newer one anyway, and
+    // pulling the view away would lose the listener.
+    if (!m_book || m_book->path != path || (m_narrator && m_narrator->active()))
+        return;
+    m_saveTimer.stop();
+    const LibraryEntry entry = m_library->entry(path);
+    if (entry.chapter < 0 || entry.chapter >= m_book->chapters.size())
+        return;
+    const int sentence = m_book->sentenceAt(entry.chapter, entry.paragraph, qMax(0, entry.offset));
+    if (sentence < 0)
+        return;
+    m_sentence = sentence;
+    setChapter(entry.chapter, m_book->sentences.at(sentence).paragraph);
+    emit progressChanged();
+    emit movedBySync();
 }
 
 Reader::~Reader() {
@@ -167,9 +187,14 @@ void Reader::openBook(BookPtr book) {
         if (known && entry.chapter < m_book->chapters.size()) {
             chapter = entry.chapter;
             paragraph = qBound(0, entry.paragraph, int(m_book->chapters.at(chapter).paragraphs.size()) - 1);
-            m_sentence = entry.sentenceCount == m_book->sentenceCount()
-                             ? qBound(0, entry.sentence, m_book->sentenceCount() - 1)
-                             : qMax(0, m_book->sentenceAt(chapter, paragraph));
+            // The offset finds the exact sentence, including a place synced
+            // from another device; older entries only have the sentence.
+            if (entry.offset >= 0)
+                m_sentence = qMax(0, m_book->sentenceAt(chapter, paragraph, entry.offset));
+            else
+                m_sentence = entry.sentenceCount == m_book->sentenceCount()
+                                 ? qBound(0, entry.sentence, m_book->sentenceCount() - 1)
+                                 : qMax(0, m_book->sentenceAt(chapter, paragraph));
         }
     }
     emit bookChanged();
@@ -275,7 +300,14 @@ void Reader::saveNow() {
     if (!m_book || !m_library || m_sentence >= m_book->sentenceCount())
         return;
     const Sentence &s = m_book->sentences.at(m_sentence);
-    m_library->savePosition(m_book->path, s.chapter, s.paragraph, m_sentence, m_book->sentenceCount());
+    // A place inside this sentence, such as the word a phone stopped at, is
+    // kept as it is, so the same place never syncs back as a new one.
+    int offset = s.start;
+    const LibraryEntry saved = m_library->entry(m_book->path);
+    if (saved.offset >= 0 && saved.chapter == s.chapter && saved.paragraph == s.paragraph
+        && m_book->sentenceAt(saved.chapter, saved.paragraph, saved.offset) == m_sentence)
+        offset = saved.offset;
+    m_library->savePosition(m_book->path, s.chapter, s.paragraph, m_sentence, m_book->sentenceCount(), offset);
 }
 
 void Reader::setError(const QString &error) {

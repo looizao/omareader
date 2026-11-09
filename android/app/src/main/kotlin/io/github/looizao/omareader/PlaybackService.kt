@@ -87,11 +87,15 @@ class PlaybackService : MediaLibraryService() {
         player.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 save()
+                PlayerState.playing = isPlaying
                 handler.removeCallbacks(periodicSave)
                 if (isPlaying) handler.postDelayed(periodicSave, SAVE_EVERY_MS)
             }
 
-            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = save()
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                PlayerState.bookId = mediaItem?.mediaId?.let { parseMediaId(it) }?.first
+                save()
+            }
 
             override fun onPositionDiscontinuity(
                 oldPosition: Player.PositionInfo,
@@ -128,6 +132,42 @@ class PlaybackService : MediaLibraryService() {
             .setSessionActivity(openReader)
             .setMediaButtonPreferences(buttons)
             .build()
+        SyncEvents.listen(syncListener)
+    }
+
+    // What another device changed, applied to the player while it is not
+    // reading aloud: the place in the loaded book, the speed, and a book
+    // replaced by a new export or removed.
+    private val syncListener: (SyncEvents.Change, String?) -> Unit = { change, id ->
+        val player = session?.player
+        val loaded = player?.currentMediaItem?.mediaId?.let { parseMediaId(it) }?.first
+        if (player != null && loaded != null && !player.isPlaying) {
+            when (change) {
+                SyncEvents.Change.Position -> if (id == loaded) {
+                    val place = library.position(loaded)
+                    if (place.chapter in 0 until player.mediaItemCount) player.seekTo(place.chapter, place.ms)
+                }
+                SyncEvents.Change.Settings -> library.book(loaded)?.let { player.setPlaybackSpeed(library.playbackSpeed(it)) }
+                SyncEvents.Change.Library -> reload(player, loaded)
+                SyncEvents.Change.Status -> Unit
+            }
+        }
+    }
+
+    // A book whose files changed under the player is loaded again where it
+    // was left, or let go when it is no longer on the phone.
+    private fun reload(player: Player, id: String) {
+        val book = library.book(id)
+        if (book == null) {
+            player.clearMediaItems()
+            return
+        }
+        val uri = player.currentMediaItem?.localConfiguration?.uri
+        if (uri != null && java.io.File(uri.path.orEmpty()).exists() && player.mediaItemCount == book.manifest.chapters.size) return
+        val place = library.position(id)
+        player.setMediaItems(chapters(book), place.chapter.coerceIn(book.manifest.chapters.indices), place.ms)
+        player.setPlaybackSpeed(library.playbackSpeed(book))
+        player.prepare()
     }
 
     private val periodicSave = object : Runnable {
@@ -157,6 +197,9 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onDestroy() {
         save()
+        SyncEvents.stop(syncListener)
+        PlayerState.playing = false
+        PlayerState.bookId = null
         handler.removeCallbacks(periodicSave)
         disk.shutdown()
         session?.run {
@@ -173,7 +216,7 @@ class PlaybackService : MediaLibraryService() {
         library.markOpened(book.id)
         val place = library.position(book.id)
         val chapters = chapters(book)
-        val speed = library.speed()
+        val speed = library.playbackSpeed(book)
         handler.post { session?.player?.setPlaybackSpeed(speed) }
         return MediaItemsWithStartPosition(chapters, place.chapter.coerceIn(chapters.indices), place.ms)
     }

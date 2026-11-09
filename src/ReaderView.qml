@@ -224,6 +224,7 @@ FocusScope {
 
     SettingsPanel {
         id: settings
+        objectName: "settingsPanel"
         height: root.height
     }
 }

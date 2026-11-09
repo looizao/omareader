@@ -27,7 +27,7 @@ concurrency:
 env:
   DEPENDENCIES: >-
     git qt6-base qt6-declarative qt6-multimedia qt6-svg qt6-wayland
-    xdg-desktop-portal poppler ffmpeg ttf-dejavu shellcheck python
+    xdg-desktop-portal poppler ffmpeg libsecret ttf-dejavu shellcheck python
 
 jobs:
   test:
@@ -64,6 +64,7 @@ jobs:
           build/omareader version
           build/omareader skill > /dev/null
           build/omareader export --help > /dev/null
+          build/omareader sync --help > /dev/null
           build/omareader setup --dry-run || true
           build/omareader doctor --json || test $? -eq 1
 

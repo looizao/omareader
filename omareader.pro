@@ -1,4 +1,4 @@
-QT += core gui gui-private qml quick quickcontrols2 dbus multimedia concurrent
+QT += core gui gui-private qml quick quickcontrols2 dbus multimedia concurrent network
 
 CONFIG += c++17 release
 
@@ -11,6 +11,15 @@ TEMPLATE = app
 # VERSION is the one place the version lives; bin/release bumps it.
 APP_VERSION = $$cat($$PWD/VERSION)
 DEFINES += OMAREADER_VERSION=\\\"$$APP_VERSION\\\"
+
+# The Dropbox app key for sync (docs/sync.md); public, as PKCE needs no
+# secret. Empty builds without sync.
+DROPBOX_KEY = $$cat($$PWD/DROPBOX_APP_KEY)
+DEFINES += OMAREADER_DROPBOX_KEY=\\\"$$DROPBOX_KEY\\\"
+
+# The Dropbox sign-in is kept in the Secret Service keyring.
+CONFIG += link_pkgconfig
+PKGCONFIG += libsecret-1
 
 HEADERS += \
     src/audioplayer.h \
@@ -27,6 +36,11 @@ HEADERS += \
     src/qwen.h \
     src/reader.h \
     src/speech.h \
+    src/dropbox.h \
+    src/sync.h \
+    src/syncengine.h \
+    src/syncstate.h \
+    src/tokenstore.h \
     src/synthesizer.h \
     src/theme.h \
     src/titleagent.h \
@@ -49,6 +63,11 @@ SOURCES += \
     src/qwen.cpp \
     src/reader.cpp \
     src/speech.cpp \
+    src/dropbox.cpp \
+    src/sync.cpp \
+    src/syncengine.cpp \
+    src/syncstate.cpp \
+    src/tokenstore.cpp \
     src/synthesizer.cpp \
     src/theme.cpp \
     src/titleagent.cpp \

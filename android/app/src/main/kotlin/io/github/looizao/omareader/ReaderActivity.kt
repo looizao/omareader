@@ -3,7 +3,6 @@ package io.github.looizao.omareader
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ComponentName
-import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
@@ -40,7 +39,6 @@ import java.util.concurrent.Executor
 // plays from it, and the view follows the voice until you scroll away.
 class ReaderActivity : Activity() {
     private lateinit var library: Library
-    private lateinit var prefs: android.content.SharedPreferences
     private var book: StoredBook? = null
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var controller: MediaController? = null
@@ -70,7 +68,6 @@ class ReaderActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_reader)
         library = Library(this)
-        prefs = getSharedPreferences("reader", Context.MODE_PRIVATE)
 
         list = findViewById(R.id.paragraphs)
         chapterTitle = findViewById(R.id.chapter_title)
@@ -120,8 +117,22 @@ class ReaderActivity : Activity() {
                 controller?.seekTo(bar.progress.toLong())
             }
         })
-        adapter.textSize = TEXT_SIZES[prefs.getInt(TEXT_SIZE, 2).coerceIn(TEXT_SIZES.indices)]
+        adapter.textSize = TEXT_SIZES[library.textSize()]
         showSpeed()
+    }
+
+    // Settings changed on another device show up here straight away.
+    private val syncListener: (SyncEvents.Change, String?) -> Unit = { change, _ ->
+        if (change == SyncEvents.Change.Settings) {
+            showSpeed()
+            book?.let { controller?.setPlaybackSpeed(library.playbackSpeed(it)) }
+            val size = TEXT_SIZES[library.textSize()]
+            if (size != adapter.textSize) {
+                adapter.textSize = size
+                adapter.notifyDataSetChanged()
+                list.post { if (following) scrollToWord(smooth = false) }
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -132,6 +143,8 @@ class ReaderActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
+        SyncEvents.listen(syncListener)
+        syncListener(SyncEvents.Change.Settings, null)
         val token = SessionToken(this, ComponentName(this, PlaybackService::class.java))
         val future = MediaController.Builder(this, token).buildAsync()
         controllerFuture = future
@@ -145,6 +158,7 @@ class ReaderActivity : Activity() {
     }
 
     override fun onStop() {
+        SyncEvents.stop(syncListener)
         stopTicking()
         controller?.removeListener(playerListener)
         controller = null
@@ -185,7 +199,7 @@ class ReaderActivity : Activity() {
             )
             c.prepare()
         }
-        c.setPlaybackSpeed(speed())
+        c.setPlaybackSpeed(library.playbackSpeed(stored))
         // Opened by a voice request: read aloud straight away, once, so a
         // rotation or a return to the screen does not start it again.
         if (intent.getBooleanExtra(EXTRA_PLAY, false)) {
@@ -422,7 +436,7 @@ class ReaderActivity : Activity() {
             .setSingleChoiceItems(SPEEDS.map { formatSpeed(it) }.toTypedArray(), current) { dialog, which ->
                 dialog.dismiss()
                 library.setSpeed(SPEEDS[which])
-                controller?.setPlaybackSpeed(SPEEDS[which])
+                book?.let { controller?.setPlaybackSpeed(library.playbackSpeed(it)) }
                 showSpeed()
             }
             .show()
@@ -435,9 +449,9 @@ class ReaderActivity : Activity() {
         ).map { getString(it) }.toTypedArray()
         AlertDialog.Builder(this)
             .setTitle(R.string.text_size)
-            .setSingleChoiceItems(names, prefs.getInt(TEXT_SIZE, 2)) { dialog, which ->
+            .setSingleChoiceItems(names, library.textSize()) { dialog, which ->
                 dialog.dismiss()
-                prefs.edit().putInt(TEXT_SIZE, which).apply()
+                library.setTextSize(which)
                 adapter.textSize = TEXT_SIZES[which]
                 adapter.notifyDataSetChanged()
                 list.post { if (following) scrollToWord(smooth = false) }
@@ -539,8 +553,7 @@ class ReaderActivity : Activity() {
     companion object {
         const val EXTRA_BOOK = "book"
         const val EXTRA_PLAY = "play"
-        private const val TEXT_SIZE = "textSize"
         private val SPEEDS = Library.SPEEDS
-        private val TEXT_SIZES = listOf(15f, 17f, 19f, 22f, 26f)
+        private val TEXT_SIZES = Library.TEXT_SIZES
     }
 }

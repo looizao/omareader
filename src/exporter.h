@@ -117,8 +117,11 @@ public:
     // plus the index of each sentence's first word.
     static QString phoneEntryName(const QString &folder, int number, const QString &extension);
     static QString phoneBookId(const Book &book);
+    // chapterIndices holds each bundle chapter's index in the book, which
+    // sync needs to carry a reading position between devices.
     static QByteArray phoneManifest(const Book &book, const VoiceSettings &voice, const QStringList &chapterTitles,
-                                    const QList<qint64> &frames, int sampleRate, bool hasCover);
+                                    const QList<qint64> &frames, int sampleRate, bool hasCover,
+                                    const QList<int> &chapterIndices = {});
     static QByteArray phoneChapter(const Book &book, int chapter, const QString &title, const QList<int> &words,
                                    const QList<int> &sentences);
 
@@ -129,6 +132,8 @@ signals:
     void resultChanged();
     void preferencesChanged();
     void finished(bool ok, const QString &pathOrError);
+    // A phone bundle is in place, for sync to send to the phone.
+    void phoneBundleReady(const QString &path, const QString &id, const QString &title, const QString &author);
 
 private:
     void startTrack();

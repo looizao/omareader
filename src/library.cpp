@@ -15,6 +15,7 @@
 #include <QStandardPaths>
 #include <QUrl>
 #include <QUuid>
+#include <cmath>
 
 Library::Library(const QString &file, const QString &coverDirectory, QObject *parent)
     : QObject(parent),
@@ -46,6 +47,11 @@ void Library::load() {
         e.sentence = o.value("sentence").toInt();
         e.sentenceCount = o.value("sentenceCount").toInt();
         e.opened = QDateTime::fromString(o.value("opened").toString(), Qt::ISODate);
+        e.offset = o.value("offset").toInt(-1);
+        e.positionAt = o.value("positionAt").toInteger();
+        // Books added before sync existed count from when they were last
+        // opened, which is the best guess there is.
+        e.addedAt = o.value("addedAt").toInteger(e.opened.isValid() ? e.opened.toMSecsSinceEpoch() : 0);
         m_entries.append(e);
     }
     sort();
@@ -63,7 +69,10 @@ bool Library::save() const {
                                  {"paragraph", e.paragraph},
                                  {"sentence", e.sentence},
                                  {"sentenceCount", e.sentenceCount},
-                                 {"opened", e.opened.toString(Qt::ISODate)}});
+                                 {"offset", e.offset},
+                                 {"opened", e.opened.toString(Qt::ISODate)},
+                                 {"positionAt", e.positionAt},
+                                 {"addedAt", e.addedAt}});
     QDir().mkpath(QFileInfo(m_file).absolutePath());
     // Written beside the target and renamed over it, so a crash never leaves
     // half a library behind.
@@ -131,6 +140,7 @@ void Library::opened(const Book &book) {
         m_entries.append(LibraryEntry{});
         i = int(m_entries.size()) - 1;
         m_entries[i].path = book.path;
+        m_entries[i].addedAt = QDateTime::currentMSecsSinceEpoch();
     }
     LibraryEntry &e = m_entries[i];
     e.title = book.title;
@@ -145,19 +155,46 @@ void Library::opened(const Book &book) {
     emit changed();
 }
 
-void Library::savePosition(const QString &path, int chapter, int paragraph, int sentence, int sentenceCount) {
+void Library::savePosition(const QString &path, int chapter, int paragraph, int sentence, int sentenceCount,
+                           int offset) {
     const int i = indexOf(path);
     if (i < 0)
         return;
     LibraryEntry &e = m_entries[i];
-    if (e.chapter == chapter && e.paragraph == paragraph && e.sentence == sentence && e.sentenceCount == sentenceCount)
+    if (e.chapter == chapter && e.paragraph == paragraph && e.sentence == sentence && e.sentenceCount == sentenceCount
+        && e.offset == offset)
         return;
+    // Only a move to another place counts as a change for sync. The place is
+    // the chapter, paragraph and offset, as other devices see it; the
+    // sentence number is the desktop's own and may be an estimate.
+    const bool moved = e.chapter != chapter || e.paragraph != paragraph
+                       || (offset >= 0 && e.offset >= 0 ? e.offset != offset : e.sentence != sentence);
     e.chapter = chapter;
     e.paragraph = paragraph;
     e.sentence = sentence;
     e.sentenceCount = sentenceCount;
+    e.offset = offset;
+    if (moved)
+        e.positionAt = QDateTime::currentMSecsSinceEpoch();
     save();
     emit changed();
+}
+
+void Library::applySyncedPosition(const QString &path, int chapter, int paragraph, int offset, double progress,
+                                  qint64 at) {
+    const int i = indexOf(path);
+    if (i < 0)
+        return;
+    LibraryEntry &e = m_entries[i];
+    e.chapter = chapter;
+    e.paragraph = paragraph;
+    e.offset = offset;
+    if (e.sentenceCount > 1)
+        e.sentence = qBound(0, int(std::lround(progress * (e.sentenceCount - 1))), e.sentenceCount - 1);
+    e.positionAt = at;
+    save();
+    emit changed();
+    emit positionSynced(path);
 }
 
 bool Library::isText(const QString &path) const {
@@ -198,16 +235,29 @@ QString Library::addText(const QString &title, const QString &text) {
 
 void Library::remove(const QString &path) {
     const int i = indexOf(path);
-    if (i < 0)
-        return;
+    if (i >= 0)
+        removeAt(i, false);
+}
+
+void Library::forget(const QString &path) {
+    const int i = indexOf(path);
+    if (i >= 0)
+        removeAt(i, true);
+}
+
+void Library::removeAt(int i, bool synced) {
     // Forgets the book only; the file itself is left alone. Pasted text has
     // no other copy, so it goes to the trash, where it can still be restored.
-    const QString cover = m_entries.at(i).cover;
+    const LibraryEntry entry = m_entries.at(i);
+    const QString path = entry.path;
+    const QString cover = entry.cover;
     m_entries.removeAt(i);
     if (!cover.isEmpty() && cover.startsWith(m_coverDirectory))
         QFile::remove(cover);
     if (isText(path) && QFileInfo::exists(path))
         QFile::moveToTrash(path);
     save();
+    if (!synced)
+        emit removed(path, entry.title, entry.author);
     emit changed();
 }

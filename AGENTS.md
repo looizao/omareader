@@ -72,14 +72,18 @@ environment's secrets; never print it or commit it.
   keys, every visible string goes through `qsTr()`/`tr()` with a pt-BR entry
   in `src/i18n/pt-BR.json`, and the theme accent and `theme.radius` style
   everything.
-- The Android app keeps the same rules: no network permission, every visible
-  string in `res/values/strings.xml` with a pt-BR entry in
+- The Android app keeps the same rules: the network only for opt-in sync,
+  every visible string in `res/values/strings.xml` with a pt-BR entry in
   `res/values-pt-rBR`, and no libraries beyond Media3 without a reason.
-- The app never touches the network. Kokoros downloads a missing model on
-  its own, so synthesis only starts once both model files exist
-  (`KokoroSetup`). `omareader setup` is the one networked step. The title
+- The app touches the network only when the user asks. Kokoros downloads a
+  missing model on its own, so synthesis only starts once both model files
+  exist (`KokoroSetup`). `omareader setup` downloads the engine. The title
   agent for pasted text (`TitleAgent`) runs a coding agent that may use the
   network, so it stays off until the user turns it on in the dialog.
+  Dropbox sync (`docs/sync.md`) talks only to Dropbox's API, only after the
+  user connects, and keeps the token in the keyring (Android Keystore on the
+  phone), never in a file or a log. Both apps read the Dropbox app key from
+  `DROPBOX_APP_KEY`; when it's empty, sync is hidden.
 - Never modify the user's books; save app data atomically (`QSaveFile`).
 - Comments explain why, in full sentences. No em dashes in prose.
 

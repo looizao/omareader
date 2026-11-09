@@ -87,10 +87,17 @@ Popup {
                 checked: exporter.format === Exporter.Phone
                 onToggled: if (checked) exporter.format = Exporter.Phone
             }
+            CheckBox {
+                Layout.leftMargin: 8
+                visible: exporter.format === Exporter.Phone && sync.connected
+                text: qsTr("Send it to your phone through Dropbox")
+                checked: sync.sendExports
+                onToggled: sync.sendExports = checked
+            }
             Label {
                 Layout.fillWidth: true
                 Layout.leftMargin: 8
-                visible: exporter.format === Exporter.Phone
+                visible: exporter.format === Exporter.Phone && !(sync.connected && sync.sendExports)
                 text: qsTr("Save it in a Google Drive or Dropbox folder, then open the .omabook file on your phone with omareader.")
                 wrapMode: Text.Wrap
                 color: Colors.muted

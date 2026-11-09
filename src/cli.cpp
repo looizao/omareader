@@ -1,10 +1,14 @@
 #include "cli.h"
 
 #include "bookloader.h"
+#include "dropbox.h"
 #include "exporter.h"
 #include "kokoro.h"
+#include "library.h"
 #include "qwen.h"
+#include "sync.h"
 #include "synthesizer.h"
+#include "tokenstore.h"
 #include "voicesettings.h"
 
 #include <QCommandLineParser>
@@ -495,6 +499,85 @@ int voices(const QStringList &arguments) {
     return 0;
 }
 
+QJsonObject syncStatus(const SyncService &sync) {
+    return QJsonObject{{"available", sync.available()},
+                       {"connected", sync.connected()},
+                       {"account", sync.account()},
+                       {"lastSynced", sync.lastSynced().isValid() ? sync.lastSynced().toString(Qt::ISODate) : QString()},
+                       {"pendingUploads", sync.pendingUploads()},
+                       {"error", sync.error()}};
+}
+
+int syncCommand(const QStringList &arguments) {
+    Command command("sync", "Sync with Dropbox: books for the phone, reading places, removals and settings.");
+    command.parser.addPositionalArgument(
+        "action", "now (the default), status, connect, disconnect, or send <bundle.omabook>", "[action]");
+    command.json();
+    if (!command.parse(arguments))
+        return command.parser.isSet("help") ? 0 : 1;
+    const QStringList positional = command.parser.positionalArguments();
+    const QString action = positional.value(0, "now");
+    const bool json = command.parser.isSet("json");
+
+    Library library;
+    KeyringTokenStore keyring;
+    SyncService sync(&library, &keyring);
+    sync.setSynchronous(true);
+    if (!sync.available())
+        return fail("This build of omareader has no Dropbox sync.");
+    auto report = [&](int status) {
+        if (json) {
+            printJson(syncStatus(sync));
+        } else if (status == 0) {
+            out() << (sync.connected() ? "Connected to Dropbox" + (sync.account().isEmpty() ? QString() : " as " + sync.account())
+                                       : QString("Not connected to Dropbox"))
+                  << Qt::endl;
+            if (sync.lastSynced().isValid())
+                out() << "Last synced " << sync.lastSynced().toString(Qt::ISODate) << Qt::endl;
+            if (sync.pendingUploads() > 0)
+                out() << sync.pendingUploads() << " book(s) waiting to go to the phone" << Qt::endl;
+        }
+        if (!sync.error().isEmpty())
+            err() << "omareader: " << sync.error() << Qt::endl;
+        return status;
+    };
+
+    if (action == "status")
+        return report(0);
+    if (action == "disconnect") {
+        sync.disconnectDropbox();
+        return report(0);
+    }
+    if (action == "connect") {
+        QEventLoop loop;
+        QObject::connect(&sync, &SyncService::stateChanged, &loop, [&] {
+            if (!sync.connecting())
+                loop.quit();
+        });
+        if (!sync.connectDropbox())
+            return report(1);
+        err() << "Open this page to connect Dropbox (it should have opened already):\n"
+              << sync.authorizeUrl() << Qt::endl;
+        loop.exec();
+        return report(sync.connected() && sync.error().isEmpty() ? 0 : 1);
+    }
+    if (!sync.connected())
+        return fail("Dropbox isn't connected. Run omareader sync connect first.");
+    if (action == "send") {
+        const QString path = positional.value(1);
+        const QJsonObject manifest = SyncFormat::bundleManifest(path);
+        if (manifest.isEmpty())
+            return fail(path.isEmpty() ? "Name the .omabook to send." : path + " isn't an omareader bundle.");
+        sync.queueUpload(path, manifest.value("id").toString(), manifest.value("title").toString(),
+                         manifest.value("author").toString());
+        return report(sync.error().isEmpty() && sync.pendingUploads() == 0 ? 0 : 1);
+    }
+    if (action != "now")
+        return fail("Use omareader sync [now|status|connect|disconnect|send <bundle>].");
+    sync.syncNow();
+    return report(sync.error().isEmpty() ? 0 : 1);
+}
+
 int skill(const QStringList &arguments) {
     Command command("skill", "Print the agent skill, or install it with: skill install.");
     command.parser.addPositionalArgument("install", "Copy to ~/.agents/skills/omareader and link into ~/.claude/skills",
@@ -546,12 +629,13 @@ QString usage() {
            "  doctor [--engine E] [--json]    Check that read-aloud is ready, with hardware advice\n"
            "  setup [--engine kokoro|qwen]    Install a voice engine and its models (uses the network)\n"
            "  voices [--engine E] [--json]    List an engine's voices, languages and tuning\n"
+           "  sync [now|status|connect|...]   Sync with Dropbox (uses the network once connected)\n"
            "  skill [install]                 Print the skill for coding agents, or install it\n"
            "  version                         Print the version\n";
 }
 
 bool isCommand(const QString &word) {
-    return QStringList{"info", "text", "export", "doctor", "setup", "voices", "skill", "help", "--help", "-h", "version", "--version"}
+    return QStringList{"info", "text", "export", "doctor", "setup", "voices", "sync", "skill", "help", "--help", "-h", "version", "--version"}
         .contains(word);
 }
 
@@ -565,6 +649,7 @@ int run(const QStringList &arguments) {
     if (command == "setup") return setup(rest);
     if (command == "voices") return voices(rest);
     if (command == "skill") return skill(rest);
+    if (command == "sync") return syncCommand(rest);
     if (command == "version" || command == "--version") {
         out() << "omareader " << QCoreApplication::applicationVersion() << Qt::endl;
         return 0;
