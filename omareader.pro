@@ -17,7 +17,13 @@ DEFINES += OMAREADER_VERSION=\\\"$$APP_VERSION\\\"
 DROPBOX_KEY = $$cat($$PWD/DROPBOX_APP_KEY)
 DEFINES += OMAREADER_DROPBOX_KEY=\\\"$$DROPBOX_KEY\\\"
 
-# The Dropbox sign-in is kept in the Secret Service keyring.
+# The Google desktop client for Drive sync (docs/sync.md): the id is in
+# GOOGLE_CLIENT_ID, the secret in GOOGLE_CLIENT_SECRET, which git ignores and
+# CI writes from a repository secret. They go into a generated header rather
+# than DEFINES, so the secret never shows on a compile line in a build log.
+include(googleclient.pri)
+
+# Each provider's sign-in is kept in the Secret Service keyring.
 CONFIG += link_pkgconfig
 PKGCONFIG += libsecret-1
 
@@ -37,6 +43,8 @@ HEADERS += \
     src/reader.h \
     src/speech.h \
     src/dropbox.h \
+    src/drive.h \
+    src/oauth.h \
     src/sync.h \
     src/syncengine.h \
     src/syncstate.h \
@@ -64,6 +72,8 @@ SOURCES += \
     src/reader.cpp \
     src/speech.cpp \
     src/dropbox.cpp \
+    src/drive.cpp \
+    src/oauth.cpp \
     src/sync.cpp \
     src/syncengine.cpp \
     src/syncstate.cpp \

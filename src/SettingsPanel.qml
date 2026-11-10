@@ -349,7 +349,8 @@ Drawer {
                 onToggled: reader.serif = checked
             }
 
-            // Sync through the user's Dropbox; hidden in a build without it.
+            // Sync through the user's Dropbox or Google Drive; hidden in a
+            // build with neither.
             ColumnLayout {
                 visible: sync.available
                 Layout.fillWidth: true
@@ -367,16 +368,26 @@ Drawer {
                 }
                 Label {
                     Layout.fillWidth: true
-                    text: qsTr("Keep your phone and this computer in step through your Dropbox: books you export for the phone, where you stopped, books you remove, the speed and the text size. omareader only sees its own folder in Dropbox.")
+                    text: qsTr("Keep your phone and this computer in step through your Dropbox or Google Drive: books you export for the phone, where you stopped, books you remove, the speed and the text size. omareader only sees its own files there. Connect the same one on your phone.")
                     wrapMode: Text.Wrap
                     font.pixelSize: 12
                     color: Colors.muted
                 }
-                AccentButton {
+                Flow {
+                    Layout.fillWidth: true
                     Layout.topMargin: 4
                     visible: !sync.connected && !sync.connecting
-                    text: qsTr("Connect Dropbox")
-                    onClicked: sync.connectDropbox()
+                    spacing: 8
+                    AccentButton {
+                        visible: sync.dropboxAvailable
+                        text: qsTr("Connect Dropbox")
+                        onClicked: sync.connectDropbox()
+                    }
+                    AccentButton {
+                        visible: sync.driveAvailable
+                        text: qsTr("Connect Google Drive")
+                        onClicked: sync.connectDrive()
+                    }
                 }
                 RowLayout {
                     visible: sync.connecting
@@ -389,7 +400,7 @@ Drawer {
                     }
                     Label {
                         Layout.fillWidth: true
-                        text: qsTr("Waiting for Dropbox in your browser…")
+                        text: qsTr("Waiting for %1 in your browser…").arg(sync.providerName)
                         wrapMode: Text.Wrap
                         color: Colors.body
                     }
@@ -402,7 +413,8 @@ Drawer {
                 Label {
                     Layout.fillWidth: true
                     visible: sync.connected
-                    text: sync.account !== "" ? qsTr("Connected as %1").arg(sync.account) : qsTr("Connected to Dropbox")
+                    text: sync.account !== "" ? qsTr("Connected to %1 as %2").arg(sync.providerName).arg(sync.account)
+                                              : qsTr("Connected to %1").arg(sync.providerName)
                     wrapMode: Text.Wrap
                     color: Colors.body
                 }
@@ -443,7 +455,7 @@ Drawer {
                     Button {
                         flat: true
                         text: qsTr("Disconnect")
-                        onClicked: sync.disconnectDropbox()
+                        onClicked: sync.disconnectSync()
                     }
                 }
                 Label {

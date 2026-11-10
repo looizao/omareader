@@ -74,16 +74,22 @@ environment's secrets; never print it or commit it.
   everything.
 - The Android app keeps the same rules: the network only for opt-in sync,
   every visible string in `res/values/strings.xml` with a pt-BR entry in
-  `res/values-pt-rBR`, and no libraries beyond Media3 without a reason.
+  `res/values-pt-rBR`, and no libraries beyond Media3 without a reason (Play services'
+  auth library is the one so far: Google allows no other Drive sign-in on
+  Android).
 - The app touches the network only when the user asks. Kokoros downloads a
   missing model on its own, so synthesis only starts once both model files
   exist (`KokoroSetup`). `omareader setup` downloads the engine. The title
   agent for pasted text (`TitleAgent`) runs a coding agent that may use the
   network, so it stays off until the user turns it on in the dialog.
-  Dropbox sync (`docs/sync.md`) talks only to Dropbox's API, only after the
-  user connects, and keeps the token in the keyring (Android Keystore on the
-  phone), never in a file or a log. Both apps read the Dropbox app key from
-  `DROPBOX_APP_KEY`; when it's empty, sync is hidden.
+  Sync (`docs/sync.md`) talks only to the API of the provider the user
+  connected (Dropbox or Google Drive), only after they connect, and keeps
+  the token in the keyring (Android Keystore on the phone; Play services
+  holds Google's), never in a file or a log. Both apps read the Dropbox app
+  key from `DROPBOX_APP_KEY` and the Google client id from
+  `GOOGLE_CLIENT_ID`; a provider whose key is empty is hidden. The Google
+  client secret lives only in the ignored `GOOGLE_CLIENT_SECRET` file and
+  the repository secret of that name; never print it or commit it.
 - Never modify the user's books; save app data atomically (`QSaveFile`).
 - Comments explain why, in full sentences. No em dashes in prose.
 

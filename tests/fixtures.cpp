@@ -3,7 +3,13 @@
 // lexer trips over the XML raw strings.
 #include "fixtures.h"
 
+#include <QCryptographicHash>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QUrl>
+#include <QUrlQuery>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <private/qzipwriter_p.h>
@@ -183,3 +189,213 @@ FakeHttpServer::FakeHttpServer(Handler handler) : m_handler(std::move(handler)),
 FakeHttpServer::~FakeHttpServer() = default;
 
 QString FakeHttpServer::url() const { return QStringLiteral("http://127.0.0.1:%1").arg(m_server->serverPort()); }
+
+// Google Drive, in memory.
+
+namespace {
+
+QJsonObject driveMetadata(const FakeDrive::File &f) {
+    QJsonObject properties;
+    for (auto it = f.properties.cbegin(); it != f.properties.cend(); ++it)
+        properties.insert(it.key(), it.value());
+    return QJsonObject{{"id", f.id},
+                       {"name", f.name},
+                       {"mimeType", f.mimeType},
+                       {"properties", properties},
+                       {"headRevisionId", "rev" + QString::number(f.revision)},
+                       {"sha256Checksum",
+                        QString::fromLatin1(QCryptographicHash::hash(f.data, QCryptographicHash::Sha256).toHex())},
+                       {"size", QString::number(f.data.size())},
+                       {"createdTime", f.created},
+                       {"modifiedTime", f.modified},
+                       {"trashed", f.trashed}};
+}
+
+FakeHttpServer::Response json(const QJsonObject &object, int status = 200) {
+    return {status, QJsonDocument(object).toJson(QJsonDocument::Compact), {}};
+}
+
+// The text between key and the next quote in a Drive query.
+QString valueAfter(const QString &q, const QString &key) {
+    const qsizetype at = q.indexOf(key);
+    if (at < 0)
+        return {};
+    const qsizetype start = at + key.size();
+    return q.mid(start, q.indexOf('\'', start) - start);
+}
+
+}
+
+QString FakeDrive::stamp() { return QStringLiteral("2026-11-10T00:%1:00.000Z").arg(++clock, 2, 10, QChar('0')); }
+
+FakeDrive::File *FakeDrive::file(const QString &id) {
+    for (File &f : files)
+        if (f.id == id)
+            return &f;
+    return nullptr;
+}
+
+QList<FakeDrive::File *> FakeDrive::withPath(const QString &path) {
+    QList<File *> found;
+    for (File &f : files)
+        if (f.properties.value("omareaderPath") == path)
+            found.append(&f);
+    return found;
+}
+
+FakeDrive::File &FakeDrive::add(const QString &path, const QByteArray &data, const QString &parent) {
+    File f;
+    f.id = QStringLiteral("f%1").arg(++nextId, 3, 10, QChar('0'));
+    f.name = path.section('/', -1);
+    f.mimeType = "application/json";
+    f.parent = parent;
+    f.properties = {{"omareader", "file"}, {"omareaderPath", path}};
+    f.data = data;
+    f.created = f.modified = stamp();
+    files.append(f);
+    return files.last();
+}
+
+FakeHttpServer::Response FakeDrive::handle(const FakeHttpServer::Request &r) {
+    const QUrl url("http://drive" + QString::fromLatin1(r.target));
+    const QUrlQuery query(url);
+    const QString path = url.path();
+    if (path == "/token") {
+        ++tokenRequests;
+        lastTokenRequest = r.body;
+        return json({{"access_token", token}, {"expires_in", 3600}});
+    }
+    if (path == "/revoke")
+        return {200, "", {}};
+    if (path.startsWith("/session/")) {
+        if (!sessions.contains(path) || expireSession) {
+            expireSession = false;
+            sessions.remove(path);
+            return json({{"error", QJsonObject{{"code", 404}, {"message", "session expired"}}}}, 404);
+        }
+        Session &s = sessions[path];
+        const QByteArray range = r.headers.value("content-range");
+        auto incomplete = [&s]() -> FakeHttpServer::Response {
+            if (s.received.isEmpty())
+                return {308, "", {}};
+            return {308, "", {{"Range", "bytes=0-" + QByteArray::number(s.received.size() - 1)}}};
+        };
+        if (range.startsWith("bytes */"))
+            return incomplete();
+        const qint64 from = range.mid(6, range.indexOf('-') - 6).toLongLong();
+        if (losePiece && from > 0) {
+            losePiece = false;
+            return {503, "", {}};
+        }
+        if (from != s.received.size())
+            return {400, "", {}};
+        s.received.append(r.body);
+        if (s.received.size() < s.total)
+            return incomplete();
+        const QJsonObject metadata = QJsonDocument::fromJson(s.metadata).object();
+        File *f = s.fileId.isEmpty() ? nullptr : file(s.fileId);
+        if (!f) {
+            const QString filePath = metadata.value("properties").toObject().value("omareaderPath").toString();
+            f = &add(filePath, {}, metadata.value("parents").toArray().first().toString());
+        } else {
+            ++f->revision;
+            f->modified = stamp();
+        }
+        if (metadata.contains("name"))
+            f->name = metadata.value("name").toString();
+        f->data = s.received;
+        const QJsonObject done = driveMetadata(*f);
+        sessions.remove(path);
+        return json(done);
+    }
+    if (r.headers.value("authorization") != "Bearer " + token.toUtf8())
+        return json({{"error", QJsonObject{{"code", 401}, {"message", "Invalid Credentials"}}}}, 401);
+    if (busy > 0) {
+        --busy;
+        return json({{"error", QJsonObject{{"code", 429}, {"message", "Rate limit exceeded"}}}}, 429);
+    }
+    if (path == "/drive/v3/about")
+        return json({{"user", QJsonObject{{"displayName", "Ana"}, {"emailAddress", "ana@example.com"}}}});
+
+    if (path == "/drive/v3/files" && r.method == "GET") {
+        const QString q = query.queryItemValue("q", QUrl::FullyDecoded);
+        const bool folders = q.contains("value='folder'");
+        const QString wanted = valueAfter(q, "key='omareaderPath' and value='");
+        QJsonArray found;
+        for (const File &f : std::as_const(files)) {
+            if (f.trashed || f.properties.value("omareader") != (folders ? "folder" : "file"))
+                continue;
+            if (!wanted.isEmpty() && f.properties.value("omareaderPath") != wanted)
+                continue;
+            found.append(driveMetadata(f));
+        }
+        // Pages of two, so the client has to follow them.
+        const int from = query.queryItemValue("pageToken").toInt();
+        QJsonObject page{{"files", QJsonArray()}};
+        QJsonArray slice;
+        for (int i = from; i < qMin(from + 2, int(found.size())); ++i)
+            slice.append(found.at(i));
+        page.insert("files", slice);
+        if (from + 2 < found.size())
+            page.insert("nextPageToken", QString::number(from + 2));
+        return json(page);
+    }
+    if (path == "/drive/v3/files" && r.method == "POST") {
+        const QJsonObject metadata = QJsonDocument::fromJson(r.body).object();
+        File f;
+        f.id = QStringLiteral("d%1").arg(++nextId, 3, 10, QChar('0'));
+        f.name = metadata.value("name").toString();
+        f.mimeType = metadata.value("mimeType").toString();
+        const QJsonObject properties = metadata.value("properties").toObject();
+        for (auto it = properties.constBegin(); it != properties.constEnd(); ++it)
+            f.properties.insert(it.key(), it.value().toString());
+        f.created = f.modified = stamp();
+        files.append(f);
+        return json({{"id", f.id}});
+    }
+    if (path.startsWith("/drive/v3/files/")) {
+        File *f = file(path.section('/', -1));
+        if (!f)
+            return json({{"error", QJsonObject{{"code", 404}, {"message", "File not found"}}}}, 404);
+        if (r.method == "PATCH") {
+            if (QJsonDocument::fromJson(r.body).object().value("trashed").toBool())
+                f->trashed = true;
+            return json({{"id", f->id}});
+        }
+        if (query.queryItemValue("alt") == "media")
+            return {200, f->data, {}};
+        return json(driveMetadata(*f));
+    }
+    if (path.startsWith("/upload/drive/v3/files")) {
+        const QString type = query.queryItemValue("uploadType");
+        const QString id = path == "/upload/drive/v3/files" ? QString() : path.section('/', -1);
+        if (!id.isEmpty() && !file(id))
+            return json({{"error", QJsonObject{{"code", 404}, {"message", "File not found"}}}}, 404);
+        if (type == "resumable") {
+            const QString link = QStringLiteral("/session/%1").arg(sessions.size() + nextId + 1);
+            sessions.insert(link, {id, r.body, r.headers.value("x-upload-content-length").toLongLong(), {}});
+            return {200, "", {{"Location", (base + link).toUtf8()}}};
+        }
+        if (type == "media" && !id.isEmpty()) {
+            File *f = file(id);
+            f->data = r.body;
+            ++f->revision;
+            f->modified = stamp();
+            return json(driveMetadata(*f));
+        }
+        if (type == "multipart" && id.isEmpty()) {
+            const QByteArray contentType = r.headers.value("content-type");
+            const QByteArray boundary = "--" + contentType.mid(contentType.indexOf("boundary=") + 9);
+            const qsizetype first = r.body.indexOf("\r\n\r\n") + 4;
+            const qsizetype firstEnd = r.body.indexOf("\r\n" + boundary, first);
+            const qsizetype second = r.body.indexOf("\r\n\r\n", firstEnd) + 4;
+            const qsizetype secondEnd = r.body.indexOf("\r\n" + boundary, second);
+            const QJsonObject metadata = QJsonDocument::fromJson(r.body.mid(first, firstEnd - first)).object();
+            File &f = add(metadata.value("properties").toObject().value("omareaderPath").toString(),
+                          r.body.mid(second, secondEnd - second), metadata.value("parents").toArray().first().toString());
+            f.name = metadata.value("name").toString();
+            return json(driveMetadata(f));
+        }
+    }
+    return {404, "", {}};
+}

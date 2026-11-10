@@ -90,7 +90,7 @@ Popup {
             CheckBox {
                 Layout.leftMargin: 8
                 visible: exporter.format === Exporter.Phone && sync.connected
-                text: qsTr("Send it to your phone through Dropbox")
+                text: qsTr("Send it to your phone through %1").arg(sync.providerName)
                 checked: sync.sendExports
                 onToggled: sync.sendExports = checked
             }

@@ -51,6 +51,17 @@ jobs:
       - name: Lint shell scripts
         run: shellcheck bin/* src/setup-kokoros.sh src/setup-qwen.sh
 
+      # The Google desktop client's secret stays out of git (docs/sync.md);
+      # the build reads it from this ignored file. Without the repository
+      # secret, as on a fork, the build simply has no Google Drive.
+      - name: Write the Google client secret
+        env:
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+        run: |
+          if [ -n "$GOOGLE_CLIENT_SECRET" ]; then
+            printf '%s' "$GOOGLE_CLIENT_SECRET" > GOOGLE_CLIENT_SECRET
+          fi
+
       - name: Build
         run: bin/build
 
@@ -80,6 +91,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # The Google desktop client's secret stays out of git (docs/sync.md);
+      # the build reads it from this ignored file. Without the repository
+      # secret, as on a fork, the build simply has no Google Drive.
+      - name: Write the Google client secret
+        env:
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+        run: |
+          if [ -n "$GOOGLE_CLIENT_SECRET" ]; then
+            printf '%s' "$GOOGLE_CLIENT_SECRET" > GOOGLE_CLIENT_SECRET
+          fi
 
       # makepkg refuses to run as root.
       - name: Build the package

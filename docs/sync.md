@@ -1,13 +1,18 @@
-# Sync through Dropbox
+# Sync through Dropbox or Google Drive
 
 omareader on the desktop and on Android can keep each other up to date
-through the user's own Dropbox: books exported for the phone arrive on it by
+through the user's own Dropbox or Google Drive: books exported for the phone arrive on it by
 themselves, the place reached in a book follows you from one device to the
 other, removing a book removes it everywhere, and the listening speed and
 text size carry over. There is no omareader server. Each device talks to
-Dropbox directly, and only inside the app's own folder.
+the provider directly, and only to omareader's own files there.
 
-Sync is off until the user connects Dropbox in the settings. It is the only
+The two providers hold the same files and run the same merge; this document
+describes Dropbox and then, in [Google Drive](#google-drive), how Drive
+stands in for each Dropbox call. A device syncs through one provider at a
+time, and the user connects the same one on every device.
+
+Sync is off until the user connects a provider in the settings. It is the only
 part of omareader that touches the network besides `omareader setup` and the
 optional title agent; reading and narration stay offline.
 
@@ -218,6 +223,140 @@ The phone:
   sp), and keeps `speed` within 0.5 to 2, the desktop's range.
 - Forgets its saved `rev`s on disconnect, so the next connection does a full
   merge.
+
+## Google Drive
+
+Drive has no app folder like Dropbox's, no conditional write, and allows two
+files with the same name in a folder, so the Drive client does a little
+more to give the engine the same calls.
+
+### Google Cloud project
+
+One project serves both platforms, with the **Google Drive API** enabled
+and an OAuth consent screen that asks for one scope,
+`https://www.googleapis.com/auth/drive.file`. That scope is non-sensitive:
+it reaches only files omareader created, and nothing else in the user's
+Drive. The project has two OAuth clients:
+
+- A **Desktop app** client. Its id goes in `GOOGLE_CLIENT_ID` at the top of
+  the repository. Google calls its secret non-confidential, but GitHub's
+  secret scanning blocks it, so it stays out of git: the build reads it from
+  `GOOGLE_CLIENT_SECRET` (ignored by git) or the `OMAREADER_GOOGLE_SECRET`
+  environment variable, and CI writes it from a repository secret. A build
+  without both has no Drive.
+- An **Android** client for `io.github.looizao.omareader`, with the SHA-1 of
+  every key that signs the app (the debug key and Play's app signing key).
+  It has no secret; Play services checks the app's signature instead.
+
+While the consent screen's publishing status is **Testing**, only its test
+users can connect and Google expires their sign-in after 7 days. Publishing
+it needs Google's basic app verification (a homepage and the privacy
+policy), not a security assessment.
+
+### Connecting to Drive
+
+The desktop uses Google's loopback flow for desktop apps, like Dropbox's:
+PKCE (S256), a random `state`, a listener on `127.0.0.1` at any free port,
+and `https://accounts.google.com/o/oauth2/v2/auth?client_id=…&redirect_uri=http://127.0.0.1:<port>/drive&response_type=code&scope=https://www.googleapis.com/auth/drive.file&code_challenge=…&code_challenge_method=S256&access_type=offline&prompt=consent&state=…`.
+The code goes to `https://oauth2.googleapis.com/token` with the client id,
+the secret and the verifier. The refresh token is kept as Dropbox's is (the
+keyring, service `drive`), and disconnecting posts it to
+`https://oauth2.googleapis.com/revoke`.
+
+Google doesn't allow that flow on Android, so the phone asks Play services
+(`Identity.getAuthorizationClient(…).authorize(…)` with the `drive.file`
+scope). The user agrees once in Google's own sheet; after that the phone
+asks again before each sync and gets a fresh access token without showing
+anything. It keeps no refresh token. If Play services needs the user again
+(the grant was revoked), a background sync stops and the sync screen asks
+the user to connect again. Drive needs Google Play services on the phone.
+
+The phone keeps the account's address (in the app's private preferences,
+which Android doesn't back up) so it asks Play services for the same
+account each time and revokes that account's grant when the user
+disconnects. On a phone without Play services the Drive button says so.
+
+The account shown in the settings comes from
+`GET /drive/v3/about?fields=user(displayName,emailAddress)`.
+
+### Files in Drive
+
+Everything lives in a folder named **omareader** at the top of the user's
+Drive, so the user can see it. Each file omareader makes carries public
+file properties (`properties`, which every client of the project can read):
+
+| Property | Value |
+| --- | --- |
+| `omareader` | `folder` on the folder, `file` on everything in it |
+| `omareaderPath` | the Dropbox-style path: `/books/<id>.omabook`, `/state/<id>.json`, `/settings.json` |
+
+The path, not the name, says what a file is. Names are for people: a bundle
+is named after its book (`Dune.omabook`), a state file `<id>.json`, and the
+settings `settings.json`.
+
+- **Find the folder.** The files with `omareader=folder`, not trashed. If
+  there are several (two devices made one at the same moment), the one
+  created first, then the smaller id, is the folder, and new files go there.
+  If there is none, make it (`mimeType`
+  `application/vnd.google-apps.folder`, in `root`).
+- **List.** `GET /drive/v3/files` with
+  `q=properties has {key='omareader' and value='file'} and trashed=false`,
+  `spaces=drive`, `pageSize=1000`, and
+  `fields=nextPageToken,files(id,name,properties,headRevisionId,sha256Checksum,size,createdTime,modifiedTime)`,
+  every page. This sees files in every omareader folder, so a second folder
+  loses nothing. A file's `rev` is its `headRevisionId`, which changes with
+  every new content. Drive gives none for a file without content of its
+  own; then the `rev` is `m:` and its `modifiedTime`.
+- **Two files for one path.** Keep one: for a state file or the settings,
+  the one created first (then the smaller id); for a bundle, the one
+  modified last (then the larger id). Trash the others. Nothing is lost:
+  the device that wrote a trashed copy still has its registers, sees that
+  the kept file isn't the one it wrote, merges and writes again at its next
+  sync.
+- **Read.** `GET /drive/v3/files/<fileId>?alt=media`; `Range` resumes a
+  download. The `rev` is the one the listing gave.
+- **Add** (Dropbox's `mode: add`): if the listing has a file for the path,
+  that is a conflict. The phone also asks Drive for the path
+  (`properties has {key='omareaderPath' and value='<path>'}`), which
+  narrows the window in which two devices both add the file. Otherwise create it with a multipart upload
+  (`POST /upload/drive/v3/files?uploadType=multipart`, metadata
+  `{name, parents: [folder], properties}`).
+- **Update** (Dropbox's update with `strict_conflict`): fetch the file's
+  `headRevisionId`; if it isn't the expected `rev`, or the file is gone,
+  that is a conflict. Otherwise
+  `PATCH /upload/drive/v3/files/<fileId>?uploadType=media`. Drive can't make
+  the write itself conditional, so a write from another device can land in
+  between and be overwritten. That loses nothing for long: the other device
+  still has its registers, finds the `rev` it wrote gone at its next sync,
+  and merges again.
+- **Bundles** (Dropbox's `overwrite`) go up in a resumable upload: `POST`
+  (a new file) or `PATCH` (the file already listed for that path)
+  `/upload/drive/v3/files?uploadType=resumable` with the metadata, then the
+  bytes to the session URI from `Location` in 8 MiB pieces
+  (`Content-Range: bytes a-b/total`). Drive answers 308 until the last
+  piece. After a dropped connection, `PUT` with `Content-Range: */total`
+  says how much arrived (`Range`); a 404 means the session expired, and the
+  upload starts over, once. A replaced bundle is renamed after its book's
+  title in the same request, so a renamed book shows its new name.
+- **Delete** moves the file to the trash (`PATCH {"trashed": true}`), so a
+  user can get it back for 30 days. A file already gone is fine.
+- **Check a download** against `sha256Checksum`, the plain SHA-256 of the
+  whole file (not Dropbox's block hash). If Drive gives none, check the size
+  alone.
+
+### Errors from Drive
+
+- 401 refreshes the access token once (the desktop from the refresh token,
+  the phone from Play services).
+- 403 with reason `rateLimitExceeded` or `userRateLimitExceeded`, 429, and
+  500, 502, 503 and 504 back off and retry: 1, 2, then 4 seconds plus up to a
+  second at random. If the request still fails, the sync stops and the next
+  one tries again (on the phone, after `Retry-After`, or a minute).
+- On the phone, a second 401 right after Play services gave a new token,
+  or Play services asking for the user, means the same.
+- `invalid_grant` when refreshing means the sign-in is gone (revoked, unused
+  for six months, or a Testing project's 7 days are up): disconnect and ask
+  the user to connect again, as for Dropbox.
 
 ## Arguments with non-ASCII text
 

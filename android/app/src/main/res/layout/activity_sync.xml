@@ -20,6 +20,7 @@
             android:src="@drawable/ic_back" />
 
         <TextView
+            android:id="@+id/title"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_marginStart="4dp"
@@ -87,6 +88,18 @@
                 android:paddingStart="24dp"
                 android:paddingEnd="24dp"
                 android:text="@string/sync_connect"
+                android:textAllCaps="false"
+                android:textColor="@color/on_accent" />
+
+            <Button
+                android:id="@+id/connect_drive"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/pill"
+                android:paddingStart="24dp"
+                android:paddingEnd="24dp"
+                android:text="@string/sync_connect_drive"
                 android:textAllCaps="false"
                 android:textColor="@color/on_accent" />
 

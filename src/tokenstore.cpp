@@ -9,6 +9,8 @@
 namespace {
 
 const SecretSchema *schema() {
+    // The schema kept its first name when Google Drive joined Dropbox; the
+    // service attribute tells the two sign-ins apart.
     static const SecretSchema value = {"io.github.looizao.omareader.Dropbox",
                                        SECRET_SCHEMA_NONE,
                                        {{"service", SECRET_SCHEMA_ATTRIBUTE_STRING}, {nullptr, SECRET_SCHEMA_ATTRIBUTE_STRING}},
@@ -27,9 +29,10 @@ QString take(GError *gerror, QString *error) {
 
 }
 
-QString KeyringTokenStore::read(QString *error) {
+QString KeyringTokenStore::read(const QString &service, QString *error) {
+    const QByteArray name = service.toUtf8();
     GError *gerror = nullptr;
-    gchar *secret = secret_password_lookup_sync(schema(), nullptr, &gerror, "service", "dropbox", nullptr);
+    gchar *secret = secret_password_lookup_sync(schema(), nullptr, &gerror, "service", name.constData(), nullptr);
     if (gerror) {
         take(gerror, error);
         return {};
@@ -40,11 +43,13 @@ QString KeyringTokenStore::read(QString *error) {
     return token;
 }
 
-bool KeyringTokenStore::write(const QString &token, QString *error) {
+bool KeyringTokenStore::write(const QString &service, const QString &token, QString *error) {
+    const QByteArray name = service.toUtf8();
+    const QByteArray label = "omareader " + name + " sync";
     GError *gerror = nullptr;
     const QByteArray value = token.toUtf8();
-    const bool ok = secret_password_store_sync(schema(), SECRET_COLLECTION_DEFAULT, "omareader Dropbox sync",
-                                               value.constData(), nullptr, &gerror, "service", "dropbox", nullptr);
+    const bool ok = secret_password_store_sync(schema(), SECRET_COLLECTION_DEFAULT, label.constData(),
+                                               value.constData(), nullptr, &gerror, "service", name.constData(), nullptr);
     if (gerror) {
         take(gerror, error);
         return false;
@@ -52,9 +57,10 @@ bool KeyringTokenStore::write(const QString &token, QString *error) {
     return ok;
 }
 
-bool KeyringTokenStore::clear(QString *error) {
+bool KeyringTokenStore::clear(const QString &service, QString *error) {
+    const QByteArray name = service.toUtf8();
     GError *gerror = nullptr;
-    secret_password_clear_sync(schema(), nullptr, &gerror, "service", "dropbox", nullptr);
+    secret_password_clear_sync(schema(), nullptr, &gerror, "service", name.constData(), nullptr);
     if (gerror) {
         take(gerror, error);
         return false;

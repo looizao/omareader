@@ -1,5 +1,6 @@
 #include "sync.h"
 
+#include "drive.h"
 #include "dropbox.h"
 #include "exporter.h"
 #include "library.h"
@@ -89,7 +90,21 @@ SyncService::~SyncService() {
         m_watcher.waitForFinished();
 }
 
-bool SyncService::available() const { return !dropboxAppKey().isEmpty() || m_factory != nullptr; }
+bool SyncService::dropboxAvailable() const { return !dropboxAppKey().isEmpty() || m_factory != nullptr; }
+
+bool SyncService::driveAvailable() const {
+    return (!googleClientId().isEmpty() && !googleClientSecret().isEmpty()) || m_factory != nullptr;
+}
+
+bool SyncService::available() const { return dropboxAvailable() || driveAvailable(); }
+
+QString SyncService::nameOf(const QString &provider) {
+    if (provider == Drive)
+        return QStringLiteral("Google Drive");
+    if (provider == Dropbox)
+        return QStringLiteral("Dropbox");
+    return {};
+}
 
 void SyncService::setNarrator(Narrator *narrator) {
     m_narrator = narrator;
@@ -144,6 +159,10 @@ void SyncService::load() {
     if (!SyncFormat::isValidId(m_device))
         m_device = SyncFormat::newDeviceId();
     m_connected = root.value("connected").toBool();
+    // Dropbox came first, before there was a choice to record.
+    m_provider = root.value("provider").toString(m_connected ? Dropbox : "");
+    if (m_provider != Dropbox && m_provider != Drive)
+        m_connected = false;
     m_account = root.value("account").toString();
     m_sendExports = root.value("sendExports").toBool(true);
     const qint64 last = root.value("lastSynced").toInteger();
@@ -184,6 +203,7 @@ void SyncService::save() const {
     const QJsonObject root{{"version", 1},
                            {"device", m_device},
                            {"connected", m_connected},
+                           {"provider", m_provider},
                            {"account", m_account},
                            {"sendExports", m_sendExports},
                            {"lastSynced", m_lastSynced.isValid() ? m_lastSynced.toMSecsSinceEpoch() : 0},
@@ -264,7 +284,7 @@ Register SyncService::localPosition(const LibraryEntry &entry, const SyncCacheEn
     if (!hasPosition(entry))
         return {};
     const SyncPosition here{entry.chapter, entry.paragraph, qMax(0, entry.offset), progressOf(entry)};
-    // The place last taken from Dropbox, unmoved since: hand back exactly
+    // The place last taken from the provider, unmoved since: hand back exactly
     // what came, so it never travels back as a change of this device's.
     const Register &known = cached.state.position;
     if (known.isSet() && known.at == entry.positionAt) {
@@ -310,10 +330,20 @@ SyncInput SyncService::input() {
 
 // Running.
 
-std::unique_ptr<SyncRemote> SyncService::makeRemote(const QString &refreshToken) const {
+namespace {
+
+std::unique_ptr<OAuthRemote> providerRemote(const QString &provider, const QString &refreshToken) {
+    if (provider == SyncService::Drive)
+        return std::make_unique<DriveRemote>(googleClientId(), googleClientSecret(), refreshToken);
+    return std::make_unique<DropboxRemote>(dropboxAppKey(), refreshToken);
+}
+
+}
+
+std::unique_ptr<SyncRemote> SyncService::makeRemote(const QString &provider, const QString &refreshToken) const {
     if (m_factory)
         return m_factory(refreshToken);
-    return std::make_unique<DropboxRemote>(dropboxAppKey(), refreshToken);
+    return providerRemote(provider, refreshToken);
 }
 
 void SyncService::syncNow() {
@@ -325,10 +355,11 @@ void SyncService::syncNow() {
     }
     m_soon.stop();
     QString keyringError;
-    const QString refreshToken = m_tokens ? m_tokens->read(&keyringError) : QString();
+    const QString refreshToken = m_tokens ? m_tokens->read(m_provider, &keyringError) : QString();
     if (refreshToken.isEmpty()) {
-        setError(keyringError.isEmpty() ? tr("The Dropbox sign-in is missing from the keyring. Connect again.")
-                                         : tr("The keyring couldn't be read: %1").arg(keyringError));
+        setError(keyringError.isEmpty()
+                     ? tr("The %1 sign-in is missing from the keyring. Connect again.").arg(providerName())
+                     : tr("The keyring couldn't be read: %1").arg(keyringError));
         return;
     }
     m_busy = true;
@@ -338,22 +369,22 @@ void SyncService::syncNow() {
     const QString accessToken = m_accessToken;
     const qint64 expiry = m_accessExpiry;
     const bool needAccount = m_account.isEmpty();
-    std::shared_ptr<SyncRemote> remote = makeRemote(refreshToken);
+    std::shared_ptr<SyncRemote> remote = makeRemote(m_provider, refreshToken);
     auto work = [in, remote, accessToken, expiry, needAccount]() mutable {
         Result result;
-        auto *dropbox = dynamic_cast<DropboxRemote *>(remote.get());
-        if (dropbox && !accessToken.isEmpty())
-            dropbox->setAccessToken(accessToken, expiry);
+        auto *signedIn = dynamic_cast<OAuthRemote *>(remote.get());
+        if (signedIn && !accessToken.isEmpty())
+            signedIn->setAccessToken(accessToken, expiry);
         result.output = SyncEngine::run(in, *remote);
-        if (dropbox) {
+        if (signedIn) {
             if (needAccount && result.output.ok) {
                 QString name, email;
-                if (dropbox->account(&name, &email))
+                if (signedIn->account(&name, &email))
                     result.accountName = email.isEmpty() ? name : QStringLiteral("%1 (%2)").arg(name, email);
             }
-            result.accessToken = dropbox->accessToken();
-            result.expiresAt = dropbox->accessTokenExpiry();
-            result.revoked = dropbox->tokenRevoked();
+            result.accessToken = signedIn->accessToken();
+            result.expiresAt = signedIn->accessTokenExpiry();
+            result.revoked = signedIn->tokenRevoked();
         }
         // The network access belongs to this thread; let it go here.
         remote.reset();
@@ -369,14 +400,14 @@ void SyncService::syncNow() {
 void SyncService::finish(const Result &result) {
     m_busy = false;
     if (result.revoked) {
-        // Dropbox no longer knows this sign-in; nothing more can sync until
-        // the user connects again.
+        // The provider no longer knows this sign-in; nothing more can sync
+        // until the user connects again.
         if (m_tokens)
-            m_tokens->clear();
+            m_tokens->clear(m_provider);
         m_connected = false;
         m_periodic.stop();
         m_accessToken.clear();
-        setError(tr("Dropbox disconnected omareader. Connect again to keep syncing."));
+        setError(tr("%1 disconnected omareader. Connect again to keep syncing.").arg(providerName()));
         save();
         emit synced(false);
         return;
@@ -412,7 +443,7 @@ void SyncService::apply(const Result &result) {
         m_uploads.removeIf([&id](const PendingUpload &u) { return u.id == id; });
 
     if (m_library) {
-        // The library as it is now, which may have moved on while Dropbox
+        // The library as it is now, which may have moved on while the sync
         // was busy; a change made meanwhile is newer and stays.
         QHash<QString, QList<LibraryEntry>> byId;
         for (const LibraryEntry &e : m_library->entries())
@@ -485,18 +516,22 @@ void SyncService::setError(const QString &error) {
 
 // Connecting.
 
-bool SyncService::connectDropbox() {
-    if (!available())
+bool SyncService::connectProvider(const QString &provider) {
+    if (provider == Dropbox ? !dropboxAvailable() : provider == Drive ? !driveAvailable() : true)
         return false;
     cancelConnect();
-    m_auth = new DropboxAuth(dropboxAppKey(), this);
-    connect(m_auth, &DropboxAuth::connected, this,
-            [this](const QString &refresh, const QString &access, int expiresIn) {
+    if (provider == Drive)
+        m_auth = new DriveAuth(googleClientId(), googleClientSecret(), this);
+    else
+        m_auth = new DropboxAuth(dropboxAppKey(), this);
+    m_connectingTo = provider;
+    connect(m_auth, &LoopbackAuth::connected, this,
+            [this, provider](const QString &refresh, const QString &access, int expiresIn) {
                 m_auth->deleteLater();
                 m_auth = nullptr;
-                connectWith(refresh, access, expiresIn);
+                connectWith(provider, refresh, access, expiresIn);
             });
-    connect(m_auth, &DropboxAuth::failed, this, [this](const QString &error) {
+    connect(m_auth, &LoopbackAuth::failed, this, [this](const QString &error) {
         m_auth->deleteLater();
         m_auth = nullptr;
         m_error = error;
@@ -506,7 +541,9 @@ bool SyncService::connectDropbox() {
     if (m_authorizeUrl.isEmpty()) {
         delete m_auth;
         m_auth = nullptr;
-        setError(tr("omareader couldn't listen for Dropbox's answer: ports 53682 to 53684 are all in use."));
+        setError(provider == Dropbox
+                     ? tr("omareader couldn't listen for Dropbox's answer: ports 53682 to 53684 are all in use.")
+                     : tr("omareader couldn't listen for %1's answer.").arg(nameOf(provider)));
         return false;
     }
     m_error.clear();
@@ -525,13 +562,20 @@ void SyncService::cancelConnect() {
     emit stateChanged();
 }
 
-bool SyncService::connectWith(const QString &refreshToken, const QString &accessToken, int expiresIn) {
+bool SyncService::connectWith(const QString &provider, const QString &refreshToken, const QString &accessToken,
+                              int expiresIn) {
+    if (provider != Dropbox && provider != Drive)
+        return false;
+    // One provider at a time: connecting another one ends the first.
+    if (m_connected && m_provider != provider)
+        disconnectSync();
     QString error;
-    if (!m_tokens || !m_tokens->write(refreshToken, &error)) {
-        setError(tr("The keyring couldn't keep the Dropbox sign-in: %1").arg(error));
+    if (!m_tokens || !m_tokens->write(provider, refreshToken, &error)) {
+        setError(tr("The keyring couldn't keep the %1 sign-in: %2").arg(nameOf(provider), error));
         return false;
     }
     m_connected = true;
+    m_provider = provider;
     m_accessToken = accessToken;
     m_accessExpiry = accessToken.isEmpty() ? 0 : QDateTime::currentMSecsSinceEpoch() + (qint64(expiresIn) - 60) * 1000;
     m_account.clear();
@@ -547,27 +591,28 @@ bool SyncService::connectWith(const QString &refreshToken, const QString &access
     return true;
 }
 
-void SyncService::disconnectDropbox() {
+void SyncService::disconnectSync() {
     cancelConnect();
     if (!m_connected)
         return;
-    const QString refreshToken = m_tokens ? m_tokens->read() : QString();
+    const QString provider = m_provider;
+    const QString refreshToken = m_tokens ? m_tokens->read(provider) : QString();
     if (!refreshToken.isEmpty() && !m_factory) {
-        // Ending the sign-in on Dropbox's side is a courtesy; forgetting it
-        // here is what matters, so it doesn't wait for an answer.
-        const QString key = dropboxAppKey();
+        // Ending the sign-in on the provider's side is a courtesy; forgetting
+        // it here is what matters, so it doesn't wait for an answer.
         const QString access = m_accessToken;
         const qint64 expiry = m_accessExpiry;
-        (void)QtConcurrent::run([key, refreshToken, access, expiry] {
-            DropboxRemote remote(key, refreshToken);
+        (void)QtConcurrent::run([provider, refreshToken, access, expiry] {
+            const std::unique_ptr<OAuthRemote> remote = providerRemote(provider, refreshToken);
             if (!access.isEmpty())
-                remote.setAccessToken(access, expiry);
-            remote.revoke();
+                remote->setAccessToken(access, expiry);
+            remote->revoke();
         });
     }
     if (m_tokens)
-        m_tokens->clear();
+        m_tokens->clear(provider);
     m_connected = false;
+    m_provider.clear();
     m_periodic.stop();
     m_soon.stop();
     m_accessToken.clear();

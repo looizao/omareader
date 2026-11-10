@@ -26,6 +26,16 @@ val dropboxAppKey = (providers.gradleProperty("dropboxAppKey").orNull
     .orEmpty().trim()
 require(dropboxAppKey.matches(Regex("[A-Za-z0-9]*"))) { "DROPBOX_APP_KEY holds an unexpected value" }
 
+// GOOGLE_CLIENT_ID beside it holds the desktop's OAuth client for Google
+// Drive. The phone doesn't send it (Play services knows the app by its
+// package and signing key), but an empty file means the project isn't set
+// up, so the build leaves Drive out. A googleClientId Gradle property
+// overrides it, for trying the sync screen before the project exists.
+val googleClientId = (providers.gradleProperty("googleClientId").orNull
+    ?: rootProject.file("../GOOGLE_CLIENT_ID").takeIf { it.exists() }?.readText())
+    .orEmpty().trim()
+require(googleClientId.matches(Regex("[A-Za-z0-9._-]*"))) { "GOOGLE_CLIENT_ID holds an unexpected value" }
+
 // A release is signed with the key named in keystore.properties when there is
 // one (kept out of git), otherwise with the debug key, which is enough to
 // install it on your own phone.
@@ -44,6 +54,7 @@ android {
         versionName = appVersion
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "DROPBOX_APP_KEY", "\"$dropboxAppKey\"")
+        buildConfigField("boolean", "GOOGLE_DRIVE_ENABLED", googleClientId.isNotEmpty().toString())
     }
 
     buildFeatures {
@@ -85,6 +96,10 @@ android {
     lint {
         abortOnError = true
         warningsAsErrors = false
+        // Play services brings core-ktx along, and lint then suggests its
+        // extensions everywhere. The app doesn't lean on libraries it only
+        // gets by accident, so the platform calls stay.
+        disable += "UseKtx"
     }
 }
 
@@ -94,6 +109,12 @@ dependencies {
     // Compose, no Fragments; the screens are plain platform views.
     implementation("androidx.media3:media3-exoplayer:1.11.1")
     implementation("androidx.media3:media3-session:1.11.1")
+    // Google Drive sync signs in through Play services. Google refuses the
+    // loopback and custom-scheme redirects for Android OAuth clients, so the
+    // phone can't run the browser flow Dropbox uses; Play services' consent
+    // sheet is the only way in. It brings androidx.activity along, which
+    // the sync screen uses to get the sheet's answer back.
+    implementation("com.google.android.gms:play-services-auth:22.0.0")
 
     testImplementation("junit:junit:4.13.2")
     // Android's org.json is a stub in local unit tests; this is the real one.

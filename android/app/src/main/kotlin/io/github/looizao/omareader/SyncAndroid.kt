@@ -14,23 +14,25 @@ import android.os.Looper
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.text.Html
+import com.google.android.gms.common.api.ApiException
 import java.io.File
 import java.io.IOException
 import java.security.KeyStore
 import java.util.concurrent.CopyOnWriteArraySet
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-// Dropbox sync on the phone: the account, the job that syncs, and the
-// library as the sync engine sees it. The rules themselves are in Sync.kt
-// and SyncEngine.kt, which run without Android.
+// Sync on the phone, through Dropbox or Google Drive: the account, the job
+// that syncs, and the library as the sync engine sees it. The rules
+// themselves are in Sync.kt and SyncEngine.kt, which run without Android.
 
-// The refresh token, the only credential kept, encrypted with an AES key that
-// never leaves the Android Keystore. Backups exclude the app's data anyway.
+// Dropbox's refresh token, the only credential kept (Drive's grant stays
+// with Play services), encrypted with an AES key that never leaves the
+// Android Keystore. Backups exclude the app's data anyway.
 object TokenStore {
     private const val ALIAS = "omareader-dropbox"
     private const val KEY = "token"
@@ -97,27 +99,52 @@ object PlayerState {
     fun isPlaying(id: String) = playing && bookId == id
 }
 
-// The connection to Dropbox and how the last sync went.
+// The connection to Dropbox or Google Drive, one at a time, and how the last
+// sync went.
 object SyncAccount {
-    enum class Problem { Network, Revoked, Server, Storage }
+    enum class Provider { Dropbox, Drive }
+    enum class Problem { Network, Revoked, Server, Storage, NoPlayServices }
 
+    private const val PROVIDER = "provider"
     private const val ACCOUNT = "account"
+    private const val DRIVE_EMAIL = "driveEmail"
     private const val LAST_SYNC = "lastSync"
     private const val PROBLEM = "problem"
+    private const val PROBLEM_PROVIDER = "problemProvider"
     private const val MOBILE_DATA = "mobileData"
+    private const val TOKEN = "token"
     private const val CONNECT_TIMEOUT_MS = 5 * 60 * 1000
 
     private var tokens: RefreshingTokens? = null
-    private val connecting = AtomicBoolean(false)
+    private val connecting = AtomicReference<Provider?>(null)
 
-    val available get() = BuildConfig.DROPBOX_APP_KEY.isNotEmpty()
+    val dropboxAvailable get() = BuildConfig.DROPBOX_APP_KEY.isNotEmpty()
+    val driveAvailable get() = BuildConfig.GOOGLE_DRIVE_ENABLED
+    val available get() = dropboxAvailable || driveAvailable
 
-    fun connected(context: Context) = available && TokenStore.prefs(context).contains("token")
-    fun isConnecting() = connecting.get()
+    // The provider this phone syncs through. A phone connected before Drive
+    // existed has a Dropbox token and no provider saved.
+    fun provider(context: Context): Provider? {
+        val prefs = TokenStore.prefs(context)
+        return when (prefs.getString(PROVIDER, Provider.Dropbox.name)) {
+            Provider.Drive.name -> Provider.Drive.takeIf { driveAvailable }
+            Provider.Dropbox.name -> Provider.Dropbox.takeIf { dropboxAvailable && prefs.contains(TOKEN) }
+            else -> null
+        }
+    }
+
+    fun connected(context: Context) = provider(context) != null
+    fun isConnecting() = connecting.get() != null
+    fun connectingTo(): Provider? = connecting.get()
     fun account(context: Context) = TokenStore.prefs(context).getString(ACCOUNT, "").orEmpty()
     fun lastSync(context: Context) = TokenStore.prefs(context).getLong(LAST_SYNC, 0)
     fun problem(context: Context) =
         TokenStore.prefs(context).getString(PROBLEM, null)?.let { runCatching { Problem.valueOf(it) }.getOrNull() }
+
+    // Which provider the problem was with, which may no longer be connected.
+    fun problemProvider(context: Context) =
+        TokenStore.prefs(context).getString(PROBLEM_PROVIDER, null)?.let { runCatching { Provider.valueOf(it) }.getOrNull() }
+            ?: provider(context) ?: Provider.Dropbox
 
     fun mobileData(context: Context) = TokenStore.prefs(context).getBoolean(MOBILE_DATA, false)
 
@@ -126,9 +153,17 @@ object SyncAccount {
         SyncScheduler.soon(context, 0)
     }
 
+    // What a sync talks to. Drive asks Play services for a fresh token at
+    // each sync, so its remote is made anew every time.
+    fun remote(context: Context): Remote? = when (provider(context)) {
+        Provider.Dropbox -> dropboxRemote(context)
+        Provider.Drive -> DriveRemote(PlayTokens(context, TokenStore.prefs(context).getString(DRIVE_EMAIL, null)))
+        null -> null
+    }
+
     @Synchronized
-    fun remote(context: Context): DropboxRemote? {
-        if (!available) return null
+    private fun dropboxRemote(context: Context): DropboxRemote? {
+        if (!dropboxAvailable) return null
         val existing = tokens
         if (existing != null) return DropboxRemote(existing)
         val refresh = TokenStore.load(context) ?: return null
@@ -138,14 +173,14 @@ object SyncAccount {
     // Opens Dropbox's consent page in the browser and waits on the loopback
     // for it to come back. The page the browser lands on says how it went
     // and offers a way back to the app.
-    fun connect(context: Context): Boolean {
-        if (!available || !connecting.compareAndSet(false, true)) return false
+    fun connectDropbox(context: Context): Boolean {
+        if (!dropboxAvailable || !connecting.compareAndSet(null, Provider.Dropbox)) return false
         val app = context.applicationContext
         val receiver = try {
             LoopbackReceiver.open()
         } catch (e: IOException) {
-            connecting.set(false)
-            setProblem(app, Problem.Network)
+            connecting.set(null)
+            setProblem(app, Problem.Network, Provider.Dropbox)
             return false
         }
         val verifier = DropboxOAuth.verifier()
@@ -160,7 +195,7 @@ object SyncAccount {
                     page(app, connected)
                 }
             } finally {
-                connecting.set(false)
+                connecting.set(null)
                 SyncEvents.post(SyncEvents.Change.Status)
             }
         }, "omareader-connect").start()
@@ -177,12 +212,15 @@ object SyncAccount {
         val refresh = result.refresh ?: throw IOException("Dropbox sent no refresh token")
         TokenStore.save(app, refresh)
         synchronized(this) { tokens = RefreshingTokens(key, refresh) }
-        val name = runCatching { remote(app)?.account() }.getOrNull().orEmpty()
-        TokenStore.prefs(app).edit().putString(ACCOUNT, name).remove(PROBLEM).apply()
+        val name = runCatching { dropboxRemote(app)?.account() }.getOrNull().orEmpty()
+        TokenStore.prefs(app).edit()
+            .putString(PROVIDER, Provider.Dropbox.name).putString(ACCOUNT, name)
+            .remove(PROBLEM).remove(PROBLEM_PROVIDER)
+            .apply()
         SyncScheduler.start(app)
         true
     } catch (e: Exception) {
-        setProblem(app, Problem.Network)
+        setProblem(app, Problem.Network, Provider.Dropbox)
         false
     }
 
@@ -198,28 +236,98 @@ object SyncAccount {
             <body><h1>$title</h1><a href="$back">${text(R.string.sync_page_back)}</a></body></html>"""
     }
 
-    // Forgets the token here and ends it on Dropbox's side. The files in the
-    // app folder stay.
+    // Asks Play services for Drive. A user who agreed before is connected at
+    // once; otherwise Play services hands back its consent sheet, which the
+    // sync screen shows and passes the answer of to driveAnswered.
+    fun connectDrive(context: Context, showSheet: (android.app.PendingIntent) -> Unit) {
+        if (!driveAvailable || !connecting.compareAndSet(null, Provider.Drive)) return
+        val app = context.applicationContext
+        if (!DriveAuth.playServices(app)) {
+            connecting.set(null)
+            setProblem(app, Problem.NoPlayServices, Provider.Drive)
+            SyncEvents.post(SyncEvents.Change.Status)
+            return
+        }
+        DriveAuth.client(context).authorize(DriveAuth.request(null))
+            .addOnSuccessListener { result ->
+                val sheet = result.pendingIntent
+                if (result.hasResolution() && sheet != null) showSheet(sheet) else finishDrive(app, result.accessToken)
+            }
+            .addOnFailureListener { failDrive(app) }
+        SyncEvents.post(SyncEvents.Change.Status)
+    }
+
+    // The consent sheet's answer. Closing it without agreeing is no problem
+    // to report; the user just isn't connected.
+    fun driveAnswered(context: Context, agreed: Boolean, data: Intent?) {
+        val app = context.applicationContext
+        if (!agreed) {
+            connecting.set(null)
+            SyncEvents.post(SyncEvents.Change.Status)
+            return
+        }
+        val token = try {
+            DriveAuth.client(context).getAuthorizationResultFromIntent(data).accessToken
+        } catch (e: ApiException) {
+            null
+        }
+        finishDrive(app, token)
+    }
+
+    private fun finishDrive(app: Context, token: String?) {
+        if (token == null) return failDrive(app)
+        Thread({
+            try {
+                val user = DriveRemote(PlayTokens(app, null, token)).account()
+                TokenStore.prefs(app).edit()
+                    .putString(PROVIDER, Provider.Drive.name).putString(ACCOUNT, user.label).putString(DRIVE_EMAIL, user.email)
+                    .remove(PROBLEM).remove(PROBLEM_PROVIDER)
+                    .apply()
+                SyncScheduler.start(app)
+            } catch (e: Exception) {
+                setProblem(app, Problem.Network, Provider.Drive)
+            } finally {
+                connecting.set(null)
+                SyncEvents.post(SyncEvents.Change.Status)
+            }
+        }, "omareader-connect").start()
+    }
+
+    private fun failDrive(app: Context) {
+        setProblem(app, Problem.Network, Provider.Drive)
+        connecting.set(null)
+        SyncEvents.post(SyncEvents.Change.Status)
+    }
+
+    // Forgets the connection here and ends it on the provider's side. The
+    // files there stay.
     fun disconnect(context: Context) {
         val app = context.applicationContext
-        val remote = remote(app)
+        val prefs = TokenStore.prefs(app)
+        val provider = provider(app)
+        val dropbox = dropboxRemote(app)
+        val email = prefs.getString(DRIVE_EMAIL, null)
         synchronized(this) { tokens = null }
         TokenStore.clear(app)
-        TokenStore.prefs(app).edit()
-            .remove(ACCOUNT).remove(LAST_SYNC).remove(PROBLEM)
+        prefs.edit()
+            .remove(PROVIDER).remove(ACCOUNT).remove(DRIVE_EMAIL).remove(LAST_SYNC).remove(PROBLEM).remove(PROBLEM_PROVIDER)
             .apply()
-        PhoneSyncStore.forgetDropbox(app)
+        PhoneSyncStore.forgetRemote(app)
         SyncScheduler.stop(app)
         SyncEvents.post(SyncEvents.Change.Status)
-        if (remote != null) Thread({ runCatching { remote.revoke() } }, "omareader-revoke").start()
+        if (dropbox != null) Thread({ runCatching { dropbox.revoke() } }, "omareader-revoke").start()
+        if (provider == Provider.Drive && !email.isNullOrEmpty()) DriveAuth.revoke(app, email)
     }
 
     fun synced(context: Context) {
-        TokenStore.prefs(context).edit().putLong(LAST_SYNC, System.currentTimeMillis()).remove(PROBLEM).apply()
+        TokenStore.prefs(context).edit().putLong(LAST_SYNC, System.currentTimeMillis())
+            .remove(PROBLEM).remove(PROBLEM_PROVIDER).apply()
     }
 
-    fun setProblem(context: Context, problem: Problem) {
-        TokenStore.prefs(context).edit().putString(PROBLEM, problem.name).apply()
+    fun setProblem(context: Context, problem: Problem, provider: Provider? = provider(context)) {
+        val editor = TokenStore.prefs(context).edit().putString(PROBLEM, problem.name)
+        if (provider != null) editor.putString(PROBLEM_PROVIDER, provider.name) else editor.remove(PROBLEM_PROVIDER)
+        editor.apply()
     }
 }
 
@@ -339,9 +447,9 @@ class PhoneSyncStore(private val context: Context, private val library: Library 
         private const val CACHE = "cache:"
         private const val BUNDLE = "bundleRev:"
 
-        // Another Dropbox account may be connected next; nothing read from
-        // this one should be taken for its files.
-        fun forgetDropbox(context: Context) {
+        // Another account, or another provider, may be connected next;
+        // nothing read from this one should be taken for its files.
+        fun forgetRemote(context: Context) {
             val prefs = TokenStore.prefs(context)
             val editor = prefs.edit()
             prefs.all.keys.filter { it.startsWith(CACHE) || it.startsWith(BUNDLE) }.forEach { editor.remove(it) }
@@ -370,9 +478,11 @@ object SyncRunner {
             if (report.changedLibrary || removed) SyncEvents.post(SyncEvents.Change.Library)
             return false
         } catch (e: RevokedException) {
-            // Dropbox no longer knows this phone; it has to connect again.
+            // The provider no longer knows this phone; it has to connect
+            // again.
+            val provider = SyncAccount.provider(app)
             SyncAccount.disconnect(app)
-            SyncAccount.setProblem(app, SyncAccount.Problem.Revoked)
+            SyncAccount.setProblem(app, SyncAccount.Problem.Revoked, provider)
             return false
         } catch (e: InterruptedException) {
             return true

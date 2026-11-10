@@ -3,7 +3,9 @@ package io.github.looizao.omareader
 import java.io.File
 import java.io.IOException
 
-// A file in the app folder, as Dropbox lists it.
+// A file in the app folder, as Dropbox lists it. Drive's client gives the
+// same: the Dropbox-style path, its last part as the name, and the hash of
+// the provider's own kind.
 data class RemoteFile(val path: String, val name: String, val rev: String, val size: Long, val contentHash: String?)
 
 sealed class WriteMode {
@@ -41,6 +43,11 @@ interface Remote {
 
     // Deletes a file; one that is already gone is not an error.
     fun delete(path: String)
+
+    // The hash a download is checked against, of the kind the provider
+    // lists in RemoteFile.contentHash: Dropbox's block hash unless the
+    // provider says otherwise.
+    fun contentHash(file: File): String = ContentHash.of(file)
 }
 
 // What a sync reads from and changes on this device.
@@ -219,7 +226,7 @@ class SyncEngine(private val remote: Remote, private val store: SyncStore) {
     }
 
     // Downloads into a partial file that survives an interrupted job, checks
-    // it against Dropbox's hash, and imports it.
+    // it against the provider's hash, and imports it.
     private fun download(id: String, bundle: RemoteFile, cancelled: () -> Boolean) {
         val partial = store.partialFile(id, bundle.rev)
         partial.parentFile?.mkdirs()
@@ -229,9 +236,9 @@ class SyncEngine(private val remote: Remote, private val store: SyncStore) {
         if (partial.length() < bundle.size) remote.download(bundle.path, partial, partial.length(), cancelled)
         if (cancelled()) throw InterruptedException()
         val expected = bundle.contentHash
-        if (partial.length() != bundle.size || (expected != null && ContentHash.of(partial) != expected)) {
+        if (partial.length() != bundle.size || (expected != null && remote.contentHash(partial) != expected)) {
             partial.delete()
-            throw IOException("The download of $id did not match Dropbox's copy")
+            throw IOException("The download of $id did not match the synced copy")
         }
         try {
             store.importBundle(id, partial, bundle.rev)

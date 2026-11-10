@@ -67,8 +67,9 @@ If Play asks for app content before it will roll out, the answers are:
 - Ads: none
 - Data safety: review this before the next release. Until Dropbox sync the
   answer was "no data collected or shared". Sync now sends, at the user's
-  request and to the user's own Dropbox: books, reading positions and two
-  settings, all over HTTPS. Check Play's current definitions of "collected"
+  request and to the user's own Dropbox or Google Drive: books, reading
+  positions and two settings, all over HTTPS. With Drive, the phone also
+  keeps the Google account's email address locally. Check Play's current definitions of "collected"
   and "shared" against that, and keep the answer in step with
   [privacy.md](privacy.md)
 - App access: everything works without an account

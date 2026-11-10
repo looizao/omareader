@@ -18,6 +18,7 @@
 #include "audioplayer.h"
 #include "book.h"
 #include "bookloader.h"
+#include "drive.h"
 #include "dropbox.h"
 #include "exporter.h"
 #include "filepicker.h"
@@ -686,7 +687,8 @@ private slots:
         const QJsonObject catalog = QJsonDocument::fromJson(file.readAll()).object();
         static const QRegularExpression call("\\b(?:qsTr|tr)\\(\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
         int found = 0;
-        for (const QString name : {"src/SettingsPanel.qml", "src/ExportDialog.qml", "src/sync.cpp", "src/dropbox.cpp"}) {
+        for (const QString name :
+             {"src/SettingsPanel.qml", "src/ExportDialog.qml", "src/sync.cpp", "src/oauth.cpp", "src/drive.cpp"}) {
             QFile source(QString(OMAREADER_SOURCE) + "/" + name);
             QVERIFY(source.open(QIODevice::ReadOnly));
             const QString text = QString::fromUtf8(source.readAll());
@@ -2056,7 +2058,7 @@ private slots:
         sync.setSynchronous(true);
         Reader reader(&library, nullptr, nullptr);
         sync.setReader(&reader);
-        QVERIFY(sync.connectWith("refresh"));
+        QVERIFY(sync.connectWith(SyncService::Dropbox, "refresh"));
         QVERIFY2(sync.error().isEmpty(), qPrintable(sync.error()));
         QVERIFY(remote->files.contains("/state/" + id + ".json"));
         QVERIFY(remote->files.contains("/settings.json"));
@@ -2101,9 +2103,9 @@ private slots:
         sync.syncNow();
         QVERIFY(stateOf(remote->files.value("/state/" + id + ".json").data).isRemoved());
 
-        sync.disconnectDropbox();
+        sync.disconnectSync();
         QVERIFY(!sync.connected());
-        QVERIFY(tokens.read().isEmpty());
+        QVERIFY(tokens.read(SyncService::Dropbox).isEmpty());
     }
 
     void dropboxClientSpeaksDropbox() {
@@ -2219,6 +2221,239 @@ private slots:
         QCOMPARE(sent.queryItemValue("client_id"), QString("key"));
         QCOMPARE(sent.queryItemValue("code_verifier").size(), 64);
         QVERIFY(!auth.running()); // it stopped listening
+    }
+
+    void driveClientKeepsToOmareadersFolder() {
+        FakeDrive drive;
+        FakeHttpServer server([&](const FakeHttpServer::Request &r) { return drive.handle(r); });
+        drive.base = server.url();
+        DriveHosts hosts;
+        hosts.api = hosts.oauth = server.url();
+        DriveRemote remote("id", "secret", "refresh", hosts);
+        QList<int> sleeps;
+        remote.setSleep([&](int ms) { sleeps.append(ms); });
+        remote.setAccessToken("stale", QDateTime::currentMSecsSinceEpoch() + 100000);
+
+        // A stale token is renewed once, and a busy Drive is waited out.
+        drive.busy = 1;
+        QList<RemoteFile> files;
+        QCOMPARE(remote.list(&files), SyncRemote::Ok);
+        QCOMPARE(drive.tokenRequests, 1);
+        QVERIFY(QUrlQuery(QString::fromUtf8(drive.lastTokenRequest)).queryItemValue("client_secret") == "secret");
+        QCOMPARE(sleeps.size(), 1);
+        QVERIFY(sleeps.first() >= 1000 && sleeps.first() < 2000);
+        QVERIFY(files.isEmpty());
+
+        // The first write makes the folder, and the file carries its path.
+        QString rev;
+        QCOMPARE(remote.upload("/state/a.json", "one", {}, &rev), SyncRemote::Ok);
+        QCOMPARE(drive.withPath("/state/a.json").size(), 1);
+        const FakeDrive::File *made = drive.withPath("/state/a.json").first();
+        const FakeDrive::File *folder = drive.file(made->parent);
+        QVERIFY(folder);
+        QCOMPARE(folder->name, QString("omareader"));
+        QCOMPARE(folder->mimeType, QString(DriveRemote::FolderMime));
+        QCOMPARE(made->name, QString("a.json"));
+        QCOMPARE(rev, QString("rev1"));
+        // The fake's files move as it grows; keep the id, not the pointer.
+        const QString folderId = folder->id;
+
+        // Adding what exists, or updating from a revision that moved on, is a
+        // conflict, as with Dropbox.
+        QCOMPARE(remote.upload("/state/a.json", "again", {}, nullptr), SyncRemote::Conflict);
+        QString newer;
+        QCOMPARE(remote.upload("/state/a.json", "two", rev, &newer), SyncRemote::Ok);
+        QCOMPARE(newer, QString("rev2"));
+        QCOMPARE(remote.upload("/state/a.json", "three", rev, nullptr), SyncRemote::Conflict);
+        drive.withPath("/state/a.json").first()->revision = 5; // another device wrote
+        QCOMPARE(remote.upload("/state/a.json", "three", newer, nullptr), SyncRemote::Conflict);
+        QByteArray data;
+        QCOMPARE(remote.download("/state/a.json", &data, &rev), SyncRemote::Ok);
+        QCOMPARE(data, QByteArray("two"));
+        QCOMPARE(rev, QString("rev5"));
+
+        // Two copies of one path: records keep the first made, bundles the
+        // last written, and the rest go to the trash.
+        drive.add("/state/dup.json", "first", folderId);
+        drive.add("/state/dup.json", "second", folderId);
+        drive.add("/books/b.omabook", "old", folderId);
+        drive.add("/books/b.omabook", "new", folderId);
+        drive.add("/settings.json", "{}", folderId);
+        QCOMPARE(remote.list(&files), SyncRemote::Ok); // over three pages
+        QCOMPARE(files.size(), 4);
+        QHash<QString, RemoteFile> byPath;
+        for (const RemoteFile &f : std::as_const(files))
+            byPath.insert(f.path, f);
+        QCOMPARE(QSet<QString>(byPath.keyBegin(), byPath.keyEnd()),
+                 (QSet<QString>{"/state/a.json", "/state/dup.json", "/books/b.omabook", "/settings.json"}));
+        QCOMPARE(remote.download("/state/dup.json", &data, nullptr), SyncRemote::Ok);
+        QCOMPARE(data, QByteArray("first"));
+        QCOMPARE(remote.download("/books/b.omabook", &data, nullptr), SyncRemote::Ok);
+        QCOMPARE(data, QByteArray("new"));
+        QCOMPARE(byPath.value("/books/b.omabook").contentHash,
+                 QString::fromLatin1(QCryptographicHash::hash("new", QCryptographicHash::Sha256).toHex()));
+        QVERIFY(drive.withPath("/state/dup.json").at(1)->trashed);
+        QVERIFY(drive.withPath("/books/b.omabook").at(0)->trashed);
+
+        // A second folder made later by another device: everyone keeps
+        // writing to the first.
+        DriveRemote other("id", "secret", "refresh", hosts);
+        other.setSleep([](int) {});
+        drive.files.prepend(FakeDrive::File{"z-late", "omareader", DriveRemote::FolderMime, {},
+                                            {{"omareader", "folder"}}, {}, "2027-01-01T00:00:00.000Z",
+                                            "2027-01-01T00:00:00.000Z", 1, false});
+        QCOMPARE(other.upload("/state/c.json", "c", {}, nullptr), SyncRemote::Ok);
+        QCOMPARE(drive.withPath("/state/c.json").first()->parent, folderId);
+
+        // Deleting moves to the trash, and a second time there is nothing.
+        QCOMPARE(remote.remove("/state/a.json"), SyncRemote::Ok);
+        QVERIFY(drive.withPath("/state/a.json").first()->trashed);
+        QCOMPARE(remote.remove("/state/a.json"), SyncRemote::NotFound);
+        QCOMPARE(remote.upload("/state/a.json", "back", "rev5", nullptr), SyncRemote::Conflict);
+
+        QString name, email;
+        QVERIFY(remote.account(&name, &email));
+        QCOMPARE(email, QString("ana@example.com"));
+        QVERIFY(remote.revoke());
+    }
+
+    void driveUploadsBundlesInPieces() {
+        FakeDrive drive;
+        FakeHttpServer server([&](const FakeHttpServer::Request &r) { return drive.handle(r); });
+        drive.base = server.url();
+        DriveHosts hosts;
+        hosts.api = hosts.oauth = server.url();
+        DriveRemote remote("id", "secret", "refresh", hosts);
+        remote.setSleep([](int) {});
+        const QString bundle = syncFixture("fixture.omabook");
+        QFile file(bundle);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QByteArray bytes = file.readAll();
+        const qint64 piece = 4096;
+        QVERIFY(bytes.size() > 3 * piece);
+        remote.setChunkSize(piece);
+
+        // A piece lost on the way is sent again from where Drive says it
+        // stopped.
+        drive.losePiece = true;
+        QString rev;
+        QCOMPARE(remote.uploadFile("/books/7218324797ea94e3.omabook", bundle, &rev), SyncRemote::Ok);
+        QCOMPARE(drive.withPath("/books/7218324797ea94e3.omabook").size(), 1);
+        FakeDrive::File *up = drive.withPath("/books/7218324797ea94e3.omabook").first();
+        QCOMPARE(up->data, bytes);
+        QCOMPARE(up->name, SyncFormat::bundleManifest(bundle).value("title").toString() + ".omabook");
+        QVERIFY(!drive.losePiece);
+        QCOMPARE(rev, QString("rev1"));
+
+        // Exported again: the same file gets new content, even when the
+        // upload session has expired on the way.
+        drive.expireSession = true;
+        QCOMPARE(remote.uploadFile("/books/7218324797ea94e3.omabook", bundle, &rev), SyncRemote::Ok);
+        QCOMPARE(drive.withPath("/books/7218324797ea94e3.omabook").size(), 1);
+        QCOMPARE(rev, QString("rev2"));
+        QCOMPARE(drive.withPath("/books/7218324797ea94e3.omabook").first()->data, bytes);
+    }
+
+    void driveSyncsLikeDropbox() {
+        // The engine runs over Drive as it does over Dropbox: one device's
+        // place reaches another.
+        FakeDrive drive;
+        FakeHttpServer server([&](const FakeHttpServer::Request &r) { return drive.handle(r); });
+        drive.base = server.url();
+        DriveHosts hosts;
+        hosts.api = hosts.oauth = server.url();
+        auto device = [&] {
+            auto remote = std::make_unique<DriveRemote>("id", "secret", "refresh", hosts);
+            remote->setSleep([](int) {});
+            return remote;
+        };
+        SyncInput desk = syncInput("aaaaaaaaaaaaaaaa");
+        BookState book = bookState("abc", true, 10, "aaaaaaaaaaaaaaaa");
+        book.position = Register{SyncPosition{2, 3, 0, 0.5}.toJson(), 20, "aaaaaaaaaaaaaaaa"};
+        desk.local.insert("abc", book);
+        SyncOutput out = SyncEngine::run(desk, *device());
+        QVERIFY2(out.ok, qPrintable(out.error));
+
+        SyncInput phone = syncInput("bbbbbbbbbbbbbbbb");
+        out = SyncEngine::run(phone, *device());
+        QVERIFY2(out.ok, qPrintable(out.error));
+        QCOMPARE(out.merged.value("abc").syncPosition().chapter, 2);
+
+        // The phone moves on; the desk hears of it.
+        BookState later = out.merged.value("abc");
+        later.position = Register{SyncPosition{4, 0, 0, 0.8}.toJson(), 30, "bbbbbbbbbbbbbbbb"};
+        phone.local.insert("abc", later);
+        phone.cache = out.cache;
+        out = SyncEngine::run(phone, *device());
+        QVERIFY2(out.ok, qPrintable(out.error));
+        out = SyncEngine::run(desk, *device());
+        QCOMPARE(out.merged.value("abc").syncPosition().chapter, 4);
+        QCOMPARE(drive.withPath("/state/abc.json").size(), 1);
+    }
+
+    void driveSignInUsesGooglesLoopback() {
+        FakeDrive drive;
+        FakeHttpServer server([&](const FakeHttpServer::Request &r) { return drive.handle(r); });
+        DriveHosts hosts;
+        hosts.oauth = server.url();
+        DriveAuth auth("client", "secret", nullptr, hosts);
+        const QUrl url(auth.start());
+        QVERIFY(!url.isEmpty());
+        const QUrlQuery query(url);
+        QCOMPARE(query.queryItemValue("redirect_uri", QUrl::FullyDecoded),
+                 QString("http://127.0.0.1:%1/drive").arg(auth.port()));
+        QCOMPARE(query.queryItemValue("scope", QUrl::FullyDecoded),
+                 QString("https://www.googleapis.com/auth/drive.file"));
+        QCOMPARE(query.queryItemValue("access_type"), QString("offline"));
+        QCOMPARE(query.queryItemValue("code_challenge_method"), QString("S256"));
+
+        QSignalSpy connected(&auth, &LoopbackAuth::connected);
+        QCOMPARE(httpGet(auth.port(), "/favicon.ico").left(12), QByteArray("HTTP/1.1 404"));
+        QVERIFY(auth.running()); // still waiting for the answer
+        QCOMPARE(httpGet(auth.port(), "/drive?code=c&state=" + QUrl::toPercentEncoding(auth.state())).left(12),
+                 QByteArray("HTTP/1.1 200"));
+        QTRY_COMPARE(drive.tokenRequests, 1);
+        const QUrlQuery sent(QString::fromUtf8(drive.lastTokenRequest));
+        QCOMPARE(sent.queryItemValue("client_secret"), QString("secret"));
+        QCOMPARE(sent.queryItemValue("code_verifier").size(), 64);
+        QCOMPARE(sent.queryItemValue("redirect_uri", QUrl::FullyDecoded),
+                 QString("http://127.0.0.1:%1/drive").arg(auth.port()));
+        // The fake answers without a refresh token, which isn't a connection.
+        QSignalSpy failed(&auth, &LoopbackAuth::failed);
+        QTRY_COMPARE(failed.count(), 1);
+        QCOMPARE(connected.count(), 0);
+    }
+
+    void syncServiceSwitchesProviders() {
+        QTemporaryDir dir;
+        Library library(dir.filePath("library.json"), dir.filePath("covers"));
+        auto remote = std::make_shared<MemoryRemote>();
+        MemoryTokenStore tokens;
+        {
+            SyncService sync(&library, &tokens, dir.filePath("sync.json"));
+            sync.setRemoteFactory([remote](const QString &) { return std::make_unique<SharedRemote>(remote); });
+            sync.setSynchronous(true);
+            QVERIFY(sync.connectWith(SyncService::Dropbox, "box"));
+            QCOMPARE(sync.provider(), QString("dropbox"));
+            // Connecting Drive ends the Dropbox connection and its sign-in.
+            QVERIFY(sync.connectWith(SyncService::Drive, "drive"));
+            QCOMPARE(sync.provider(), QString("drive"));
+            QCOMPARE(sync.providerName(), QString("Google Drive"));
+            QVERIFY(tokens.read(SyncService::Dropbox).isEmpty());
+            QCOMPARE(tokens.read(SyncService::Drive), QString("drive"));
+        }
+        // The choice is remembered.
+        SyncService again(&library, &tokens, dir.filePath("sync.json"));
+        QVERIFY(again.connected());
+        QCOMPARE(again.provider(), QString("drive"));
+
+        // A sync.json from before Drive, connected to Dropbox, stays so.
+        QJsonObject old = readJson(dir.filePath("sync.json"));
+        old.remove("provider");
+        old.insert("connected", true);
+        write(dir.filePath("old.json"), QJsonDocument(old).toJson());
+        SyncService before(&library, &tokens, dir.filePath("old.json"));
+        QCOMPARE(before.provider(), QString("dropbox"));
     }
 
 private:

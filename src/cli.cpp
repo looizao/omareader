@@ -502,6 +502,7 @@ int voices(const QStringList &arguments) {
 QJsonObject syncStatus(const SyncService &sync) {
     return QJsonObject{{"available", sync.available()},
                        {"connected", sync.connected()},
+                       {"provider", sync.provider()},
                        {"account", sync.account()},
                        {"lastSynced", sync.lastSynced().isValid() ? sync.lastSynced().toString(Qt::ISODate) : QString()},
                        {"pendingUploads", sync.pendingUploads()},
@@ -509,9 +510,12 @@ QJsonObject syncStatus(const SyncService &sync) {
 }
 
 int syncCommand(const QStringList &arguments) {
-    Command command("sync", "Sync with Dropbox: books for the phone, reading places, removals and settings.");
-    command.parser.addPositionalArgument(
-        "action", "now (the default), status, connect, disconnect, or send <bundle.omabook>", "[action]");
+    Command command("sync", "Sync through Dropbox or Google Drive: books for the phone, reading places, removals "
+                            "and settings.");
+    command.parser.addPositionalArgument("action",
+                                         "now (the default), status, connect [dropbox|drive], disconnect, or send "
+                                         "<bundle.omabook>",
+                                         "[action]");
     command.json();
     if (!command.parse(arguments))
         return command.parser.isSet("help") ? 0 : 1;
@@ -524,13 +528,14 @@ int syncCommand(const QStringList &arguments) {
     SyncService sync(&library, &keyring);
     sync.setSynchronous(true);
     if (!sync.available())
-        return fail("This build of omareader has no Dropbox sync.");
+        return fail("This build of omareader has no sync: it was built without a Dropbox or Google key.");
     auto report = [&](int status) {
         if (json) {
             printJson(syncStatus(sync));
         } else if (status == 0) {
-            out() << (sync.connected() ? "Connected to Dropbox" + (sync.account().isEmpty() ? QString() : " as " + sync.account())
-                                       : QString("Not connected to Dropbox"))
+            out() << (sync.connected() ? "Connected to " + sync.providerName()
+                                             + (sync.account().isEmpty() ? QString() : " as " + sync.account())
+                                       : QString("Not connected"))
                   << Qt::endl;
             if (sync.lastSynced().isValid())
                 out() << "Last synced " << sync.lastSynced().toString(Qt::ISODate) << Qt::endl;
@@ -545,7 +550,7 @@ int syncCommand(const QStringList &arguments) {
     if (action == "status")
         return report(0);
     if (action == "disconnect") {
-        sync.disconnectDropbox();
+        sync.disconnectSync();
         return report(0);
     }
     if (action == "connect") {
@@ -554,15 +559,29 @@ int syncCommand(const QStringList &arguments) {
             if (!sync.connecting())
                 loop.quit();
         });
-        if (!sync.connectDropbox())
+        // With both providers built in, the user says which.
+        QString provider = positional.value(1);
+        if (provider.isEmpty())
+            provider = sync.dropboxAvailable() && !sync.driveAvailable() ? SyncService::Dropbox
+                       : sync.driveAvailable() && !sync.dropboxAvailable() ? SyncService::Drive
+                                                                            : QString();
+        if (provider.isEmpty())
+            return fail("Say which: omareader sync connect dropbox, or omareader sync connect drive.");
+        if (provider != SyncService::Dropbox && provider != SyncService::Drive)
+            return fail(provider + " isn't a provider omareader knows. Use dropbox or drive.");
+        if (!sync.connectProvider(provider)) {
+            if (sync.error().isEmpty())
+                return fail("This build of omareader has no " + SyncService::nameOf(provider) + " sync.");
             return report(1);
-        err() << "Open this page to connect Dropbox (it should have opened already):\n"
+        }
+        err() << "Open this page to connect " << SyncService::nameOf(provider)
+              << " (it should have opened already):\n"
               << sync.authorizeUrl() << Qt::endl;
         loop.exec();
         return report(sync.connected() && sync.error().isEmpty() ? 0 : 1);
     }
     if (!sync.connected())
-        return fail("Dropbox isn't connected. Run omareader sync connect first.");
+        return fail("Sync isn't connected. Run omareader sync connect first.");
     if (action == "send") {
         const QString path = positional.value(1);
         const QJsonObject manifest = SyncFormat::bundleManifest(path);
@@ -629,7 +648,7 @@ QString usage() {
            "  doctor [--engine E] [--json]    Check that read-aloud is ready, with hardware advice\n"
            "  setup [--engine kokoro|qwen]    Install a voice engine and its models (uses the network)\n"
            "  voices [--engine E] [--json]    List an engine's voices, languages and tuning\n"
-           "  sync [now|status|connect|...]   Sync with Dropbox (uses the network once connected)\n"
+           "  sync [now|status|connect|...]   Sync through Dropbox or Google Drive (uses the network once connected)\n"
            "  skill [install]                 Print the skill for coding agents, or install it\n"
            "  version                         Print the version\n";
 }

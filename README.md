@@ -10,7 +10,7 @@ window, C++ and Qt Quick, driven from the keyboard, following your theme and
 language.
 
 Everything runs on your machine. omareader has no accounts and talks to the
-network only when you ask it to (setup, and Dropbox sync if you turn it on):
+network only when you ask it to (setup, and sync if you turn it on):
 books are parsed locally and the voice is
 [Kokoros](https://github.com/lucasjinreal/Kokoros), a Rust build of Kokoro that
 runs on the CPU. If you have an NVIDIA GPU, you can add
@@ -142,13 +142,13 @@ replaced. Exports need `ffmpeg`.
 
 `android/` is omareader for Android: the same read-along, from audio the
 desktop already made. The phone synthesises nothing, so it needs no model
-and no GPU. It uses the network only for Dropbox sync, and only once you
+and no GPU. It uses the network only for sync, and only once you
 connect it.
 
 1. On the desktop, press E and choose **omareader for Android**. The export
    is one `.omabook` file: each chapter's audio as AAC, the text, and the time
    of every word (the format is in [docs/omabook.md](docs/omabook.md)).
-2. With Dropbox sync on (below), that's all: the book arrives on the phone
+2. With sync on (below), that's all: the book arrives on the phone
    by itself. Otherwise save it into a Google Drive or Dropbox folder, or
    copy it over any way you like.
 3. On the phone, open the file from Drive or Dropbox with omareader, or press
@@ -162,10 +162,11 @@ screen off, with the lock screen, headphone and Bluetooth controls, and each
 book remembers where it stopped. Exporting a book again, with another voice or
 speed, replaces it on the phone and keeps your place.
 
-### Sync through Dropbox
+### Sync through Dropbox or Google Drive
 
-Connect Dropbox in the desktop's settings (A, at the bottom) and in the
-phone's sync screen (the arrows beside +), and the two keep in step:
+Connect Dropbox or Google Drive (the same one on both) in the desktop's
+settings (A, at the bottom) and in the phone's sync screen (the arrows
+beside +), and the two keep in step:
 
 - Books you export for the phone go to it, and download there on Wi-Fi
   (or on mobile data, if you allow it).
@@ -174,9 +175,12 @@ phone's sync screen (the arrows beside +), and the two keep in step:
 - Removing a book on one removes it from the other.
 - The listening speed is shared; the text size is kept per kind of device.
 
-Whichever change was made last wins. omareader sees only its own folder,
-`Apps/omareader` in your Dropbox, and keeps the sign-in in your keyring (the
-Android Keystore on the phone). Disconnecting revokes it. Sync runs at
+Whichever change was made last wins. omareader sees only its own files:
+`Apps/omareader` in your Dropbox, or a folder named `omareader` in your
+Google Drive, where it can reach only the files it made. The desktop keeps
+the sign-in in your keyring; on the phone Dropbox's is in the Android
+Keystore and Google's stays with Google Play services. Disconnecting
+revokes it. Sync runs at
 start, when you come back to the window, shortly after a change and every
 15 minutes. `omareader sync status` shows how it's going. The details are in
 [docs/sync.md](docs/sync.md).
@@ -237,7 +241,7 @@ omareader export book.epub --format omabook  # for omareader on Android
 omareader export book.epub --engine qwen --voice ryan --tune temperature=0.7
 omareader voices --engine qwen           # voices, languages and tuning ranges
 omareader doctor --json                  # is read-aloud ready?
-omareader sync status                    # Dropbox sync, if connected
+omareader sync status                    # sync, if connected
 omareader skill install                  # agent skill for ~/.claude/skills
 ```
 
@@ -273,9 +277,11 @@ omareader skill install                  # agent skill for ~/.claude/skills
   text into one `.omabook`.
 - `src/syncstate.cpp` and `src/syncengine.cpp` merge each book's place and
   presence, and the settings, as timestamped registers where the newest
-  change wins; `src/dropbox.cpp` speaks Dropbox's API and its sign-in, and
-  `src/sync.cpp` runs a sync on a worker thread and applies what came back.
-  The Android side (`Sync.kt`, `SyncEngine.kt`, `Dropbox.kt`) does the same
+  change wins; `src/oauth.cpp` signs in through the browser and keeps the
+  access token fresh, `src/dropbox.cpp` and `src/drive.cpp` speak Dropbox's
+  and Google Drive's APIs, and `src/sync.cpp` runs a sync on a worker
+  thread and applies what came back. The Android side (`Sync.kt`,
+  `SyncEngine.kt`, `Dropbox.kt`, `Drive.kt`) does the same
   against the same fixtures (`android/app/src/test/resources/sync`).
 - `android/` imports a bundle into the app's storage
   (`BundleImporter.kt`), plays it in a media session service
@@ -302,7 +308,11 @@ The Android build needs a JDK and the Android SDK (`ANDROID_HOME`, or
 Sync needs a Dropbox app (set up as in [docs/sync.md](docs/sync.md)) whose
 key goes in `DROPBOX_APP_KEY`; both builds read it, and leave sync out when
 it is empty. `OMAREADER_DROPBOX_KEY` overrides it at run time on the
-desktop.
+desktop. Google Drive needs a Google Cloud project with a desktop and an
+Android client (same doc): the desktop client's id goes in
+`GOOGLE_CLIENT_ID`, and its secret in `GOOGLE_CLIENT_SECRET`, which git
+ignores and CI writes from the repository secret of the same name. The
+Android build turns Drive on when `GOOGLE_CLIENT_ID` is set.
 
 CI builds and tests every push and pull request in an Arch Linux container,
 builds the package, and tests and builds the Android app. To release, run `bin/release 0.2.0` on a clean main: it

@@ -10,7 +10,7 @@
 #include <functional>
 #include <memory>
 
-class DropboxAuth;
+class LoopbackAuth;
 class Exporter;
 class Library;
 struct LibraryEntry;
@@ -18,15 +18,20 @@ class Narrator;
 class Reader;
 class TokenStore;
 
-// Sync through the user's Dropbox (docs/sync.md), exposed to QML as `sync`.
+// Sync through the user's Dropbox or Google Drive (docs/sync.md), exposed to
+// QML as `sync`.
 // It turns the library and settings into registers, runs the engine on a
 // worker thread, and applies what came back. Off until the user connects;
 // then it syncs at start, when the window comes back, a few seconds after a
 // change, and every 15 minutes. Its own records live in sync.json beside the
-// library; the Dropbox sign-in lives in the keyring.
+// library; the provider's sign-in lives in the keyring.
 class SyncService : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool available READ available CONSTANT)
+    Q_PROPERTY(bool dropboxAvailable READ dropboxAvailable CONSTANT)
+    Q_PROPERTY(bool driveAvailable READ driveAvailable CONSTANT)
+    Q_PROPERTY(QString provider READ provider NOTIFY stateChanged)
+    Q_PROPERTY(QString providerName READ providerName NOTIFY stateChanged)
     Q_PROPERTY(bool connected READ connected NOTIFY stateChanged)
     Q_PROPERTY(bool connecting READ connecting NOTIFY stateChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY stateChanged)
@@ -51,7 +56,16 @@ public:
     void setRemoteFactory(RemoteFactory factory) { m_factory = std::move(factory); }
     void setSynchronous(bool synchronous) { m_synchronous = synchronous; }
 
+    // The providers this build can use: each needs its app's key built in.
+    static constexpr const char *Dropbox = "dropbox";
+    static constexpr const char *Drive = "drive";
     bool available() const;
+    bool dropboxAvailable() const;
+    bool driveAvailable() const;
+    // The provider connected, or being connected: "dropbox", "drive" or "".
+    QString provider() const { return m_auth ? m_connectingTo : m_provider; }
+    QString providerName() const { return nameOf(provider()); }
+    static QString nameOf(const QString &provider);
     bool connected() const { return m_connected; }
     bool connecting() const { return m_auth != nullptr; }
     bool busy() const { return m_busy; }
@@ -64,17 +78,21 @@ public:
     QString deviceId() const { return m_device; }
     SyncOutput lastOutput() const { return m_lastOutput; }
 
-    // Opens Dropbox in the browser to connect; false if no port was free.
-    Q_INVOKABLE bool connectDropbox();
+    // Opens the provider in the browser to connect; false if it isn't in
+    // this build or no port was free.
+    Q_INVOKABLE bool connectDropbox() { return connectProvider(Dropbox); }
+    Q_INVOKABLE bool connectDrive() { return connectProvider(Drive); }
+    bool connectProvider(const QString &provider);
     Q_INVOKABLE void cancelConnect();
-    Q_INVOKABLE void disconnectDropbox();
+    Q_INVOKABLE void disconnectSync();
     Q_INVOKABLE void syncNow();
     // The window came back to the front: sync if it's been a while.
     Q_INVOKABLE void windowActivated();
     // Sends a phone bundle with the next sync.
     void queueUpload(const QString &file, const QString &id, const QString &title, const QString &author);
     // Takes a sign-in made elsewhere (the command line, tests).
-    bool connectWith(const QString &refreshToken, const QString &accessToken = {}, int expiresIn = 0);
+    bool connectWith(const QString &provider, const QString &refreshToken, const QString &accessToken = {},
+                     int expiresIn = 0);
     QString authorizeUrl() const { return m_authorizeUrl; }
 
 signals:
@@ -112,7 +130,7 @@ private:
     int fontSize() const;
     void setFontSize(int size);
     void setError(const QString &error);
-    std::unique_ptr<SyncRemote> makeRemote(const QString &refreshToken) const;
+    std::unique_ptr<SyncRemote> makeRemote(const QString &provider, const QString &refreshToken) const;
 
     Library *m_library;
     TokenStore *m_tokens;
@@ -121,6 +139,8 @@ private:
     QString m_file;
     QString m_device;
     bool m_connected = false;
+    QString m_provider;
+    QString m_connectingTo;
     bool m_busy = false;
     bool m_again = false;
     bool m_applying = false;
@@ -139,7 +159,7 @@ private:
     QList<PendingUpload> m_uploads;
     SyncOutput m_lastOutput;
     RemoteFactory m_factory;
-    DropboxAuth *m_auth = nullptr;
+    LoopbackAuth *m_auth = nullptr;
     QString m_authorizeUrl;
     QTimer m_soon;
     QTimer m_periodic;
