@@ -45,6 +45,7 @@ Item {
 
     ReadingHighlight {
         document: body.textDocument
+        styles: root.modelData.styles || []
         lineHeight: reader.lineHeight
         sentenceStart: root.reading ? narrator.sentenceStart : -1
         sentenceEnd: root.reading ? narrator.sentenceEnd : -1

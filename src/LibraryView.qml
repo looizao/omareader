@@ -13,13 +13,22 @@ FocusScope {
 
     Shortcut {
         sequence: "N"
-        enabled: root.visible && !root.pasteOpen
+        enabled: root.visible && !root.pasteOpen && !removeDialog.opened
         onActivated: root.addTextRequested(false)
     }
     Shortcut {
         sequence: StandardKey.Paste
-        enabled: root.visible && !root.pasteOpen
+        enabled: root.visible && !root.pasteOpen && !removeDialog.opened
         onActivated: root.addTextRequested(true)
+    }
+
+    // Asks before a book leaves the library, since a click on the card's
+    // button is easy to make by accident.
+    function confirmRemove(book) {
+        if (!book)
+            return
+        removeDialog.book = book
+        removeDialog.open()
     }
 
     Keys.onPressed: event => {
@@ -29,9 +38,7 @@ FocusScope {
             root.openCurrent()
             event.accepted = true
         } else if (event.key === Qt.Key_Delete) {
-            const book = library.books[grid.currentIndex]
-            if (book)
-                library.remove(book.path)
+            root.confirmRemove(library.books[grid.currentIndex])
             event.accepted = true
         }
     }
@@ -182,12 +189,59 @@ FocusScope {
                     Item { Layout.fillHeight: true }
                 }
 
+                HoverHandler { id: cardHover }
+
                 MouseArea {
                     anchors.fill: parent
                     onClicked: {
                         grid.currentIndex = card.index
                         grid.forceActiveFocus()
                         reader.open(card.modelData.path)
+                    }
+                }
+
+                // Removes the book; shown on the card under the pointer and
+                // on the one the keyboard is on.
+                Button {
+                    id: removeButton
+                    objectName: "removeBookButton"
+                    x: 16 + 164 - width - 6
+                    y: 22
+                    width: 30
+                    height: 30
+                    padding: 0
+                    topInset: 0
+                    bottomInset: 0
+                    leftInset: 0
+                    rightInset: 0
+                    focusPolicy: Qt.NoFocus
+                    visible: cardHover.hovered || (grid.currentIndex === card.index && grid.activeFocus)
+                    onClicked: {
+                        grid.currentIndex = card.index
+                        root.confirmRemove(card.modelData)
+                    }
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Remove from the library (Delete)")
+                    Accessible.name: qsTr("Remove from the library")
+                    background: Rectangle {
+                        radius: width / 2
+                        color: removeButton.hovered ? theme.accent : Qt.alpha(Colors.background, 0.85)
+                        border.color: removeButton.hovered ? theme.accent : Colors.line
+                    }
+                    // A cross drawn from two bars, so it looks the same in every font.
+                    contentItem: Item {
+                        Repeater {
+                            model: [45, -45]
+                            Rectangle {
+                                required property int modelData
+                                anchors.centerIn: parent
+                                width: 12
+                                height: 2
+                                radius: 1
+                                rotation: modelData
+                                color: removeButton.hovered ? theme.accentForeground : Colors.text
+                            }
+                        }
                     }
                 }
             }
@@ -227,6 +281,77 @@ FocusScope {
             font.pixelSize: 12
             horizontalAlignment: Text.AlignHCenter
             elide: Text.ElideRight
+        }
+    }
+
+    Popup {
+        id: removeDialog
+        objectName: "removeDialog"
+        property var book: null
+        readonly property bool pasted: book ? book.pasted : false
+        modal: true
+        focus: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(440, (parent ? parent.width : 440) - 48)
+        padding: 24
+        background: Rectangle {
+            color: Colors.surface
+            radius: theme.radius
+            border.color: Colors.line
+        }
+
+        function accept() {
+            if (removeDialog.book)
+                library.remove(removeDialog.book.path)
+            close()
+        }
+
+        onClosed: {
+            removeDialog.book = null
+            grid.forceActiveFocus()
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 12
+            focus: true
+            Keys.onReturnPressed: removeDialog.accept()
+            Keys.onEnterPressed: removeDialog.accept()
+            Keys.onEscapePressed: removeDialog.close()
+
+            Label {
+                Layout.fillWidth: true
+                text: removeDialog.pasted ? qsTr("Delete this text?") : qsTr("Remove this book?")
+                font.pixelSize: 20
+                font.family: "serif"
+                color: Colors.text
+                wrapMode: Text.Wrap
+            }
+            Label {
+                Layout.fillWidth: true
+                text: !removeDialog.book ? ""
+                      : removeDialog.pasted
+                      ? qsTr("“%1” leaves the library and goes to the trash, where you can still restore it.").arg(removeDialog.book.title)
+                      : qsTr("“%1” leaves the library. The file itself stays where it is.").arg(removeDialog.book.title)
+                color: Colors.muted
+                wrapMode: Text.Wrap
+                font.pixelSize: 14
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.topMargin: 8
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                Button {
+                    flat: true
+                    text: qsTr("Cancel")
+                    onClicked: removeDialog.close()
+                }
+                AccentButton {
+                    objectName: "confirmRemoveButton"
+                    text: removeDialog.pasted ? qsTr("Delete") : qsTr("Remove")
+                    onClicked: removeDialog.accept()
+                }
+            }
         }
     }
 }

@@ -23,6 +23,7 @@ Rectangle {
         ["+ / −", qsTr("Bigger / smaller text")],
         ["O", qsTr("Open a book")],
         ["N", qsTr("Add pasted text to the library")],
+        ["Delete", qsTr("Remove the selected book from the library")],
         ["B", qsTr("Back to the library")],
         ["Esc", qsTr("Close panels and messages")],
         ["?", qsTr("Show or hide this help")],

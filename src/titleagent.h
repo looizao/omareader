@@ -14,6 +14,7 @@
 // the text to its provider.
 namespace PastedTitle {
 // The first few words, with whitespace collapsed and the length capped.
+// The text is read as Markdown, as pasted text is, so marks stay out of it.
 QString fromText(const QString &text, int maxWords = 8, int maxLength = 60);
 // An agent's reply reduced to a bare title: its first line, without quotes,
 // a "Title:" label or Markdown marks. Empty when nothing usable is left.

@@ -85,10 +85,18 @@ only remembers where they are and where you stopped.
 For an article, a note or a message with no book file, press N in the library
 (or Ctrl+V to paste the clipboard straight in), or click Add text. The text is
 saved in `~/.local/share/omareader/texts`, readable only by you, and reads
-aloud like any book, with its place remembered. Forgetting it with Delete
-moves it to the trash, so it can still be restored.
+aloud like any book, with its place remembered. Removing it (Delete, or the
+× on its card, after a confirmation) moves it to the trash, so it can still
+be restored.
 
-The title starts as the text's first few words, and you can type your own.
+Pasted text is read as Markdown, as text from chat apps and notes often is:
+`**bold**`, `*italic*`, `` `code` ``, `~~struck~~`, headings, lists and links
+show formatted, and the voice reads the words, never the marks. Code blocks
+are skipped, as in Markdown books. Lines with no blank line between them stay
+separate paragraphs.
+
+The title starts as the text's first few words (or its heading, when it opens
+with one), and you can type your own.
 If a coding agent with a read-only headless mode is installed (Claude Code,
 Codex, Gemini or Cursor, with Omarchy's default agent first), the dialog
 offers to have it suggest a title. That is off until you tick it, because the
@@ -222,7 +230,7 @@ is in [docs/play.md](docs/play.md); the privacy policy Play links to is
 | O | Open a book |
 | N, Ctrl+V | In the library: add pasted text |
 | B or Backspace | Back to the library |
-| Enter, Delete | In the library: open, forget a book (the file stays; pasted text goes to the trash) |
+| Enter, Delete | In the library: open, remove a book after a confirmation (the file stays; pasted text goes to the trash) |
 | Esc | Close panels and messages |
 | ? | Show every shortcut |
 | Q | Quit |

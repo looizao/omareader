@@ -4,6 +4,11 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QProcess>
+#include <QQmlComponent>
+#include <QQmlEngine>
+#include <QQuickTextDocument>
+#include <QTextCursor>
+#include <QTextDocument>
 #include <QPainter>
 #include <QPdfWriter>
 #include <QSettings>
@@ -23,6 +28,7 @@
 #include "exporter.h"
 #include "filepicker.h"
 #include "fixtures.h"
+#include "highlight.h"
 #include "kokoro.h"
 #include "library.h"
 #include "narrator.h"
@@ -216,6 +222,121 @@ private slots:
         QCOMPARE(chapters[0].paragraphs[1].text, QString("Some emphasis and a link."));
         QCOMPARE(chapters[1].paragraphs.size(), 3);
         QCOMPARE(chapters[1].paragraphs[2].text, QString("item two"));
+    }
+
+    void markdownInlineKeepsStylesAndDropsMarks() {
+        QList<TextStyle> styles;
+        QCOMPARE(BookLoader::markdownInline("Some **bold text here** and *slanted* words.", &styles),
+                 QString("Some bold text here and slanted words."));
+        QCOMPARE(styles.size(), 2);
+        QCOMPARE(styles[0], (TextStyle{5, 14, TextStyle::Bold}));
+        QCOMPARE(styles[1], (TextStyle{24, 7, TextStyle::Italic}));
+
+        QCOMPARE(BookLoader::markdownInline("***both*** __strong__ _em_ ~~gone~~ `x * y`", &styles),
+                 QString("both strong em gone x * y"));
+        QCOMPARE(styles,
+                 (QList<TextStyle>{{0, 4, TextStyle::Bold | TextStyle::Italic},
+                                   {5, 6, TextStyle::Bold},
+                                   {12, 2, TextStyle::Italic},
+                                   {15, 4, TextStyle::Strike},
+                                   {20, 5, TextStyle::Code}}));
+
+        // Emphasis nests, and a link reads as its text, styles and all.
+        QCOMPARE(BookLoader::markdownInline("**bold with *italic* inside** and [a **link**](http://x \"t\").", &styles),
+                 QString("bold with italic inside and a link."));
+        QCOMPARE(styles,
+                 (QList<TextStyle>{{0, 10, TextStyle::Bold},
+                                   {10, 6, TextStyle::Bold | TextStyle::Italic},
+                                   {16, 7, TextStyle::Bold},
+                                   {30, 4, TextStyle::Bold}}));
+
+        // What isn't emphasis stays as written.
+        QCOMPARE(BookLoader::markdownInline("2 * 3 * 4 = 24, snake_case_name, ~5 min, \\*not*", &styles),
+                 QString("2 * 3 * 4 = 24, snake_case_name, ~5 min, *not*"));
+        QVERIFY(styles.isEmpty());
+        QCOMPARE(BookLoader::markdownInline("\\*literal\\* and an ![image](i.png) gone"),
+                 QString("*literal* and an gone"));
+        QCOMPARE(BookLoader::markdownInline("a lone * star and **unclosed"), QString("a lone * star and **unclosed"));
+    }
+
+    void pastedMarkdownReadsWithoutMarks() {
+        QTemporaryDir dir;
+        Library library(dir.filePath("library.json"), dir.filePath("covers"));
+        const QString path = library.addText(
+            {}, "# **Shopping** list\n\nBuy *bread* and **milk** today.\n\n- one `item`\n- two\n\n```\ncode()\n```\n");
+        QCOMPARE(library.entry(path).title, QString("Shopping list"));
+        QCOMPARE(PastedTitle::fromText("Buy **fresh** bread, `now`."), QString("Buy fresh bread, now."));
+
+        QString error;
+        const auto book = BookLoader::load(path, &error);
+        QVERIFY2(book, qPrintable(error));
+        const auto &paragraphs = book->chapters.first().paragraphs;
+        QCOMPARE(paragraphs.size(), 4);
+        QCOMPARE(paragraphs[0].text, QString("Shopping list"));
+        QCOMPARE(paragraphs[0].level, 1);
+        QCOMPARE(paragraphs[0].styles, (QList<TextStyle>{{0, 8, TextStyle::Bold}}));
+        QCOMPARE(paragraphs[1].text, QString("Buy bread and milk today."));
+        QCOMPARE(paragraphs[1].styles,
+                 (QList<TextStyle>{{4, 5, TextStyle::Italic}, {14, 4, TextStyle::Bold}}));
+        QCOMPARE(paragraphs[2].text, QString("one item"));
+        QCOMPARE(paragraphs[3].text, QString("two"));
+        // The voice gets the words, never the marks.
+        for (int i = 0; i < book->sentenceCount(); ++i) {
+            QVERIFY2(!book->sentenceText(i).contains('*'), qPrintable(book->sentenceText(i)));
+            QVERIFY2(!book->sentenceText(i).contains('`'), qPrintable(book->sentenceText(i)));
+        }
+
+        // Pasted lines with no blank line between them stay separate paragraphs.
+        const auto lines = BookLoader::markdownChapters("First line.\n*Second* line.\nThird line.");
+        QCOMPARE(lines.first().paragraphs.size(), 3);
+        QCOMPARE(lines.first().paragraphs[1].text, QString("Second line."));
+    }
+
+    void readerListsParagraphStyles() {
+        QTemporaryDir dir;
+        Library library(dir.filePath("library.json"), dir.filePath("covers"));
+        Reader reader(&library, nullptr, nullptr);
+        QVERIFY(reader.addText("Styled", "Plain and **bold**."));
+        QTRY_VERIFY(reader.hasBook());
+        const QVariantMap paragraph = reader.paragraphs().first().toMap();
+        QCOMPARE(paragraph.value("text").toString(), QString("Plain and bold."));
+        const QVariantList styles = paragraph.value("styles").toList();
+        QCOMPARE(styles.size(), 1);
+        QCOMPARE(styles.first().toMap().value("start").toInt(), 10);
+        QCOMPARE(styles.first().toMap().value("length").toInt(), 4);
+        QCOMPARE(styles.first().toMap().value("flags").toInt(), int(TextStyle::Bold));
+        QVERIFY(library.books().first().toMap().value("pasted").toBool());
+        reader.closeBook();
+    }
+
+    void highlightKeepsInlineStyles() {
+        QQmlEngine engine;
+        QQmlComponent component(&engine);
+        component.setData("import QtQuick\nTextEdit { text: \"Plain and bold words.\" }", QUrl());
+        std::unique_ptr<QObject> edit(component.create());
+        QVERIFY2(edit, qPrintable(component.errorString()));
+        auto *quickDocument = edit->property("textDocument").value<QQuickTextDocument *>();
+        QVERIFY(quickDocument);
+        QTextDocument *document = quickDocument->textDocument();
+
+        ReadingHighlight highlight;
+        highlight.setStyles({QVariantMap{{"start", 10}, {"length", 4}, {"flags", int(TextStyle::Bold)}}});
+        highlight.setDocument(quickDocument);
+        auto weightAt = [&](int position) {
+            QTextCursor cursor(document);
+            cursor.setPosition(position + 1);
+            return cursor.charFormat().fontWeight();
+        };
+        QCOMPARE(weightAt(11), int(QFont::Bold));
+        QVERIFY(weightAt(2) != int(QFont::Bold));
+        // The highlight passes over the bold word and leaves it bold.
+        highlight.setWordStart(10);
+        highlight.setWordEnd(14);
+        QCOMPARE(weightAt(11), int(QFont::Bold));
+        highlight.setWordStart(15);
+        highlight.setWordEnd(20);
+        QCOMPARE(weightAt(11), int(QFont::Bold));
+        QVERIFY(weightAt(16) != int(QFont::Bold));
     }
 
     void pdfTextReflows() {

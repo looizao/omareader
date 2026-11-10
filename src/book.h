@@ -8,12 +8,24 @@
 
 // A book as omareader reads it: chapters of plain-text paragraphs, split into
 // sentences and words so the narrator can speak one sentence at a time and the
-// reader can highlight the word being spoken. Formatting is dropped on purpose;
-// every format reduces to the same reflowable text.
+// reader can highlight the word being spoken. Every format reduces to the same
+// reflowable text; the little inline formatting Markdown carries (bold,
+// italic, code) rides along as spans over that text, so the words the voice
+// reads and the characters the reader highlights stay the same.
+
+// Inline formatting over a range of a paragraph's text.
+struct TextStyle {
+    enum Flag { Bold = 1, Italic = 2, Code = 4, Strike = 8 };
+    int start = 0;
+    int length = 0;
+    int flags = 0;
+    bool operator==(const TextStyle &o) const { return start == o.start && length == o.length && flags == o.flags; }
+};
 
 struct Paragraph {
     QString text;
     int level = 0; // 1-6 for headings, 0 for body text
+    QList<TextStyle> styles;
 };
 
 struct Chapter {

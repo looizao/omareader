@@ -223,8 +223,12 @@ void Reader::setChapter(int chapter, int anchorParagraph) {
     m_chapter = chapter;
     m_anchorParagraph = anchorParagraph;
     m_paragraphs.clear();
-    for (const auto &p : m_book->chapters.at(chapter).paragraphs)
-        m_paragraphs.append(QVariantMap{{"text", p.text}, {"level", p.level}});
+    for (const auto &p : m_book->chapters.at(chapter).paragraphs) {
+        QVariantList styles;
+        for (const TextStyle &style : p.styles)
+            styles.append(QVariantMap{{"start", style.start}, {"length", style.length}, {"flags", style.flags}});
+        m_paragraphs.append(QVariantMap{{"text", p.text}, {"level", p.level}, {"styles", styles}});
+    }
     emit chapterChanged();
 }
 

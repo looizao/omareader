@@ -334,37 +334,253 @@ QList<Chapter> BookLoader::textChapters(const QString &input) {
     return chapters;
 }
 
+namespace {
+
+// A piece of a paragraph's inline Markdown: either text, or a run of the
+// same emphasis character waiting to be paired with another run.
+struct InlineNode {
+    QString text;
+    int flags = 0; // the TextStyle flags of the emphasis around it
+    QChar delimiter; // '*', '_' or '~' for a run; null for text
+    int count = 0; // characters of the run not yet paired
+    int original = 0;
+    bool canOpen = false;
+    bool canClose = false;
+};
+
+bool isMarkdownPunctuation(QChar c) { return c.isPunct() || c.isSymbol(); }
+
+// Splits inline Markdown into text and delimiter runs. Escapes, code spans,
+// links and images are settled here, since nothing inside them is emphasis
+// (a link's text can be, so it is split like the rest).
+void splitInline(const QString &s, QList<InlineNode> &nodes, int depth = 0) {
+    auto text = [&](const QString &t, int flags = 0) {
+        if (!nodes.isEmpty() && nodes.last().delimiter.isNull() && nodes.last().flags == flags) {
+            nodes.last().text += t;
+        } else {
+            InlineNode node;
+            node.text = t;
+            node.flags = flags;
+            nodes.append(node);
+        }
+    };
+    auto runAt = [&](int i, QChar c) {
+        int run = 0;
+        while (i + run < s.size() && s.at(i + run) == c)
+            ++run;
+        return run;
+    };
+    const int n = int(s.size());
+    for (int i = 0; i < n;) {
+        const QChar c = s.at(i);
+        if (c == '\\' && i + 1 < n && s.at(i + 1).unicode() < 128 && isMarkdownPunctuation(s.at(i + 1))) {
+            text(s.at(i + 1));
+            i += 2;
+            continue;
+        }
+        if (c == '`') {
+            // A code span closes with a run of exactly as many backticks.
+            const int run = runAt(i, '`');
+            int close = -1;
+            for (int j = i + run; j < n;) {
+                const int r = s.at(j) == '`' ? runAt(j, '`') : 0;
+                if (r == run) {
+                    close = j;
+                    break;
+                }
+                j += qMax(1, r);
+            }
+            if (close < 0) {
+                text(QString(run, '`'));
+                i += run;
+                continue;
+            }
+            QString code = s.mid(i + run, close - i - run);
+            if (code.size() >= 2 && code.startsWith(' ') && code.endsWith(' ') && !code.trimmed().isEmpty())
+                code = code.mid(1, code.size() - 2);
+            if (!code.isEmpty())
+                text(code, TextStyle::Code);
+            i = close + run;
+            continue;
+        }
+        if (c == '[' || (c == '!' && i + 1 < n && s.at(i + 1) == '[')) {
+            // [text](url) reads as its text; an image, ![alt](url), not at all.
+            const int open = c == '!' ? i + 1 : i;
+            int brackets = 0, close = -1;
+            for (int j = open; j < n && close < 0; ++j) {
+                if (s.at(j) == '\\')
+                    ++j;
+                else if (s.at(j) == '[')
+                    ++brackets;
+                else if (s.at(j) == ']' && --brackets == 0)
+                    close = j;
+            }
+            int end = -1;
+            if (close > 0 && close + 1 < n && s.at(close + 1) == '(') {
+                int parens = 0;
+                for (int j = close + 1; j < n && end < 0; ++j) {
+                    if (s.at(j) == '(')
+                        ++parens;
+                    else if (s.at(j) == ')' && --parens == 0)
+                        end = j;
+                }
+            }
+            if (end > 0) {
+                if (c == '[' && depth < 8)
+                    splitInline(s.mid(open + 1, close - open - 1), nodes, depth + 1);
+                i = end + 1;
+                continue;
+            }
+            text(c);
+            ++i;
+            continue;
+        }
+        if (c == '*' || c == '_' || c == '~') {
+            // Whether a run can open or close emphasis depends on what is
+            // on either side, as CommonMark has it, so "2 * 3 * 4" and
+            // snake_case_names stay as they are.
+            const int run = runAt(i, c);
+            const QChar before = i > 0 ? s.at(i - 1) : QChar(' ');
+            const QChar after = i + run < n ? s.at(i + run) : QChar(' ');
+            const bool left = !after.isSpace()
+                              && (!isMarkdownPunctuation(after) || before.isSpace() || isMarkdownPunctuation(before));
+            const bool right = !before.isSpace()
+                               && (!isMarkdownPunctuation(before) || after.isSpace() || isMarkdownPunctuation(after));
+            InlineNode node;
+            node.text = QString(run, c);
+            node.delimiter = c;
+            node.count = node.original = run;
+            if (c == '_') {
+                node.canOpen = left && (!right || isMarkdownPunctuation(before));
+                node.canClose = right && (!left || isMarkdownPunctuation(after));
+            } else if (c == '~') {
+                // Only ~~double~~ strikes through; a lone ~ means "about".
+                node.canOpen = left && run == 2;
+                node.canClose = right && run == 2;
+            } else {
+                node.canOpen = left;
+                node.canClose = right;
+            }
+            nodes.append(node);
+            i += run;
+            continue;
+        }
+        text(c);
+        ++i;
+    }
+}
+
+// Pairs delimiter runs into emphasis, closest opener first, and marks what
+// lies between them.
+void pairEmphasis(QList<InlineNode> &nodes) {
+    for (int c = 0; c < nodes.size(); ++c) {
+        if (nodes.at(c).delimiter.isNull() || !nodes.at(c).canClose)
+            continue;
+        while (nodes.at(c).count > 0) {
+            const InlineNode &closer = nodes.at(c);
+            int o = c - 1;
+            for (; o >= 0; --o) {
+                const InlineNode &opener = nodes.at(o);
+                if (opener.delimiter != closer.delimiter || !opener.canOpen || opener.count == 0)
+                    continue;
+                if (closer.delimiter == '~' && opener.count != closer.count)
+                    continue;
+                // CommonMark's rule of three, which keeps *a**b* from
+                // pairing the wrong runs.
+                if ((opener.canClose || closer.canOpen) && (opener.original + closer.original) % 3 == 0
+                    && !(opener.original % 3 == 0 && closer.original % 3 == 0))
+                    continue;
+                break;
+            }
+            if (o < 0)
+                break;
+            const bool strike = closer.delimiter == '~';
+            const int use = strike ? closer.count : (nodes.at(o).count >= 2 && closer.count >= 2 ? 2 : 1);
+            const int flag = strike ? TextStyle::Strike : use == 2 ? TextStyle::Bold : TextStyle::Italic;
+            for (int k = o + 1; k < c; ++k) {
+                nodes[k].flags |= flag;
+                // Runs left unpaired inside stay as they are.
+                nodes[k].canOpen = nodes[k].canClose = false;
+            }
+            nodes[o].count -= use;
+            nodes[c].count -= use;
+        }
+    }
+}
+
+} // namespace
+
+QString BookLoader::markdownInline(const QString &markdown, QList<TextStyle> *styles) {
+    QList<InlineNode> nodes;
+    splitInline(markdown, nodes);
+    pairEmphasis(nodes);
+
+    // Whitespace collapses as the text is put together, so the styles'
+    // ranges line up with the text the reader shows.
+    QString out;
+    QList<TextStyle> spans;
+    auto put = [&](QChar c, int flags) {
+        if (c.isSpace()) {
+            if (out.isEmpty() || out.endsWith(' '))
+                return;
+            c = ' ';
+        }
+        out += c;
+        if (!flags)
+            return;
+        const int at = int(out.size()) - 1;
+        if (!spans.isEmpty() && spans.last().flags == flags && spans.last().start + spans.last().length == at)
+            ++spans.last().length;
+        else
+            spans.append({at, 1, flags});
+    };
+    for (const InlineNode &node : std::as_const(nodes)) {
+        const QString text = node.delimiter.isNull() ? node.text : QString(node.count, node.delimiter);
+        for (const QChar c : text)
+            put(c, node.flags);
+    }
+    if (out.endsWith(' ')) {
+        out.chop(1);
+        if (!spans.isEmpty() && spans.last().start + spans.last().length > out.size()
+            && --spans.last().length == 0)
+            spans.removeLast();
+    }
+    if (styles)
+        *styles = spans;
+    return out;
+}
+
 QList<Chapter> BookLoader::markdownChapters(const QString &input) {
     QString text = input;
-    text.replace("\r\n", "\n");
+    text.replace("\r\n", "\n").replace('\r', '\n');
     // YAML front matter is metadata, not reading text.
     if (text.startsWith("---\n")) {
         const int close = int(text.indexOf("\n---", 4));
         if (close > 0)
             text = text.mid(text.indexOf('\n', close + 1) + 1);
     }
+    // Text with no blank lines at all, as messages and notes often are,
+    // means a paragraph per line rather than one long paragraph.
+    static const QRegularExpression blankLine(R"(\n[ \t]*\n)");
+    const bool linePerParagraph = !text.trimmed().isEmpty() && !text.trimmed().contains(blankLine);
 
-    static const QRegularExpression image(R"(!\[[^\]]*\]\([^)]*\))");
-    static const QRegularExpression link(R"(\[([^\]]*)\]\([^)]*\))");
-    static const QRegularExpression emphasis(R"((\*{1,3}|_{1,3}|`+|~~))");
     static const QRegularExpression headingLine(R"(^(#{1,6})\s+(.*?)\s*#*\s*$)");
     static const QRegularExpression listMarker(R"(^\s*([-*+]|\d+[.)])\s+)");
-    auto inline_ = [&](QString line) {
-        line.replace(image, QString()).replace(link, "\\1").replace(emphasis, QString());
-        return line;
-    };
+    static const QRegularExpression rule(R"(^\s*([-*_]\s*){3,}$)");
+    static const QRegularExpression quote(R"(^\s*>\s?)");
 
     QList<Chapter> chapters{Chapter{}};
     QString paragraph;
     bool fenced = false;
     auto flush = [&] {
-        const QString t = paragraph.simplified();
+        QList<TextStyle> styles;
+        const QString t = markdownInline(paragraph, &styles);
         if (hasReadableText(t))
-            chapters.last().paragraphs.append({t, 0});
+            chapters.last().paragraphs.append({t, 0, styles});
         paragraph.clear();
     };
     for (QString line : text.split('\n')) {
-        if (line.trimmed().startsWith("```")) {
+        if (line.trimmed().startsWith("```") || line.trimmed().startsWith("~~~")) {
             flush();
             fenced = !fenced;
             continue;
@@ -375,15 +591,16 @@ QList<Chapter> BookLoader::markdownChapters(const QString &input) {
         if (heading.hasMatch()) {
             flush();
             const int level = int(heading.captured(1).size());
-            const QString title = inline_(heading.captured(2)).simplified();
+            QList<TextStyle> styles;
+            const QString title = markdownInline(heading.captured(2), &styles);
             if (level <= 2 && (!chapters.last().paragraphs.isEmpty() || !chapters.last().title.isEmpty()))
                 chapters.append(Chapter{});
             if (level <= 2 && chapters.last().title.isEmpty())
                 chapters.last().title = title;
-            chapters.last().paragraphs.append({title, level});
+            chapters.last().paragraphs.append({title, level, styles});
             continue;
         }
-        if (line.trimmed().isEmpty() || QRegularExpression(R"(^\s*([-*_]\s*){3,}$)").match(line).hasMatch()) {
+        if (line.trimmed().isEmpty() || rule.match(line).hasMatch()) {
             flush();
             continue;
         }
@@ -391,8 +608,10 @@ QList<Chapter> BookLoader::markdownChapters(const QString &input) {
             flush();
             line.remove(listMarker);
         }
-        line.remove(QRegularExpression(R"(^\s*>\s?)"));
-        paragraph += ' ' + inline_(line);
+        line.remove(quote);
+        paragraph += ' ' + line;
+        if (linePerParagraph)
+            flush();
     }
     flush();
     dropEmptyChapters(chapters);
@@ -1053,7 +1272,9 @@ bool BookLoader::loadPastedText(Book &book, const QByteArray &data, QString *err
     }
     book.format = "text";
     book.title = o.value("title").toString().simplified();
-    book.chapters = textChapters(o.value("text").toString());
+    // Pasted text often comes from chat apps and notes written in Markdown,
+    // whose marks read as formatting rather than aloud.
+    book.chapters = markdownChapters(o.value("text").toString());
     return true;
 }
 

@@ -1,5 +1,7 @@
 #include "highlight.h"
 
+#include "book.h"
+
 #include <QTextBlockFormat>
 #include <QTextCharFormat>
 #include <QTextCursor>
@@ -30,6 +32,47 @@ void ReadingHighlight::setDocument(QQuickTextDocument *document) {
     refresh();
 }
 
+void ReadingHighlight::setStyles(const QVariantList &styles) {
+    if (m_styles == styles)
+        return;
+    m_styles = styles;
+    emit stylesChanged();
+    refresh();
+}
+
+void ReadingHighlight::restyle(int start, int end) {
+    QTextDocument *doc = textDocument();
+    const int length = doc->characterCount() - 1;
+    start = qBound(0, start, length);
+    end = qBound(0, end, length);
+    if (end <= start)
+        return;
+    QTextCursor cursor(doc);
+    cursor.setPosition(start);
+    cursor.setPosition(end, QTextCursor::KeepAnchor);
+    cursor.setCharFormat(QTextCharFormat());
+    for (const QVariant &value : std::as_const(m_styles)) {
+        const QVariantMap style = value.toMap();
+        const int from = qMax(start, style.value("start").toInt());
+        const int to = qMin(end, style.value("start").toInt() + style.value("length").toInt());
+        const int flags = style.value("flags").toInt();
+        if (to <= from || !flags)
+            continue;
+        QTextCharFormat format;
+        if (flags & TextStyle::Bold)
+            format.setFontWeight(QFont::Bold);
+        if (flags & TextStyle::Italic)
+            format.setFontItalic(true);
+        if (flags & TextStyle::Strike)
+            format.setFontStrikeOut(true);
+        if (flags & TextStyle::Code)
+            format.setFontFamilies({QStringLiteral("monospace")});
+        cursor.setPosition(from);
+        cursor.setPosition(to, QTextCursor::KeepAnchor);
+        cursor.mergeCharFormat(format);
+    }
+}
+
 void ReadingHighlight::refresh() {
     QTextDocument *doc = textDocument();
     if (!doc)
@@ -40,7 +83,7 @@ void ReadingHighlight::refresh() {
     QTextBlockFormat block;
     block.setLineHeight(m_lineHeight * 100, QTextBlockFormat::ProportionalHeight);
     cursor.mergeBlockFormat(block);
-    cursor.setCharFormat(QTextCharFormat());
+    restyle(0, doc->characterCount() - 1);
     m_applying = false;
     m_appliedStart = m_appliedEnd = -1;
     apply();
@@ -67,7 +110,7 @@ void ReadingHighlight::apply() {
     };
 
     if (m_appliedStart >= 0)
-        range(m_appliedStart, m_appliedEnd, QTextCharFormat(), false);
+        restyle(m_appliedStart, m_appliedEnd);
     m_appliedStart = m_appliedEnd = -1;
 
     if (m_sentenceStart >= 0 && m_sentenceEnd > m_sentenceStart) {

@@ -1,5 +1,7 @@
 #include "titleagent.h"
 
+#include "bookloader.h"
+
 #include <QFile>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
@@ -9,7 +11,16 @@
 namespace PastedTitle {
 
 QString fromText(const QString &text, int maxWords, int maxLength) {
-    const QString flat = text.simplified();
+    // Only the start matters, and a title needs only its words.
+    // A heading at the very top already names the text.
+    QStringList read;
+    const QList<Chapter> chapters = BookLoader::markdownChapters(text.left(4000));
+    for (const Chapter &chapter : chapters)
+        for (const Paragraph &paragraph : chapter.paragraphs)
+            read << paragraph.text;
+    if (!chapters.isEmpty() && !chapters.first().paragraphs.isEmpty() && chapters.first().paragraphs.first().level > 0)
+        read = QStringList{chapters.first().paragraphs.first().text};
+    const QString flat = read.isEmpty() ? text.simplified() : read.join(' ');
     const QStringList words = flat.split(' ', Qt::SkipEmptyParts);
     QString title;
     for (const QString &word : words.mid(0, maxWords)) {

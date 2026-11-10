@@ -94,6 +94,7 @@ QVariantList Library::books() const {
                                 {"cover", e.cover.isEmpty() ? QString() : QUrl::fromLocalFile(e.cover).toString()},
                                 {"progress", qBound(0.0, progress, 1.0)},
                                 {"missing", !QFileInfo::exists(e.path)},
+                                {"pasted", isText(e.path)},
                                 {"opened", e.opened}});
     }
     return list;

@@ -4,15 +4,20 @@
 #include <QObject>
 #include <QPointer>
 #include <QQuickTextDocument>
+#include <QVariantList>
 
 class QTextDocument;
 
 // Colours the sentence being read and the word being spoken inside a
-// paragraph's TextEdit. Only colours change, never fonts, so the paragraph's
-// layout stays put while the highlight moves through it.
+// paragraph's TextEdit, over the paragraph's own inline styles (bold, italic,
+// code). The styles are laid on once with the text; the highlight changes
+// only colours, never fonts, so the layout stays put while it moves.
 class ReadingHighlight : public QObject {
     Q_OBJECT
     Q_PROPERTY(QQuickTextDocument *document READ document WRITE setDocument NOTIFY documentChanged)
+    // The paragraph's styles, as Reader lists them: {start, length, flags}
+    // with TextStyle's flags.
+    Q_PROPERTY(QVariantList styles READ styles WRITE setStyles NOTIFY stylesChanged)
     Q_PROPERTY(int sentenceStart MEMBER m_sentenceStart WRITE setSentenceStart NOTIFY rangeChanged)
     Q_PROPERTY(int sentenceEnd MEMBER m_sentenceEnd WRITE setSentenceEnd NOTIFY rangeChanged)
     Q_PROPERTY(int wordStart MEMBER m_wordStart WRITE setWordStart NOTIFY rangeChanged)
@@ -28,6 +33,8 @@ public:
 
     QQuickTextDocument *document() const { return m_document; }
     void setDocument(QQuickTextDocument *document);
+    QVariantList styles() const { return m_styles; }
+    void setStyles(const QVariantList &styles);
     void setSentenceStart(int v) { set(m_sentenceStart, v); }
     void setSentenceEnd(int v) { set(m_sentenceEnd, v); }
     void setWordStart(int v) { set(m_wordStart, v); }
@@ -47,6 +54,7 @@ public:
 
 signals:
     void documentChanged();
+    void stylesChanged();
     void rangeChanged();
 
 private:
@@ -58,9 +66,13 @@ private:
         apply();
     }
     void apply();
+    // Sets the paragraph's own formatting back on the characters from start
+    // to end, clearing whatever was there.
+    void restyle(int start, int end);
     QTextDocument *textDocument() const;
 
     QPointer<QQuickTextDocument> m_document;
+    QVariantList m_styles;
     int m_sentenceStart = -1, m_sentenceEnd = -1, m_wordStart = -1, m_wordEnd = -1;
     QColor m_sentenceColor, m_wordColor, m_wordTextColor;
     double m_lineHeight = 1.0;

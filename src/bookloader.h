@@ -27,6 +27,9 @@ public:
     static QList<Paragraph> htmlParagraphs(const QByteArray &html, QString *title = nullptr);
     static QList<Chapter> textChapters(const QString &text);
     static QList<Chapter> markdownChapters(const QString &text);
+    // One paragraph's inline Markdown as the text it reads, with the
+    // emphasis, code and strikethrough it marked kept as styles.
+    static QString markdownInline(const QString &markdown, QList<TextStyle> *styles = nullptr);
     static QList<Chapter> pdfChapters(const QString &pdftotextOutput, const QList<PdfOutlineItem> &outline = {},
                                       int pagesPerChapter = 10);
     static QList<PdfOutlineItem> pdfOutline(const QString &pdftohtmlXml);

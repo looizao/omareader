@@ -272,5 +272,14 @@
   "%1 wasn't connected.": "O %1 não foi conectado.",
   "%1 is connected": "O %1 está conectado",
   "%1 refused the sign-in: %2": "O %1 recusou o acesso: %2",
-  "no lasting sign-in came back": "nenhum acesso duradouro foi devolvido"
+  "no lasting sign-in came back": "nenhum acesso duradouro foi devolvido",
+  "Remove from the library (Delete)": "Remover da biblioteca (Delete)",
+  "Remove from the library": "Remover da biblioteca",
+  "Delete this text?": "Apagar este texto?",
+  "Remove this book?": "Remover este livro?",
+  "“%1” leaves the library and goes to the trash, where you can still restore it.": "“%1” sai da biblioteca e vai para a lixeira, de onde ainda pode ser restaurado.",
+  "“%1” leaves the library. The file itself stays where it is.": "“%1” sai da biblioteca. O arquivo continua onde está.",
+  "Delete": "Apagar",
+  "Remove": "Remover",
+  "Remove the selected book from the library": "Remover o livro selecionado da biblioteca"
 }
