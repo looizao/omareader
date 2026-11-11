@@ -14,7 +14,7 @@ QString fromText(const QString &text, int maxWords, int maxLength) {
     // Only the start matters, and a title needs only its words.
     // A heading at the very top already names the text.
     QStringList read;
-    const QList<Chapter> chapters = BookLoader::markdownChapters(text.left(4000));
+    const QList<Chapter> chapters = BookLoader::markdownChapters(text.left(4000), false);
     for (const Chapter &chapter : chapters)
         for (const Paragraph &paragraph : chapter.paragraphs)
             read << paragraph.text;

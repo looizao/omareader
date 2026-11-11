@@ -91,8 +91,9 @@ be restored.
 
 Pasted text is read as Markdown, as text from chat apps and notes often is:
 `**bold**`, `*italic*`, `` `code` ``, `~~struck~~`, headings, lists and links
-show formatted, and the voice reads the words, never the marks. Code blocks
-are skipped, as in Markdown books. Lines with no blank line between them stay
+show formatted, and the voice reads the words, never the marks. Headings stay
+headings, but the text stays one chapter. Code blocks are skipped, as in
+Markdown books. Lines with no blank line between them stay
 separate paragraphs.
 
 The title starts as the text's first few words (or its heading, when it opens

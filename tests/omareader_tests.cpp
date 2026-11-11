@@ -384,6 +384,17 @@ private slots:
             QVERIFY2(!book->sentenceText(i).contains('`'), qPrintable(book->sentenceText(i)));
         }
 
+        // Headings in pasted text stay headings, but the text stays one chapter.
+        const QString sections = library.addText(
+            "Sections", "# One\n\nFirst part.\n\n## Two\n\nSecond part.\n\n# Three\n\nThird part.");
+        const auto whole = BookLoader::load(sections, &error);
+        QVERIFY2(whole, qPrintable(error));
+        QCOMPARE(whole->chapters.size(), 1);
+        QCOMPARE(whole->chapters.first().title, QString("Sections"));
+        QCOMPARE(whole->chapters.first().paragraphs.size(), 6);
+        QCOMPARE(whole->chapters.first().paragraphs[2].text, QString("Two"));
+        QCOMPARE(whole->chapters.first().paragraphs[2].level, 2);
+
         // Pasted lines with no blank line between them stay separate paragraphs.
         const auto lines = BookLoader::markdownChapters("First line.\n*Second* line.\nThird line.");
         QCOMPARE(lines.first().paragraphs.size(), 3);

@@ -550,7 +550,7 @@ QString BookLoader::markdownInline(const QString &markdown, QList<TextStyle> *st
     return out;
 }
 
-QList<Chapter> BookLoader::markdownChapters(const QString &input) {
+QList<Chapter> BookLoader::markdownChapters(const QString &input, bool headingChapters) {
     QString text = input;
     text.replace("\r\n", "\n").replace('\r', '\n');
     // YAML front matter is metadata, not reading text.
@@ -593,9 +593,10 @@ QList<Chapter> BookLoader::markdownChapters(const QString &input) {
             const int level = int(heading.captured(1).size());
             QList<TextStyle> styles;
             const QString title = markdownInline(heading.captured(2), &styles);
-            if (level <= 2 && (!chapters.last().paragraphs.isEmpty() || !chapters.last().title.isEmpty()))
+            const bool chapterHeading = headingChapters && level <= 2;
+            if (chapterHeading && (!chapters.last().paragraphs.isEmpty() || !chapters.last().title.isEmpty()))
                 chapters.append(Chapter{});
-            if (level <= 2 && chapters.last().title.isEmpty())
+            if (chapterHeading && chapters.last().title.isEmpty())
                 chapters.last().title = title;
             chapters.last().paragraphs.append({title, level, styles});
             continue;
@@ -1273,8 +1274,9 @@ bool BookLoader::loadPastedText(Book &book, const QByteArray &data, QString *err
     book.format = "text";
     book.title = o.value("title").toString().simplified();
     // Pasted text often comes from chat apps and notes written in Markdown,
-    // whose marks read as formatting rather than aloud.
-    book.chapters = markdownChapters(o.value("text").toString());
+    // whose marks read as formatting rather than aloud. It is one piece,
+    // however many headings it has, so it stays one chapter.
+    book.chapters = markdownChapters(o.value("text").toString(), false);
     return true;
 }
 

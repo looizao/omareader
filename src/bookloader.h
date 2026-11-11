@@ -26,7 +26,9 @@ public:
     // Exposed for tests.
     static QList<Paragraph> htmlParagraphs(const QByteArray &html, QString *title = nullptr);
     static QList<Chapter> textChapters(const QString &text);
-    static QList<Chapter> markdownChapters(const QString &text);
+    // Top-level headings (# and ##) start chapters in a Markdown book; pasted
+    // text passes false and stays one chapter, its headings kept as headings.
+    static QList<Chapter> markdownChapters(const QString &text, bool headingChapters = true);
     // One paragraph's inline Markdown as the text it reads, with the
     // emphasis, code and strikethrough it marked kept as styles.
     static QString markdownInline(const QString &markdown, QList<TextStyle> *styles = nullptr);
