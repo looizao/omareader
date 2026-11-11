@@ -19,9 +19,15 @@ in order, before it counts as done:
      container build and tests, the package, the release) runs on GitHub,
      and only a green GitHub run counts. Don't stand in for it by running
      the workflow locally (act, podman, docker).
-   - When the change touches the window, look at it: drive the real QML
-     offscreen (`QT_QPA_PLATFORM=offscreen`, load `qrc:/Main.qml`, save
-     `window->grabWindow()`) and check the screenshot. When it touches
+   - When the change touches the window, test what is drawn, not just the
+     logic. `AppWindow` in `tests/omareader_tests.cpp` loads the real
+     `qrc:/Main.qml` offscreen with everything `main()` gives it; add a test
+     that grabs it and checks the pixels (see
+     `libraryRemoveButtonDrawsItsCrossCentred`, which measures where the
+     cross is drawn inside its circle). Then look at it yourself:
+     `OMAREADER_SCREENSHOTS=<folder> bin/test <test>` saves each shot.
+     Crop and enlarge small controls (icons, badges, buttons) before
+     judging them; at full size an off-centre glyph looks fine. When it touches
      narration, run it against the real `koko` with the audio sink muted
      (`wpctl set-mute @DEFAULT_AUDIO_SINK@ 1`, unmuted afterwards).
    - For changes to how books are parsed, check `omareader info` and
@@ -101,5 +107,8 @@ environment's secrets; never print it or commit it.
   colour, hence `Colors.qml`.
 - The offscreen renderer drops Material's elevated button backgrounds; draw
   prominent buttons yourself (`AccentButton.qml`).
+- Material's `Button` lays its `contentItem` out with paddings of its own,
+  even with `padding: 0`, so a drawn icon there ends up off centre. Draw
+  icons on the `background` instead, as the library's remove button does.
 - Tests point `HOME` and `XDG_*` at temp directories so they never see the
   real library or the installed model; keep it that way.

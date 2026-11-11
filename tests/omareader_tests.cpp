@@ -4,6 +4,11 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QProcess>
+#include <functional>
+#include <QQuickWindow>
+#include <QQuickStyle>
+#include <QQmlContext>
+#include <QQmlApplicationEngine>
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QQuickTextDocument>
@@ -45,6 +50,99 @@
 #include "translator.h"
 #include "voicesettings.h"
 #include "zipwriter.h"
+
+// The real window (qrc:/Main.qml) with everything main() gives it, drawn
+// offscreen, so tests can check what is actually on screen. Set
+// OMAREADER_SCREENSHOTS to a folder to keep each shot for a look.
+class AppWindow {
+public:
+    AppWindow(const QString &dir)
+        : library(dir + "/library.json", dir + "/covers"), reader(&library, &narrator, nullptr),
+          sync(&library, &tokens, dir + "/sync.json") {
+        reader.setExporter(&exporter);
+        qmlRegisterType<ReadingHighlight>("Omareader", 1, 0, "ReadingHighlight");
+        qmlRegisterUncreatableType<Narrator>("Omareader", 1, 0, "Narrator", "Use the narrator context property.");
+        qmlRegisterUncreatableType<Exporter>("Omareader", 1, 0, "Exporter", "Use the exporter context property.");
+        QQuickStyle::setStyle("Material");
+        auto *context = engine.rootContext();
+        context->setContextProperty("translator", &translator);
+        context->setContextProperty("theme", &theme);
+        context->setContextProperty("library", &library);
+        context->setContextProperty("narrator", &narrator);
+        context->setContextProperty("reader", &reader);
+        context->setContextProperty("exporter", &exporter);
+        context->setContextProperty("titleAgent", &titleAgent);
+        context->setContextProperty("sync", &sync);
+    }
+
+    bool show(QSize size = {1100, 720}) {
+        engine.load(QUrl("qrc:/Main.qml"));
+        window = engine.rootObjects().isEmpty() ? nullptr : qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        if (!window)
+            return false;
+        window->resize(size);
+        window->show();
+        return QTest::qWaitForWindowExposed(window);
+    }
+
+    // Every visible item with this objectName, including those in views'
+    // delegates, which findChild() can't see.
+    QList<QQuickItem *> items(const QString &name) const {
+        QList<QQuickItem *> found;
+        std::function<void(QQuickItem *)> walk = [&](QQuickItem *item) {
+            if (item->objectName() == name && item->isVisible())
+                found.append(item);
+            for (QQuickItem *child : item->childItems())
+                walk(child);
+        };
+        walk(window->contentItem());
+        return found;
+    }
+
+    QImage grab(const QString &name) {
+        QTest::qWait(300);
+        const QImage image = window->grabWindow();
+        const QString folder = qEnvironmentVariable("OMAREADER_SCREENSHOTS");
+        if (!folder.isEmpty()) {
+            QDir().mkpath(folder);
+            image.save(folder + "/" + name + ".png");
+        }
+        return image;
+    }
+
+    // An item's area of a grab, in the grab's pixels.
+    QRect area(const QImage &image, QQuickItem *item) const {
+        const qreal ratio = image.devicePixelRatio();
+        const QRectF r = item->mapRectToScene(QRectF(0, 0, item->width(), item->height()));
+        return QRect(qRound(r.x() * ratio), qRound(r.y() * ratio), qRound(r.width() * ratio), qRound(r.height() * ratio));
+    }
+
+    Translator translator;
+    Theme theme;
+    Library library;
+    Narrator narrator;
+    Reader reader;
+    Exporter exporter;
+    TitleAgent titleAgent;
+    MemoryTokenStore tokens;
+    SyncService sync;
+    QQmlApplicationEngine engine;
+    QQuickWindow *window = nullptr;
+};
+
+// Where the light marks inside a round control sit: the bounding box of the
+// pixels brighter than the threshold within the circle inscribed in area,
+// so whatever shows past the circle's edge is left out.
+static QRect brightBoxInCircle(const QImage &image, const QRect &area, int threshold = 190) {
+    const QPointF centre = QRectF(area).center();
+    const qreal radius = qMin(area.width(), area.height()) / 2.0 - 2;
+    QRect box;
+    for (int y = area.top(); y <= area.bottom(); ++y)
+        for (int x = area.left(); x <= area.right(); ++x)
+            if (QLineF(centre, QPointF(x + 0.5, y + 0.5)).length() <= radius && qGray(image.pixel(x, y)) > threshold)
+                box |= QRect(x, y, 1, 1);
+    return box;
+}
 
 // Every book here is made up inside the test, so nothing personal or
 // copyrighted is checked in.
@@ -2575,6 +2673,30 @@ private slots:
         write(dir.filePath("old.json"), QJsonDocument(old).toJson());
         SyncService before(&library, &tokens, dir.filePath("old.json"));
         QCOMPARE(before.provider(), QString("dropbox"));
+    }
+
+    // The real window, offscreen.
+
+    void libraryRemoveButtonDrawsItsCrossCentred() {
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        app.library.addText("Dialog, Narration, and Agent Title Testing", "Some text to read.");
+        QVERIFY(app.show());
+        // The button shows on the card the keyboard is on, the first one.
+        QTRY_COMPARE(app.items("removeBookButton").size(), 1);
+        QQuickItem *button = app.items("removeBookButton").first();
+        const QImage shot = app.grab("library-remove-button");
+        const QRect area = app.area(shot, button);
+        if (!qEnvironmentVariableIsEmpty("OMAREADER_SCREENSHOTS"))
+            shot.copy(area.adjusted(-8, -8, 8, 8)).scaled(area.width() * 8, area.height() * 8)
+                .save(qEnvironmentVariable("OMAREADER_SCREENSHOTS") + "/library-remove-button-zoom.png");
+        const QRect cross = brightBoxInCircle(shot, area);
+        QVERIFY2(cross.isValid(), "no cross drawn on the button");
+        const QPointF offset = QRectF(cross).center() - QRectF(area).center();
+        QVERIFY2(qAbs(offset.x()) <= 1.0 && qAbs(offset.y()) <= 1.0,
+                 qPrintable(QString("the cross is %1, %2 px off the button's centre").arg(offset.x()).arg(offset.y())));
+        // And it is a cross, not a dot: about 12 px each way.
+        QVERIFY2(cross.width() >= 7 && cross.height() >= 7, qPrintable(QString("cross is %1x%2").arg(cross.width()).arg(cross.height())));
     }
 
 private:

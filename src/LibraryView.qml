@@ -223,13 +223,15 @@ FocusScope {
                     ToolTip.visible: hovered
                     ToolTip.text: qsTr("Remove from the library (Delete)")
                     Accessible.name: qsTr("Remove from the library")
+                    // The cross is drawn on the circle itself: Material lays a
+                    // button's content out with paddings of its own, which
+                    // pushed a contentItem off centre.
+                    contentItem: Item {}
                     background: Rectangle {
                         radius: width / 2
                         color: removeButton.hovered ? theme.accent : Qt.alpha(Colors.background, 0.85)
                         border.color: removeButton.hovered ? theme.accent : Colors.line
-                    }
-                    // A cross drawn from two bars, so it looks the same in every font.
-                    contentItem: Item {
+                        // Two bars, so it looks the same in every font.
                         Repeater {
                             model: [45, -45]
                             Rectangle {
@@ -239,6 +241,7 @@ FocusScope {
                                 height: 2
                                 radius: 1
                                 rotation: modelData
+                                antialiasing: true
                                 color: removeButton.hovered ? theme.accentForeground : Colors.text
                             }
                         }
