@@ -146,6 +146,23 @@ number for another reading of the same text. Each engine remembers its own
 settings. Changing one while reading rebuilds the audio ahead from the
 sentence you are on.
 
+## Focus mode
+
+If your attention drifts while you read, press Z (or the ◎ button) for focus
+mode, which quiets everything that competes with the words being read. While
+the voice reads, it can:
+
+- **Spotlight** the paragraph or the sentence being read, dimming the rest.
+- **Fade what was read**, so your eye is drawn forward rather than back.
+- **Hold the spoken line steady** about a third of the way down, scrolling
+  the text smoothly under it line by line instead of jumping.
+- **Hide the controls** while the voice plays; move the mouse or press any
+  key to bring them back for a moment.
+
+Choose which of these focus mode turns on under Focus in the settings (A).
+The Page settings also choose what the highlight marks (the word, the
+sentence or both) and how strongly, with or without focus mode.
+
 ## Exporting audio
 
 Press E (or the ⤓ button) to turn the whole book into audio for your phone, a
@@ -174,6 +191,7 @@ replaced. Exports need `ffmpeg`.
 | `[` / `]` | Slower / faster |
 | S | Stop reading aloud |
 | F | Back to the voice after scrolling |
+| Z | Focus mode |
 | ← / → (or H / L) | Previous / next chapter |
 | ↑ ↓ (or K / J), PgUp, PgDn | Scroll |
 | T | Contents |
@@ -233,8 +251,8 @@ omareader skill install                  # agent skill for ~/.claude/skills
   page; `src/article.cpp` parses it without running anything, scores its
   blocks as Mozilla's Readability does to find the article, and writes it
   out as the Markdown pasted text is kept in.
-- `src/highlight.cpp` colours that word inside the paragraph without changing
-  its layout.
+- `src/highlight.cpp` colours that word inside the paragraph, and in focus
+  mode fades the text around it, without changing its layout.
 - `src/exporter.cpp` synthesises the book for exports and pipes the
   samples into `ffmpeg`, then joins the chapters into one file with chapter
   markers, or keeps them as a folder of tracks.

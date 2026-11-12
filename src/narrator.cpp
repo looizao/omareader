@@ -302,6 +302,11 @@ void Narrator::setState(State state) {
     emit wordChanged();
 }
 
+void Narrator::showForTests(State state, int sentence, int word) {
+    setPosition(sentence, word);
+    setState(state);
+}
+
 void Narrator::setError(const QString &error) {
     if (error == m_error)
         return;

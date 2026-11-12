@@ -2,15 +2,29 @@ import QtQuick
 import Omareader
 
 // One paragraph of the chapter. The sentence being read and the word being
-// spoken are coloured in place; clicking a word reads aloud from there.
+// spoken are coloured in place; clicking a word reads aloud from there. In
+// focus mode the paragraphs around the voice dim, and what was read fades.
 Item {
     id: root
+    objectName: "bookParagraph"
     required property int index
     required property var modelData
 
     readonly property int level: modelData.level
-    readonly property bool reading: narrator.active && narrator.chapter === reader.chapter
-                                    && narrator.paragraph === root.index
+    readonly property bool narrating: narrator.active && narrator.chapter === reader.chapter
+    readonly property bool reading: narrating && narrator.paragraph === root.index
+    readonly property bool focusing: narrating && reader.focusMode
+    readonly property bool fading: focusing && reader.fadeRead
+    readonly property bool spotlit: focusing && reader.spotlight !== "off"
+    // How much of the text still shows: read text fades further than the
+    // text still to come, so the eye is drawn forward.
+    readonly property real readOpacity: 0.22
+    readonly property real dimOpacity: 0.38
+
+    opacity: root.reading ? 1
+           : root.fading && root.index < narrator.paragraph ? root.readOpacity
+           : root.spotlit ? root.dimOpacity : 1
+    Behavior on opacity { NumberAnimation { duration: 240; easing.type: Easing.OutQuad } }
 
     width: ListView.view ? ListView.view.width : 0
     height: body.height + (level > 0 ? reader.fontSize * 1.4 : reader.fontSize * 0.8)
@@ -51,9 +65,21 @@ Item {
         sentenceEnd: root.reading ? narrator.sentenceEnd : -1
         wordStart: root.reading ? narrator.wordStart : -1
         wordEnd: root.reading ? narrator.wordEnd : -1
-        sentenceColor: Qt.alpha(theme.accent, 0.14)
-        wordColor: theme.accent
-        wordTextColor: theme.accentForeground
+        readEnd: root.reading && root.fading
+                 ? (narrator.wordStart >= 0 ? narrator.wordStart : narrator.sentenceStart) : -1
+        readColor: Qt.alpha(body.color, root.readOpacity)
+        quietColor: root.reading && root.spotlit && reader.spotlight === "sentence"
+                    ? Qt.alpha(body.color, root.dimOpacity) : "transparent"
+
+        // The highlight marks the word, the sentence or both, as strongly as
+        // the reader asked. A subtle word is coloured, not boxed.
+        readonly property bool showSentence: reader.highlight !== "word"
+        readonly property bool showWord: reader.highlight !== "sentence"
+        readonly property bool subtle: reader.highlightStrength === "subtle"
+        sentenceColor: !showSentence ? "transparent"
+                     : Qt.alpha(theme.accent, subtle ? 0.07 : reader.highlightStrength === "strong" ? 0.28 : 0.14)
+        wordColor: showWord && !subtle ? theme.accent : "transparent"
+        wordTextColor: !showWord ? "transparent" : subtle ? theme.accent : theme.accentForeground
     }
 
     MouseArea {

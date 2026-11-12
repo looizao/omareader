@@ -468,6 +468,66 @@ private slots:
         QVERIFY(weightAt(16) != int(QFont::Bold));
     }
 
+    void highlightFadesWhatWasReadAndQuietsTheRest() {
+        QQmlEngine engine;
+        QQmlComponent component(&engine);
+        //                                               0         1         2         3
+        //                                               0123456789012345678901234567890123456
+        component.setData("import QtQuick\nTextEdit { text: \"One done. Two being read. Three next.\" }", QUrl());
+        std::unique_ptr<QObject> edit(component.create());
+        QVERIFY2(edit, qPrintable(component.errorString()));
+        auto *quickDocument = edit->property("textDocument").value<QQuickTextDocument *>();
+        QTextDocument *document = quickDocument->textDocument();
+        auto formatAt = [&](int position) {
+            QTextCursor cursor(document);
+            cursor.setPosition(position + 1);
+            return cursor.charFormat();
+        };
+        auto foregroundAt = [&](int position) {
+            const QTextCharFormat format = formatAt(position);
+            return format.hasProperty(QTextFormat::ForegroundBrush) ? format.foreground().color() : QColor();
+        };
+
+        const QColor read("#202020"), quiet("#404040"), word("#ffd60a"), wordText("#101010");
+        ReadingHighlight highlight;
+        highlight.setDocument(quickDocument);
+        highlight.setSentenceStart(10);
+        highlight.setSentenceEnd(25);
+        highlight.setWordStart(14);
+        highlight.setWordEnd(19);
+        highlight.setWordColor(word);
+        highlight.setWordTextColor(wordText);
+        highlight.setReadColor(read);
+        highlight.setQuietColor(quiet);
+        highlight.setReadEnd(14);
+        // Before the word: read. The word: highlighted. After it, in the
+        // sentence: untouched. Past the sentence: quiet.
+        QCOMPARE(foregroundAt(2), read);
+        QCOMPARE(foregroundAt(11), read);
+        QCOMPARE(foregroundAt(15), wordText);
+        QCOMPARE(formatAt(15).background().color(), word);
+        QVERIFY(!foregroundAt(21).isValid());
+        QCOMPARE(foregroundAt(30), quiet);
+
+        // Without a quiet colour, only what was read changes.
+        highlight.setQuietColor(Qt::transparent);
+        QVERIFY(!foregroundAt(30).isValid());
+        QCOMPARE(foregroundAt(2), read);
+        // A transparent word colour leaves the word's background alone and
+        // marks it with the text colour only.
+        highlight.setWordColor(Qt::transparent);
+        QVERIFY(!formatAt(15).hasProperty(QTextFormat::BackgroundBrush));
+        QCOMPARE(foregroundAt(15), wordText);
+        // When reading stops, every colour is taken off again.
+        highlight.setSentenceStart(-1);
+        highlight.setSentenceEnd(-1);
+        highlight.setWordStart(-1);
+        highlight.setWordEnd(-1);
+        highlight.setReadEnd(-1);
+        for (int position : {2, 11, 15, 21, 30})
+            QVERIFY2(!foregroundAt(position).isValid(), qPrintable(QString::number(position)));
+    }
+
     void pdfTextReflows() {
         const QString output = "The quick brown fox jumps over the lazy dog and keeps run-\n"
                                "ning far away.\n\n12\n\fit continues on the next page.\nA new one.\n";
@@ -937,7 +997,7 @@ private slots:
         const QJsonObject catalog = QJsonDocument::fromJson(file.readAll()).object();
         static const QRegularExpression call("\\b(?:qsTr|tr)\\(\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
         int found = 0;
-        for (const QString name : {"src/SettingsPanel.qml", "src/ExportDialog.qml"}) {
+        for (const QString name : {"src/SettingsPanel.qml", "src/ExportDialog.qml", "src/ReaderView.qml"}) {
             QFile source(QString(OMAREADER_SOURCE) + "/" + name);
             QVERIFY(source.open(QIODevice::ReadOnly));
             const QString text = QString::fromUtf8(source.readAll());
@@ -2296,6 +2356,48 @@ private slots:
         QCOMPARE(reader.lineHeight(), 1.0);
     }
 
+    void readerFocusSettingsAreCheckedAndRemembered() {
+        QSettings().remove("reader");
+        {
+            Reader reader(nullptr, nullptr, nullptr);
+            // Focus mode starts off; what it turns on is ready for when it is.
+            QVERIFY(!reader.focusMode());
+            QCOMPARE(reader.spotlight(), QString("paragraph"));
+            QVERIFY(reader.fadeRead());
+            QVERIFY(reader.steadyLine());
+            QVERIFY(reader.hideControls());
+            QCOMPARE(reader.highlight(), QString("both"));
+            QCOMPARE(reader.highlightStrength(), QString("normal"));
+
+            QSignalSpy changed(&reader, &Reader::focusChanged);
+            reader.setSpotlight("everything");
+            reader.setHighlight("none");
+            reader.setHighlightStrength("blinding");
+            QCOMPARE(reader.spotlight(), QString("paragraph"));
+            QCOMPARE(reader.highlight(), QString("both"));
+            QCOMPARE(reader.highlightStrength(), QString("normal"));
+            QCOMPARE(changed.size(), 0);
+
+            reader.setFocusMode(true);
+            reader.setSpotlight("sentence");
+            reader.setFadeRead(false);
+            reader.setSteadyLine(false);
+            reader.setHideControls(false);
+            reader.setHighlight("word");
+            reader.setHighlightStrength("strong");
+            QCOMPARE(changed.size(), 7);
+        }
+        Reader again(nullptr, nullptr, nullptr);
+        QVERIFY(again.focusMode());
+        QCOMPARE(again.spotlight(), QString("sentence"));
+        QVERIFY(!again.fadeRead());
+        QVERIFY(!again.steadyLine());
+        QVERIFY(!again.hideControls());
+        QCOMPARE(again.highlight(), QString("word"));
+        QCOMPARE(again.highlightStrength(), QString("strong"));
+        QSettings().remove("reader");
+    }
+
     // The real window, offscreen.
 
     void libraryRemoveButtonDrawsItsCrossCentred() {
@@ -2318,6 +2420,269 @@ private slots:
                  qPrintable(QString("the cross is %1, %2 px off the button's centre").arg(offset.x()).arg(offset.y())));
         // And it is a cross, not a dot: about 12 px each way.
         QVERIFY2(cross.width() >= 7 && cross.height() >= 7, qPrintable(QString("cross is %1x%2").arg(cross.width()).arg(cross.height())));
+    }
+
+    void focusModeDimsAllButTheVoice() {
+        QSettings().remove("reader");
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        QVERIFY(app.show());
+        // Three paragraphs; the middle one has two sentences.
+        const QString words = " has plain words in it, enough of them to wrap across a few lines of the column.";
+        QVERIFY(app.reader.addText("Focus", "First" + words + "\n\nSecond" + words + " Third" + words + "\n\nFourth" + words));
+        QTRY_VERIFY(app.reader.hasBook());
+        QTRY_COMPARE(app.items("bookParagraph").size(), 3);
+        // The mouse waits below the text, where it raises no tooltip over it.
+        QTest::mouseMove(app.window, QPoint(550, 500));
+        // The voice is on the fifth word of the second paragraph's first sentence.
+        app.narrator.showForTests(Narrator::Paused, 1, 4);
+        QCOMPARE(app.narrator.paragraph(), 1);
+
+        auto light = [&](const QString &name) {
+            const QImage shot = app.grab(name);
+            QList<int> counts(3);
+            for (QQuickItem *item : app.items("bookParagraph"))
+                counts[item->property("index").toInt()] = brightPixels(shot, app.area(shot, item));
+            return counts;
+        };
+        const QList<int> plain = light("focus-off");
+        for (int count : plain)
+            QVERIFY(count > 500);
+
+        app.reader.setFocusMode(true);
+        app.reader.setFadeRead(false);
+        const QList<int> paragraph = light("focus-spotlight-paragraph");
+        QVERIFY2(paragraph[0] < plain[0] / 10 && paragraph[2] < plain[2] / 10,
+                 qPrintable(QString("around the voice: %1 and %2 of %3 and %4").arg(paragraph[0]).arg(paragraph[2]).arg(plain[0]).arg(plain[2])));
+        QVERIFY2(paragraph[1] > plain[1] * 0.95, qPrintable(QString("%1 of %2").arg(paragraph[1]).arg(plain[1])));
+
+        // The sentence spotlight quiets the paragraph's second sentence too.
+        app.reader.setSpotlight("sentence");
+        const QList<int> sentence = light("focus-spotlight-sentence");
+        QVERIFY2(sentence[1] < paragraph[1] * 0.75 && sentence[1] > paragraph[1] * 0.25,
+                 qPrintable(QString("%1 of %2").arg(sentence[1]).arg(paragraph[1])));
+
+        // The trail fades what was read, and leaves what is to come.
+        app.reader.setSpotlight("off");
+        app.reader.setFadeRead(true);
+        const QList<int> trail = light("focus-trail");
+        QVERIFY(trail[0] < plain[0] / 10);
+        QVERIFY(trail[2] > plain[2] * 0.95);
+        QVERIFY2(trail[1] < plain[1] * 0.95 && trail[1] > plain[1] * 0.6,
+                 qPrintable(QString("%1 of %2").arg(trail[1]).arg(plain[1])));
+
+        // Without narration, nothing dims (and the highlight goes too).
+        app.narrator.stop();
+        const QList<int> stopped = light("focus-stopped");
+        QVERIFY(stopped[0] > plain[0] * 0.95);
+        QVERIFY(stopped[1] > plain[1] * 0.7);
+        QVERIFY(stopped[2] > plain[2] * 0.95);
+        app.reader.closeBook();
+        QSettings().remove("reader");
+    }
+
+    void highlightStylesChangeWhatIsMarked() {
+        QSettings().remove("reader");
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        QVERIFY(app.show());
+        QVERIFY(app.reader.addText("Styles", "One sentence with plain words in it to read aloud. And a second one after it."));
+        QTRY_COMPARE(app.items("bookParagraph").size(), 1);
+        app.narrator.showForTests(Narrator::Paused, 0, 3);
+        QQuickItem *paragraph = app.items("bookParagraph").first();
+
+        // How many pixels are filled with the accent, and how many are tinted with it.
+        auto marks = [&](const QString &name) {
+            const QImage shot = app.grab(name);
+            const QRect area = app.area(shot, paragraph);
+            int solid = 0, tint = 0;
+            for (int y = area.top(); y <= area.bottom(); ++y)
+                for (int x = area.left(); x <= area.right(); ++x) {
+                    const QColor c = shot.pixelColor(x, y);
+                    solid += c.red() > 200 && c.green() > 170 && c.blue() < 80;
+                    tint += c.red() > 25 && c.red() < 120 && c.red() > c.blue() + 12;
+                }
+            return std::pair{solid, tint};
+        };
+        const auto [boxed, tinted] = marks("highlight-both");
+        QVERIFY(boxed > 300);
+        QVERIFY(tinted > 1000);
+
+        app.reader.setHighlight("sentence");
+        const auto [sentenceSolid, sentenceTint] = marks("highlight-sentence");
+        QVERIFY2(sentenceSolid < 20, qPrintable(QString::number(sentenceSolid)));
+        QVERIFY(sentenceTint > 1000);
+
+        app.reader.setHighlight("word");
+        const auto [wordSolid, wordTint] = marks("highlight-word");
+        QVERIFY(wordSolid > 300);
+        QVERIFY2(wordTint < tinted / 4, qPrintable(QString("%1 of %2").arg(wordTint).arg(tinted)));
+
+        // A subtle word is written in the accent, not boxed in it.
+        app.reader.setHighlightStrength("subtle");
+        const auto [subtleSolid, subtleTint] = marks("highlight-word-subtle");
+        Q_UNUSED(subtleTint);
+        QVERIFY2(subtleSolid > 10 && subtleSolid < boxed / 3, qPrintable(QString("%1 of %2").arg(subtleSolid).arg(boxed)));
+
+        // A strong sentence is tinted more deeply than a normal one.
+        auto sentenceShade = [&](const QString &strength) {
+            app.reader.setHighlight("sentence");
+            app.reader.setHighlightStrength(strength);
+            const QImage shot = app.grab("highlight-sentence-" + strength);
+            const QRect area = app.area(shot, paragraph);
+            int deepest = 0;
+            for (int y = area.top(); y <= area.bottom(); ++y)
+                for (int x = area.left(); x <= area.left() + area.width() / 2; ++x) {
+                    const QColor c = shot.pixelColor(x, y);
+                    if (c.red() < 120)
+                        deepest = qMax(deepest, c.red() - c.blue());
+                }
+            return deepest;
+        };
+        const int subtle = sentenceShade("subtle"), normal = sentenceShade("normal"), strong = sentenceShade("strong");
+        QVERIFY2(subtle < normal && normal < strong, qPrintable(QString("%1 %2 %3").arg(subtle).arg(normal).arg(strong)));
+        app.reader.closeBook();
+        QSettings().remove("reader");
+    }
+
+    void focusModeHoldsTheSpokenLineSteady() {
+        QSettings().remove("reader");
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        QVERIFY(app.show());
+        QStringList paragraphs;
+        for (int i = 0; i < 40; ++i)
+            paragraphs << QString("Paragraph %1 has plain words in it, enough of them to wrap across a few lines.").arg(i + 1);
+        QVERIFY(app.reader.addText("Steady", paragraphs.join("\n\n")));
+        QTRY_VERIFY(!app.items("bookParagraph").isEmpty());
+        QQuickItem *list = app.items("chapterList").value(0);
+        QVERIFY(list);
+
+        // Where the spoken word's box is drawn, from the top of the text.
+        auto wordTop = [&](int sentence, const QString &name) {
+            app.narrator.showForTests(Narrator::Paused, sentence, 2);
+            QTest::qWait(600);
+            const QImage shot = app.grab(name);
+            const QRect area = app.area(shot, list);
+            for (int y = area.top(); y <= area.bottom(); ++y)
+                for (int x = area.left(); x <= area.right(); ++x) {
+                    const QColor c = shot.pixelColor(x, y);
+                    if (c.red() > 200 && c.green() > 170 && c.blue() < 80)
+                        return (y - area.top()) / shot.devicePixelRatio();
+                }
+            return -1.0;
+        };
+        // Without it, the view jumps when the voice nears the edge, so the
+        // word lands at different heights.
+        const qreal jumpA = wordTop(12, "steady-off-a"), jumpB = wordTop(14, "steady-off-b");
+        QVERIFY(jumpA >= 0 && jumpB >= 0);
+        QVERIFY2(qAbs(jumpA - jumpB) > 20, qPrintable(QString("%1 and %2").arg(jumpA).arg(jumpB)));
+
+        app.reader.setFocusMode(true);
+        const qreal line = list->height() * 0.33;
+        for (int sentence : {12, 14, 21, 22}) {
+            const qreal top = wordTop(sentence, QString("steady-%1").arg(sentence));
+            QVERIFY2(qAbs(top - line) < app.reader.fontSize() * 2,
+                     qPrintable(QString("sentence %1 at %2, the line is at %3").arg(sentence).arg(top).arg(line)));
+        }
+        app.narrator.stop();
+        app.reader.closeBook();
+        QSettings().remove("reader");
+    }
+
+    void focusModeHidesTheBarsWhileTheVoicePlays() {
+        QSettings().remove("reader");
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        QVERIFY(app.show());
+        QVERIFY(app.reader.addText("Quiet", "Words to read aloud while the bars step away."));
+        QTRY_COMPARE(app.items("bookParagraph").size(), 1);
+        QQuickItem *title = app.items("titleBar").value(0);
+        QQuickItem *bar = app.items("narrationBar").value(0);
+        QVERIFY(title && bar);
+        auto shows = [&](QQuickItem *item, const QString &name) {
+            const QImage shot = app.grab(name);
+            return brightPixels(shot, app.area(shot, item), 100);
+        };
+        const int titleShown = shows(title, "bars-shown"), barShown = shows(bar, "bars-shown");
+        QVERIFY(titleShown > 50 && barShown > 50);
+
+        // Off, they stay, even while the voice plays.
+        app.narrator.showForTests(Narrator::Playing, 0, 1);
+        QTest::qWait(3000);
+        QCOMPARE(title->opacity(), 1.0);
+
+        // On, they go once the mouse and keys have been still a moment...
+        app.reader.setFocusMode(true);
+        QTRY_COMPARE_WITH_TIMEOUT(title->opacity(), 0.0, 5000);
+        QTRY_COMPARE(bar->opacity(), 0.0);
+        QVERIFY(shows(title, "bars-hidden") < 5);
+        QVERIFY(shows(bar, "bars-hidden") < 5);
+        // A tooltip the resting mouse raised goes with them.
+        const QImage hidden = app.grab("bars-hidden");
+        QVERIFY(brightPixels(hidden, QRect(0, 0, 200 * hidden.devicePixelRatio(), 140 * hidden.devicePixelRatio()), 100) < 5);
+        // ...without moving the text.
+        QCOMPARE(bar->height(), 88.0);
+
+        // A mouse movement brings them back, and so does a key.
+        QTest::mouseMove(app.window, QPoint(300, 300));
+        QTest::mouseMove(app.window, QPoint(340, 320));
+        QTRY_COMPARE(title->opacity(), 1.0);
+        QTRY_COMPARE_WITH_TIMEOUT(title->opacity(), 0.0, 5000);
+        QTest::keyClick(app.window, Qt::Key_Shift);
+        QTRY_COMPARE(title->opacity(), 1.0);
+
+        // Paused, they stay.
+        app.narrator.showForTests(Narrator::Paused, 0, 1);
+        QTest::qWait(3000);
+        QCOMPARE(title->opacity(), 1.0);
+
+        // Z turns focus mode off and on again.
+        QTest::keyClick(app.window, Qt::Key_Z);
+        QVERIFY(!app.reader.focusMode());
+        QTest::keyClick(app.window, Qt::Key_Z);
+        QVERIFY(app.reader.focusMode());
+        app.narrator.stop();
+        app.reader.closeBook();
+        QSettings().remove("reader");
+    }
+
+    void settingsPanelOffersTheFocusAids() {
+        QSettings().remove("reader");
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        // Tall enough for the whole panel to show at once.
+        QVERIFY(app.show({1100, 1900}));
+        QVERIFY(app.reader.addText("Settings", "Some text to read."));
+        QTRY_VERIFY(app.reader.hasBook());
+        QObject *panel = app.window->findChild<QObject *>("settingsPanel");
+        QVERIFY(panel);
+        QMetaObject::invokeMethod(panel, "open");
+        QTRY_VERIFY(panel->property("opened").toBool());
+        QTRY_COMPARE(app.items("focusModeSwitch").size(), 1);
+        QQuickItem *toggle = app.items("focusModeSwitch").first();
+        QVERIFY(!toggle->property("checked").toBool());
+        app.reader.setFocusMode(true);
+        QVERIFY(toggle->property("checked").toBool());
+
+        // Every switch's label fits the panel.
+        QQuickItem *drawer = toggle;
+        while (drawer->parentItem() && drawer->parentItem() != app.window->contentItem())
+            drawer = drawer->parentItem();
+        std::function<void(QQuickItem *)> walk = [&](QQuickItem *item) {
+            if (item->isVisible() && QByteArray(item->metaObject()->className()).contains("Switch")) {
+                const QRectF r = item->mapRectToScene(QRectF(0, 0, item->implicitWidth(), item->height()));
+                const QRectF bounds = drawer->mapRectToScene(QRectF(0, 0, drawer->width(), drawer->height()));
+                QVERIFY2(r.right() <= bounds.right() + 1,
+                         qPrintable(item->property("text").toString() + " runs past the panel's edge"));
+            }
+            for (QQuickItem *child : item->childItems())
+                walk(child);
+        };
+        walk(drawer);
+        app.grab("settings-focus");
+        app.reader.closeBook();
+        QSettings().remove("reader");
     }
 
     void exportDialogOffersAudioFilesOnly() {

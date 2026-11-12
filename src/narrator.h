@@ -111,6 +111,9 @@ public:
     // pausing the narration first.
     Q_INVOKABLE void preview();
     Q_INVOKABLE void stopPreview();
+    // For tests: puts the narration at a word in a state, with no audio, so
+    // the window can be checked on machines without an audio device.
+    void showForTests(State state, int sentence, int word);
 
     // How many sentences the engine gets per run, and how far ahead of the
     // listener synthesis may go before it is held.

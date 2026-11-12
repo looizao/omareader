@@ -63,7 +63,7 @@ Rectangle {
                 enabled: narrator.active
                 contentItem: MediaIcon { kind: "previous"; color: parent.enabled ? Colors.text : Colors.muted }
                 onClicked: narrator.skip(-1)
-                ToolTip.visible: hovered
+                ToolTip.visible: hovered && bar.enabled
                 ToolTip.text: qsTr("Previous sentence (,)")
             }
 
@@ -75,7 +75,7 @@ Rectangle {
                 enabled: narrator.available
                 readonly property bool running: narrator.state === Narrator.Playing || narrator.state === Narrator.Preparing
                 onClicked: reader.togglePlay()
-                ToolTip.visible: hovered
+                ToolTip.visible: hovered && bar.enabled
                 ToolTip.text: narrator.available ? qsTr("Read aloud (Space)") : narrator.problem
                 background: Rectangle {
                     radius: width / 2
@@ -108,7 +108,7 @@ Rectangle {
                 enabled: narrator.active
                 contentItem: MediaIcon { kind: "next"; color: parent.enabled ? Colors.text : Colors.muted }
                 onClicked: narrator.skip(1)
-                ToolTip.visible: hovered
+                ToolTip.visible: hovered && bar.enabled
                 ToolTip.text: qsTr("Next sentence (.)")
             }
         }
@@ -121,7 +121,7 @@ Rectangle {
             ToolButton {
                 text: "−"
                 onClicked: narrator.speed = narrator.speed - 0.1
-                ToolTip.visible: hovered
+                ToolTip.visible: hovered && bar.enabled
                 ToolTip.text: qsTr("Slower ([)")
             }
             Label {
@@ -133,7 +133,7 @@ Rectangle {
             ToolButton {
                 text: "+"
                 onClicked: narrator.speed = narrator.speed + 0.1
-                ToolTip.visible: hovered
+                ToolTip.visible: hovered && bar.enabled
                 ToolTip.text: qsTr("Faster (])")
             }
             Label {

@@ -20,6 +20,18 @@ Reader::Reader(Library *library, Narrator *narrator, FilePicker *picker, QObject
     m_lineHeight = qBound(1.0, settings.value("reader/lineHeight", 1.5).toDouble(), 2.4);
     m_contentWidth = qBound(420, settings.value("reader/contentWidth", 720).toInt(), 1600);
     m_serif = settings.value("reader/serif", true).toBool();
+    m_focusMode = settings.value("reader/focusMode", false).toBool();
+    m_fadeRead = settings.value("reader/fadeRead", true).toBool();
+    m_steadyLine = settings.value("reader/steadyLine", true).toBool();
+    m_hideControls = settings.value("reader/hideControls", true).toBool();
+    // A choice saved by another version, or edited by hand, falls back to the default.
+    auto choice = [&](const char *key, const QStringList &allowed, const QString &fallback) {
+        const QString value = settings.value(key, fallback).toString();
+        return allowed.contains(value) ? value : fallback;
+    };
+    m_spotlight = choice("reader/spotlight", spotlights(), m_spotlight);
+    m_highlight = choice("reader/highlight", highlights(), m_highlight);
+    m_highlightStrength = choice("reader/highlightStrength", strengths(), m_highlightStrength);
 
     m_saveTimer.setSingleShot(true);
     m_saveTimer.setInterval(800);
@@ -336,6 +348,34 @@ void Reader::setSerif(bool serif) {
     m_serif = serif;
     QSettings().setValue("reader/serif", serif);
     emit appearanceChanged();
+}
+
+template <typename T> void Reader::setFocusSetting(T &member, const T &value, const char *key) {
+    if (member == value)
+        return;
+    member = value;
+    QSettings().setValue(key, value);
+    emit focusChanged();
+}
+
+void Reader::setFocusMode(bool on) { setFocusSetting(m_focusMode, on, "reader/focusMode"); }
+void Reader::setFadeRead(bool on) { setFocusSetting(m_fadeRead, on, "reader/fadeRead"); }
+void Reader::setSteadyLine(bool on) { setFocusSetting(m_steadyLine, on, "reader/steadyLine"); }
+void Reader::setHideControls(bool on) { setFocusSetting(m_hideControls, on, "reader/hideControls"); }
+
+void Reader::setSpotlight(const QString &spotlight) {
+    if (spotlights().contains(spotlight))
+        setFocusSetting(m_spotlight, spotlight, "reader/spotlight");
+}
+
+void Reader::setHighlight(const QString &highlight) {
+    if (highlights().contains(highlight))
+        setFocusSetting(m_highlight, highlight, "reader/highlight");
+}
+
+void Reader::setHighlightStrength(const QString &strength) {
+    if (strengths().contains(strength))
+        setFocusSetting(m_highlightStrength, strength, "reader/highlightStrength");
 }
 
 // Compiled as part of this file, not on its own; see omareader.pro.

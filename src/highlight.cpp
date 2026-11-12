@@ -95,7 +95,10 @@ void ReadingHighlight::apply() {
         return;
     m_applying = true;
     const int length = doc->characterCount() - 1;
-    auto range = [&](int start, int end, const QTextCharFormat &format, bool merge) {
+    if (m_appliedStart >= 0)
+        restyle(m_appliedStart, m_appliedEnd);
+    m_appliedStart = m_appliedEnd = -1;
+    auto mark = [&](int start, int end, const QTextCharFormat &format) {
         start = qBound(0, start, length);
         end = qBound(0, end, length);
         if (end <= start)
@@ -103,30 +106,37 @@ void ReadingHighlight::apply() {
         QTextCursor cursor(doc);
         cursor.setPosition(start);
         cursor.setPosition(end, QTextCursor::KeepAnchor);
-        if (merge)
-            cursor.mergeCharFormat(format);
-        else
-            cursor.setCharFormat(format);
+        cursor.mergeCharFormat(format);
+        m_appliedStart = m_appliedStart < 0 ? start : qMin(m_appliedStart, start);
+        m_appliedEnd = qMax(m_appliedEnd, end);
     };
+    // A colour that shows; a transparent one means "leave this alone".
+    auto shows = [](const QColor &c) { return c.isValid() && c.alpha() > 0; };
 
-    if (m_appliedStart >= 0)
-        restyle(m_appliedStart, m_appliedEnd);
-    m_appliedStart = m_appliedEnd = -1;
-
-    if (m_sentenceStart >= 0 && m_sentenceEnd > m_sentenceStart) {
+    const bool inSentence = m_sentenceStart >= 0 && m_sentenceEnd > m_sentenceStart;
+    if (inSentence && shows(m_quietColor)) {
+        QTextCharFormat quiet;
+        quiet.setForeground(m_quietColor);
+        mark(0, m_sentenceStart, quiet);
+        mark(m_sentenceEnd, length, quiet);
+    }
+    if (m_readEnd > 0 && shows(m_readColor)) {
+        QTextCharFormat read;
+        read.setForeground(m_readColor);
+        mark(0, m_readEnd, read);
+    }
+    if (inSentence && shows(m_sentenceColor)) {
         QTextCharFormat sentence;
         sentence.setBackground(m_sentenceColor);
-        range(m_sentenceStart, m_sentenceEnd, sentence, true);
-        m_appliedStart = m_sentenceStart;
-        m_appliedEnd = m_sentenceEnd;
+        mark(m_sentenceStart, m_sentenceEnd, sentence);
     }
-    if (m_wordStart >= 0 && m_wordEnd > m_wordStart) {
+    if (m_wordStart >= 0 && m_wordEnd > m_wordStart && (shows(m_wordColor) || shows(m_wordTextColor))) {
         QTextCharFormat word;
-        word.setBackground(m_wordColor);
-        word.setForeground(m_wordTextColor);
-        range(m_wordStart, m_wordEnd, word, true);
-        m_appliedStart = m_appliedStart < 0 ? m_wordStart : qMin(m_appliedStart, m_wordStart);
-        m_appliedEnd = qMax(m_appliedEnd, m_wordEnd);
+        if (shows(m_wordColor))
+            word.setBackground(m_wordColor);
+        if (shows(m_wordTextColor))
+            word.setForeground(m_wordTextColor);
+        mark(m_wordStart, m_wordEnd, word);
     }
     m_applying = false;
 }

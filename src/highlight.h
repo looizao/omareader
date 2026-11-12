@@ -10,8 +10,9 @@ class QTextDocument;
 
 // Colours the sentence being read and the word being spoken inside a
 // paragraph's TextEdit, over the paragraph's own inline styles (bold, italic,
-// code). The styles are laid on once with the text; the highlight changes
-// only colours, never fonts, so the layout stays put while it moves.
+// code), and fades the text around them when focus mode asks for it. The
+// styles are laid on once with the text; the highlight changes only colours,
+// never fonts, so the layout stays put while it moves.
 class ReadingHighlight : public QObject {
     Q_OBJECT
     Q_PROPERTY(QQuickTextDocument *document READ document WRITE setDocument NOTIFY documentChanged)
@@ -25,6 +26,12 @@ class ReadingHighlight : public QObject {
     Q_PROPERTY(QColor sentenceColor MEMBER m_sentenceColor WRITE setSentenceColor NOTIFY rangeChanged)
     Q_PROPERTY(QColor wordColor MEMBER m_wordColor WRITE setWordColor NOTIFY rangeChanged)
     Q_PROPERTY(QColor wordTextColor MEMBER m_wordTextColor WRITE setWordTextColor NOTIFY rangeChanged)
+    // The text before readEnd has been read and takes readColor; with a
+    // quietColor, the text outside the sentence takes that. Transparent
+    // colours leave the text as it is.
+    Q_PROPERTY(int readEnd MEMBER m_readEnd WRITE setReadEnd NOTIFY rangeChanged)
+    Q_PROPERTY(QColor readColor MEMBER m_readColor WRITE setReadColor NOTIFY rangeChanged)
+    Q_PROPERTY(QColor quietColor MEMBER m_quietColor WRITE setQuietColor NOTIFY rangeChanged)
     // TextEdit has no lineHeight of its own; this sets it on the document.
     Q_PROPERTY(double lineHeight MEMBER m_lineHeight WRITE setLineHeight NOTIFY rangeChanged)
 
@@ -42,6 +49,9 @@ public:
     void setSentenceColor(const QColor &c) { set(m_sentenceColor, c); }
     void setWordColor(const QColor &c) { set(m_wordColor, c); }
     void setWordTextColor(const QColor &c) { set(m_wordTextColor, c); }
+    void setReadEnd(int v) { set(m_readEnd, v); }
+    void setReadColor(const QColor &c) { set(m_readColor, c); }
+    void setQuietColor(const QColor &c) { set(m_quietColor, c); }
     void setLineHeight(double v) {
         if (qFuzzyCompare(v, m_lineHeight))
             return;
@@ -75,6 +85,8 @@ private:
     QVariantList m_styles;
     int m_sentenceStart = -1, m_sentenceEnd = -1, m_wordStart = -1, m_wordEnd = -1;
     QColor m_sentenceColor, m_wordColor, m_wordTextColor;
+    int m_readEnd = -1;
+    QColor m_readColor, m_quietColor;
     double m_lineHeight = 1.0;
     int m_appliedStart = -1, m_appliedEnd = -1;
     bool m_applying = false;

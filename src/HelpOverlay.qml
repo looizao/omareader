@@ -15,6 +15,7 @@ Rectangle {
         ["[ / ]", qsTr("Slower / faster")],
         ["S", qsTr("Stop reading aloud")],
         ["F", qsTr("Back to the voice after scrolling")],
+        ["Z", qsTr("Focus mode")],
         ["← / →", qsTr("Previous / next chapter")],
         ["↑ ↓ PgUp PgDn", qsTr("Scroll")],
         ["T", qsTr("Contents")],

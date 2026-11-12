@@ -36,6 +36,21 @@ class Reader : public QObject {
     Q_PROPERTY(double lineHeight READ lineHeight WRITE setLineHeight NOTIFY appearanceChanged)
     Q_PROPERTY(int contentWidth READ contentWidth WRITE setContentWidth NOTIFY appearanceChanged)
     Q_PROPERTY(bool serif READ serif WRITE setSerif NOTIFY appearanceChanged)
+    // Aids for keeping the eyes on the words being read. Focus mode turns
+    // the chosen ones on together; the highlight settings apply always.
+    Q_PROPERTY(bool focusMode READ focusMode WRITE setFocusMode NOTIFY focusChanged)
+    // "off", "paragraph" or "sentence": what stays lit while the rest dims.
+    Q_PROPERTY(QString spotlight READ spotlight WRITE setSpotlight NOTIFY focusChanged)
+    // Fade the text already read, so the eye is not pulled back to it.
+    Q_PROPERTY(bool fadeRead READ fadeRead WRITE setFadeRead NOTIFY focusChanged)
+    // Keep the spoken line at one height and scroll the text under it.
+    Q_PROPERTY(bool steadyLine READ steadyLine WRITE setSteadyLine NOTIFY focusChanged)
+    // Hide the bars while the voice plays, until the mouse or a key wakes them.
+    Q_PROPERTY(bool hideControls READ hideControls WRITE setHideControls NOTIFY focusChanged)
+    // "both", "word" or "sentence": what the highlight marks.
+    Q_PROPERTY(QString highlight READ highlight WRITE setHighlight NOTIFY focusChanged)
+    // "subtle", "normal" or "strong".
+    Q_PROPERTY(QString highlightStrength READ highlightStrength WRITE setHighlightStrength NOTIFY focusChanged)
 
 public:
     Reader(Library *library, Narrator *narrator, FilePicker *picker, QObject *parent = nullptr);
@@ -66,6 +81,21 @@ public:
     void setLineHeight(double height);
     void setContentWidth(int width);
     void setSerif(bool serif);
+
+    bool focusMode() const { return m_focusMode; }
+    QString spotlight() const { return m_spotlight; }
+    bool fadeRead() const { return m_fadeRead; }
+    bool steadyLine() const { return m_steadyLine; }
+    bool hideControls() const { return m_hideControls; }
+    QString highlight() const { return m_highlight; }
+    QString highlightStrength() const { return m_highlightStrength; }
+    void setFocusMode(bool on);
+    void setSpotlight(const QString &spotlight);
+    void setFadeRead(bool on);
+    void setSteadyLine(bool on);
+    void setHideControls(bool on);
+    void setHighlight(const QString &highlight);
+    void setHighlightStrength(const QString &strength);
 
     Q_INVOKABLE void open(const QString &pathOrUrl);
     Q_INVOKABLE void openDialog();
@@ -101,8 +131,14 @@ signals:
     void chapterChanged();
     void progressChanged();
     void appearanceChanged();
+    void focusChanged();
 
 private:
+    static QStringList spotlights() { return {"off", "paragraph", "sentence"}; }
+    static QStringList highlights() { return {"both", "word", "sentence"}; }
+    static QStringList strengths() { return {"subtle", "normal", "strong"}; }
+    // Stores a focus setting and announces it, when it changed.
+    template <typename T> void setFocusSetting(T &member, const T &value, const char *key);
     void setChapter(int chapter, int anchorParagraph);
     void setError(const QString &error);
     void followNarrator();
@@ -126,4 +162,12 @@ private:
     double m_lineHeight = 1.5;
     int m_contentWidth = 720;
     bool m_serif = true;
+
+    bool m_focusMode = false;
+    QString m_spotlight = QStringLiteral("paragraph");
+    bool m_fadeRead = true;
+    bool m_steadyLine = true;
+    bool m_hideControls = true;
+    QString m_highlight = QStringLiteral("both");
+    QString m_highlightStrength = QStringLiteral("normal");
 };

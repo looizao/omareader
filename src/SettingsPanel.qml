@@ -349,6 +349,96 @@ Drawer {
                 onToggled: reader.serif = checked
             }
 
+            Label { Layout.leftMargin: 16; Layout.topMargin: 6; text: qsTr("Highlight"); color: Colors.body }
+            ChoiceBox {
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                model: [
+                    { id: "both", label: qsTr("Word and sentence") },
+                    { id: "word", label: qsTr("Word only") },
+                    { id: "sentence", label: qsTr("Sentence only") }
+                ]
+                selected: reader.highlight
+                onChosen: value => reader.highlight = value
+            }
+
+            Label { Layout.leftMargin: 16; Layout.topMargin: 6; text: qsTr("Highlight strength"); color: Colors.body }
+            ChoiceBox {
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                model: [
+                    { id: "subtle", label: qsTr("Subtle") },
+                    { id: "normal", label: qsTr("Normal") },
+                    { id: "strong", label: qsTr("Strong") }
+                ]
+                selected: reader.highlightStrength
+                onChosen: value => reader.highlightStrength = value
+            }
+
+            Label {
+                Layout.margins: 16
+                Layout.topMargin: 24
+                Layout.bottomMargin: 4
+                text: qsTr("Focus")
+                font.pixelSize: 20
+                font.family: "serif"
+                color: Colors.text
+            }
+            Label {
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                text: qsTr("Keeps your eyes on the words while the voice reads, by quieting what competes with them.")
+                wrapMode: Text.Wrap
+                font.pixelSize: 12
+                color: Colors.muted
+            }
+
+            Switch {
+                objectName: "focusModeSwitch"
+                Layout.leftMargin: 8
+                text: qsTr("Focus mode (Z)")
+                checked: reader.focusMode
+                onToggled: reader.focusMode = checked
+            }
+
+            Label { Layout.leftMargin: 16; Layout.topMargin: 6; text: qsTr("Spotlight"); color: Colors.body }
+            ChoiceBox {
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                model: [
+                    { id: "off", label: qsTr("Off") },
+                    { id: "paragraph", label: qsTr("Dim all but the paragraph") },
+                    { id: "sentence", label: qsTr("Dim all but the sentence") }
+                ]
+                selected: reader.spotlight
+                onChosen: value => reader.spotlight = value
+            }
+
+            Switch {
+                Layout.leftMargin: 8
+                text: qsTr("Fade what was read")
+                checked: reader.fadeRead
+                onToggled: reader.fadeRead = checked
+            }
+
+            Switch {
+                Layout.leftMargin: 8
+                text: qsTr("Hold the spoken line steady")
+                checked: reader.steadyLine
+                onToggled: reader.steadyLine = checked
+            }
+
+            Switch {
+                Layout.leftMargin: 8
+                text: qsTr("Hide the controls while the voice plays")
+                checked: reader.hideControls
+                onToggled: reader.hideControls = checked
+            }
+
             Item { Layout.preferredHeight: 24 }
         }
     }
