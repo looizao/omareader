@@ -47,13 +47,13 @@ in order, before it counts as done:
      honest.
 2. **Commit it** with a short imperative message ("Skip code listings in
    PDFs").
-3. **Push it to main** and wait for the full CI run on GitHub
-   (`.github/workflows/ci.yml`) to finish green: every job, not just the
-   first. Fix anything it reports, push again, and wait again.
-4. **Release it** once that run is green: run `bin/release` with the next
-   version (see Releases) and wait for the CI run on the release commit to
-   finish green as well, including the release and Play jobs.
-5. **Install it locally** so the user can test it: run `bin/install`. It
+3. **Release it to main.** Every push to main is a release, so ship with
+   `bin/release patch` for a fix or small change, or `bin/release minor`
+   for a new feature (see Releases). Then wait for the full CI run on
+   GitHub (`.github/workflows/ci.yml`) to finish green: every job,
+   including the release and Play, not just the first. If it fails, fix
+   it, release again, and wait again.
+4. **Install it locally** so the user can test it: run `bin/install`. It
    needs no sudo: it builds and copies the binary to `~/.local/bin` and the
    icon and launcher entry under `~/.local/share`. If it reports missing
    dependencies, give the user the `sudo pacman -S` command it prints rather
@@ -65,18 +65,19 @@ Then tell the user what changed, how it was tested, and what to try.
 
 ## Releases
 
-`bin/release <x.y.z>` bumps `VERSION` and `pkgbuild/PKGBUILD` and pushes;
-CI tags `v<x.y.z>`, publishes the GitHub release, and sends the Android app
-to Play internal testing.
+The version lives in `VERSION` (and `pkgbuild/PKGBUILD`), and each push to
+main publishes it. Rebase onto `origin/main` first; `bin/release
+patch|minor` then bumps both files from main's version, commits "Release
+v<x.y.z>", and pushes `HEAD` to main, from main or any branch. CI then builds and tests,
+tags `v<x.y.z>`, publishes the GitHub release with the Arch package, and
+sends the Android app to Play internal testing, where beta testers install
+it (`docs/play.md`). A push to main without a bump fails the release job.
 
-Every change pushed to main gets its own release (step 4 above). Bump the
-patch number for fixes and small changes, and the minor number for new
-features; leave the major number alone unless the user asks. Several commits
-pushed together share one release.
-
-Beta testers install the Android app from Play's internal testing track
-(`docs/play.md`), so every release reaches their phones. The upload key
-lives in the `play` environment's secrets; never print it or commit it.
+You choose the bump: patch for fixes, polish, docs, and other small
+changes; minor for anything a user would call a new feature. Leave major
+alone unless the user asks. Commits pushed together share one release, so
+release once per push, not once per commit. The Play upload key lives in
+the `play` environment's secrets; never print it or commit it.
 
 ## Conventions
 

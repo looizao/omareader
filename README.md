@@ -207,8 +207,9 @@ install it on a phone with USB debugging on, run `bin/android install`; the
 release is signed with your debug key unless `android/keystore.properties`
 names another (`storeFile`, `storePassword`, `keyAlias`, `keyPassword`).
 
-Beta testers get it from Google Play's internal testing track: each release,
-or a run of CI with **play** ticked, sends the build there. Setting that up
+Beta testers get it from Google Play's internal testing track: each release
+(every push to main), or a run of CI with **play** ticked, sends the build
+there. Setting that up
 is in [docs/play.md](docs/play.md); the privacy policy Play links to is
 [docs/privacy.md](docs/privacy.md).
 
@@ -324,10 +325,11 @@ ignores and CI writes from the repository secret of the same name. The
 Android build turns Drive on when `GOOGLE_CLIENT_ID` is set.
 
 CI builds and tests every push and pull request in an Arch Linux container,
-builds the package, and tests and builds the Android app. To release, run `bin/release 0.2.0` on a clean main: it
-bumps `VERSION` and the PKGBUILD and pushes, and CI tags `v0.2.0` and publishes
-a GitHub release with the source tarball, the Arch package, and a PKGBUILD
-that builds from the tarball.
+builds the package, and tests and builds the Android app. Every push to main
+is a release: `bin/release patch` (or `minor` for a new feature) bumps
+`VERSION` and the PKGBUILD, commits, and pushes, and CI tags the version and
+publishes a GitHub release with the source tarball, the Arch package, and a
+PKGBUILD that builds from the tarball. A push to main without a bump fails.
 
 ## License
 

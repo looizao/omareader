@@ -1,8 +1,10 @@
 # Builds and tests every push and pull request on Arch Linux (what Omarchy
-# runs), builds the Arch package and the Android app, and on main publishes a
-# GitHub release whenever VERSION names a version that has no tag yet. A new
-# release also goes to Play's internal testing track, and so does main when
-# the workflow is run by hand with "play" ticked (docs/play.md).
+# runs), builds the Arch package and the Android app, and releases every push
+# to main: each one bumps VERSION (bin/release patch|minor), and once the
+# build passes this tags v<VERSION> and publishes the GitHub release. A push
+# that forgot the bump fails here. Each release also goes to Play's internal
+# testing track, and so does main when the workflow is run by hand with
+# "play" ticked (docs/play.md).
 name: CI
 
 on:
@@ -165,6 +167,15 @@ jobs:
           tag="v$version"
           if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "$tag" ]; then
             echo "Tag $GITHUB_REF_NAME does not match VERSION $version"
+            exit 1
+          fi
+          # A rerun of the commit that was released has nothing left to do;
+          # any other commit on main still naming that version was pushed
+          # without bin/release, and every push to main must be a release.
+          tagged="$(git rev-parse -q --verify "refs/tags/$tag^{commit}" || true)"
+          if [ -n "$tagged" ] && [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "VERSION $version was already released from $tagged."
+            echo "Every push to main is a release: bump it with bin/release patch or bin/release minor."
             exit 1
           fi
           if gh release view "$tag" > /dev/null 2>&1; then

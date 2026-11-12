@@ -1,49 +1,75 @@
 #!/bin/sh
 # Bumps the version for a release: writes VERSION and the PKGBUILD, commits,
-# and pushes main. CI then builds, tags v<version>, and publishes the release.
+# and pushes the current branch to main. CI then builds, tags v<version>,
+# and publishes the release. Every push to main is a release, so this is the
+# last step of shipping any change (AGENTS.md).
 #
-#   bin/release 0.2.0            bump, commit, push
-#   bin/release 0.2.0 --dry-run  show what would change
+#   bin/release patch            0.2.0 -> 0.2.1, for fixes and small changes
+#   bin/release minor            0.2.0 -> 0.3.0, for new features
+#   bin/release major            0.2.0 -> 1.0.0, only when asked
+#   bin/release 1.4.2            an exact version
+#   bin/release minor --dry-run  show what would change
 set -eu
 
 ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
 
-version="${1:-}"
+bump="${1:-}"
 dry_run=0
 [ "${2:-}" = "--dry-run" ] && dry_run=1
 
-if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-  echo "Use: bin/release <major.minor.patch> [--dry-run]" >&2
+current="$(cat VERSION)"
+if ! printf '%s' "$current" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+  echo "VERSION is not major.minor.patch: $current" >&2
   exit 1
 fi
-current="$(cat VERSION)"
+major="${current%%.*}"
+rest="${current#*.}"
+minor="${rest%%.*}"
+patch="${rest#*.}"
+
+case "$bump" in
+  patch) version="$major.$minor.$((patch + 1))" ;;
+  minor) version="$major.$((minor + 1)).0" ;;
+  major) version="$((major + 1)).0.0" ;;
+  *)
+    if ! printf '%s' "$bump" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+      echo "Use: bin/release patch|minor|major|<major.minor.patch> [--dry-run]" >&2
+      exit 1
+    fi
+    version="$bump"
+    ;;
+esac
+
 if [ "$version" = "$current" ]; then
   echo "VERSION is already $version." >&2
-  exit 1
-fi
-if git rev-parse -q --verify "refs/tags/v$version" > /dev/null; then
-  echo "Tag v$version already exists." >&2
-  exit 1
-fi
-if [ "$(git branch --show-current)" != main ]; then
-  echo "Release from main." >&2
   exit 1
 fi
 if [ -n "$(git status --porcelain)" ]; then
   echo "Commit or stash your changes first." >&2
   exit 1
 fi
+# Another change may have released while this one was being made; the bump
+# has to start from main's version, or two releases would claim one number.
+git fetch -q origin main --tags
+if ! git merge-base --is-ancestor origin/main HEAD; then
+  echo "Rebase onto origin/main first, then release." >&2
+  exit 1
+fi
+if git rev-parse -q --verify "refs/tags/v$version" > /dev/null; then
+  echo "Tag v$version already exists." >&2
+  exit 1
+fi
 
 echo "Releasing $current -> $version"
 if [ "$dry_run" = 1 ]; then
-  echo "would write VERSION and pkgbuild/PKGBUILD, commit \"Release v$version\", and push main"
+  echo "would write VERSION and pkgbuild/PKGBUILD, commit \"Release v$version\", and push to main"
   exit 0
 fi
 
 printf '%s\n' "$version" > VERSION
 sed -i -e "s/^pkgver=.*/pkgver=$version/" -e "s/^pkgrel=.*/pkgrel=1/" pkgbuild/PKGBUILD
 git add VERSION pkgbuild/PKGBUILD
-git commit -m "Release v$version"
-git push origin main
+git commit -q -m "Release v$version"
+git push origin HEAD:main
 echo "Pushed. CI tags v$version and publishes the release once the build passes."
