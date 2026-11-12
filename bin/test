@@ -1,4 +1,9 @@
 #!/bin/sh
+# Builds and runs the Qt Test suite offscreen. With arguments they go to the
+# test binary as they are (a test's name, -v2, ...). Without, the tests are
+# shared out over several processes run side by side: most of the suite's
+# time is spent waiting on timers and child processes, not on the CPU, and
+# each process keeps its own temporary home, so they can't see each other.
 set -eu
 
 ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
@@ -7,4 +12,45 @@ cd "$ROOT/build/tests"
 
 qmake6 "$ROOT/tests/omareader_tests.pro"
 make -j"$(nproc)"
-QT_QPA_PLATFORM=offscreen ./omareader_tests "$@"
+
+export QT_QPA_PLATFORM=offscreen
+if [ "$#" -gt 0 ]; then
+  exec ./omareader_tests "$@"
+fi
+
+shards="$(nproc)"
+[ "$shards" -gt 6 ] && shards=6
+mkdir -p shards
+./omareader_tests -functions | sed 's/()$//' |
+  awk -v n="$shards" '{ print > ("shards/" (NR % n) ".list") }'
+
+pids=""
+shard=0
+while [ "$shard" -lt "$shards" ]; do
+  if [ -s "shards/$shard.list" ]; then
+    # The names are plain identifiers, so splitting them into words is safe.
+    # shellcheck disable=SC2046
+    ./omareader_tests $(cat "shards/$shard.list") > "shards/$shard.log" 2>&1 &
+    pids="$pids $!"
+  else
+    : > "shards/$shard.log"
+  fi
+  shard=$((shard + 1))
+done
+
+status=0
+for pid in $pids; do
+  wait "$pid" || status=1
+done
+
+shard=0
+while [ "$shard" -lt "$shards" ]; do
+  cat "shards/$shard.log"
+  shard=$((shard + 1))
+done | tee shards/all.log
+rm -f shards/*.list
+
+# One line for the whole suite, like a single run's.
+awk '/^Totals:/ { p += $2; f += $4; s += $6 }
+  END { printf "All shards: %d passed, %d failed, %d skipped\n", p, f, s }' shards/all.log
+exit "$status"

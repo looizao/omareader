@@ -18,7 +18,6 @@ as it's spoken. Its commands need no display.
 | `omareader voices [--engine kokoro\|qwen] [--json]` | The engine's voices, languages and tuning keys with their ranges and current values, for `export` |
 | `omareader doctor [--engine kokoro\|qwen] [--json]` | Whether read-aloud is ready: Kokoro's binary and model, Qwen3-TTS's environment and models, and whether the GPU has room. Exits 1 when the chosen engine is not ready |
 | `omareader setup [--engine kokoro\|qwen] [--model 0.6b\|1.7b] [--dry-run]` | Installs an engine and its models, pinned and checksummed (the one step that uses the network). Kokoro is the default; Qwen3-TTS takes about 14 GB and wants an NVIDIA GPU |
-| `omareader sync [now\|status\|connect [dropbox\|drive]\|disconnect\|send <bundle>] [--json]` | Sync between the desktop and the phone through Dropbox or Google Drive (docs/sync.md). `now` (the default) syncs and waits; `status` says whether it is connected, to which, and when it last synced; `connect` opens the provider's sign-in in the browser and waits for it; `send` sends a `.omabook` to the phone with the next sync. Off until connected |
 | `omareader open [book]` | Opens the window |
 
 Every command exits 0 on success and 1 on failure, with the reason on stderr.

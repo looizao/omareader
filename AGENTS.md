@@ -2,8 +2,6 @@
 
 omareader is an offline ebook reader for Omarchy (C++17, Qt 6 Quick, qmake)
 that reads books aloud with Kokoros and highlights each word as it's spoken.
-`android/` is its Android companion (Kotlin, platform views, Media3), which
-plays the `.omabook` bundles the desktop exports (`docs/omabook.md`).
 `README.md` covers what it does and how the pieces fit together.
 
 ## How every change ships
@@ -33,33 +31,20 @@ in order, before it counts as done:
    - For changes to how books are parsed, check `omareader info` and
      `omareader text` against real books, such as the ones in
      `~/Documents/books`.
-   - For the Android app, add tests in `android/app/src/test` and run
-     `bin/android test` (unit tests and lint). Behaviour only Android can
-     show, such as the media library Android Auto browses, has device tests
-     in `android/app/src/androidTest`: run `bin/android device-test` with the
-     emulator up. When it touches a screen or playback, run it on the
-     emulator (`~/Android/Sdk/emulator/emulator -avd
-     <name> -no-window`, `bin/android install`, `adb exec-out screencap -p`)
-     with a real export, and check the screenshots.
-   - A change to the bundle format touches both sides: update
-     `docs/omabook.md`, and regenerate `android/app/src/test/resources/
-     fixture.omabook` with the real exporter so the contract test stays
-     honest.
 2. **Commit it** with a short imperative message ("Skip code listings in
    PDFs").
 3. **Release it to main.** Every push to main is a release, so ship with
    `bin/release patch` for a fix or small change, or `bin/release minor`
    for a new feature (see Releases). Then wait for the full CI run on
    GitHub (`.github/workflows/ci.yml`) to finish green: every job,
-   including the release and Play, not just the first. If it fails, fix
+   including the release, not just the first. If it fails, fix
    it, release again, and wait again.
 4. **Install it locally** so the user can test it: run `bin/install`. It
    needs no sudo: it builds and copies the binary to `~/.local/bin` and the
    icon and launcher entry under `~/.local/share`. If it reports missing
    dependencies, give the user the `sudo pacman -S` command it prints rather
    than running it. Check that `omareader version` resolves to
-   `~/.local/bin/omareader`. For Android changes, also run
-   `bin/android install` when `adb devices` lists the user's phone.
+   `~/.local/bin/omareader`.
 
 Then tell the user what changed, how it was tested, and what to try.
 
@@ -69,15 +54,13 @@ The version lives in `VERSION` (and `pkgbuild/PKGBUILD`), and each push to
 main publishes it. Rebase onto `origin/main` first; `bin/release
 patch|minor` then bumps both files from main's version, commits "Release
 v<x.y.z>", and pushes `HEAD` to main, from main or any branch. CI then builds and tests,
-tags `v<x.y.z>`, publishes the GitHub release with the Arch package, and
-sends the Android app to Play internal testing, where beta testers install
-it (`docs/play.md`). A push to main without a bump fails the release job.
+tags `v<x.y.z>`, and publishes the GitHub release with the Arch package. A
+push to main without a bump fails the release job.
 
 You choose the bump: patch for fixes, polish, docs, and other small
 changes; minor for anything a user would call a new feature. Leave major
 alone unless the user asks. Commits pushed together share one release, so
-release once per push, not once per commit. The Play upload key lives in
-the `play` environment's secrets; never print it or commit it.
+release once per push, not once per commit.
 
 ## Conventions
 
@@ -85,11 +68,6 @@ the `play` environment's secrets; never print it or commit it.
   keys, every visible string goes through `qsTr()`/`tr()` with a pt-BR entry
   in `src/i18n/pt-BR.json`, and the theme accent and `theme.radius` style
   everything.
-- The Android app keeps the same rules: the network only for opt-in sync,
-  every visible string in `res/values/strings.xml` with a pt-BR entry in
-  `res/values-pt-rBR`, and no libraries beyond Media3 without a reason (Play services'
-  auth library is the one so far: Google allows no other Drive sign-in on
-  Android).
 - The app touches the network only when the user asks. Kokoros downloads a
   missing model on its own, so synthesis only starts once both model files
   exist (`KokoroSetup`). `omareader setup` downloads the engine. Adding a
@@ -98,14 +76,6 @@ the `play` environment's secrets; never print it or commit it.
   its text is then kept and never fetched again. The title
   agent for pasted text (`TitleAgent`) runs a coding agent that may use the
   network, so it stays off until the user turns it on in the dialog.
-  Sync (`docs/sync.md`) talks only to the API of the provider the user
-  connected (Dropbox or Google Drive), only after they connect, and keeps
-  the token in the keyring (Android Keystore on the phone; Play services
-  holds Google's), never in a file or a log. Both apps read the Dropbox app
-  key from `DROPBOX_APP_KEY` and the Google client id from
-  `GOOGLE_CLIENT_ID`; a provider whose key is empty is hidden. The Google
-  client secret lives only in the ignored `GOOGLE_CLIENT_SECRET` file and
-  the repository secret of that name; never print it or commit it.
 - Never modify the user's books; save app data atomically (`QSaveFile`).
 - Comments explain why, in full sentences. No em dashes in prose.
 

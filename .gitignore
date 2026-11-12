@@ -5,14 +5,3 @@
 *.pkg.tar.*
 /dist/
 __pycache__/
-
-# Android
-android/.gradle/
-android/.kotlin/
-android/build/
-android/app/build/
-android/local.properties
-android/keystore.properties
-*.keystore
-*.jks
-/GOOGLE_CLIENT_SECRET

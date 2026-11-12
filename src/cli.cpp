@@ -1,14 +1,11 @@
 #include "cli.h"
 
 #include "bookloader.h"
-#include "dropbox.h"
 #include "exporter.h"
 #include "kokoro.h"
 #include "library.h"
 #include "qwen.h"
-#include "sync.h"
 #include "synthesizer.h"
-#include "tokenstore.h"
 #include "voicesettings.h"
 #include "webimport.h"
 
@@ -248,7 +245,7 @@ int exportAudio(const QStringList &arguments) {
     Command command("export", "Read a book aloud into audio files, for a phone or a podcast app.");
     command.parser.addPositionalArgument("book", "The book file");
     command.parser.addOption({"split", "One file per chapter in a folder named after the book"});
-    command.parser.addOption({"format", "mp3 (the default), m4b, or omabook for the omareader phone app", "format", "mp3"});
+    command.parser.addOption({"format", "mp3 (the default) or m4b", "format", "mp3"});
     addVoiceOptions(command.parser);
     command.parser.addOption({"output", "The folder to write to (the current one by default)", "folder"});
     command.parser.addOption({"chapters", "Only these chapters, such as 3 or 2-5", "range"});
@@ -257,7 +254,7 @@ int exportAudio(const QStringList &arguments) {
         return command.parser.isSet("help") ? 0 : 1;
     const QStringList positional = command.parser.positionalArguments();
     if (positional.size() != 1)
-        return fail("Use: omareader export <book> [--split] [--format mp3|m4b|omabook] [--engine kokoro|qwen] [--voice ID] "
+        return fail("Use: omareader export <book> [--split] [--format mp3|m4b] [--engine kokoro|qwen] [--voice ID] "
                     "[--language L] [--speed X] [--tune key=value] [--output DIR] [--chapters N-M] [--json]");
 
     // The window's engine, voice and tuning unless the command names others.
@@ -267,9 +264,9 @@ int exportAudio(const QStringList &arguments) {
     Exporter::Options options;
     options.synthesis = Synthesis::optionsFor(voice);
     const QString format = command.parser.value("format").toLower();
-    if (format != "mp3" && format != "m4b" && format != "omabook")
-        return fail("The format is mp3, m4b or omabook.");
-    options.format = format == "m4b" ? Exporter::M4b : format == "omabook" ? Exporter::Phone : Exporter::Mp3;
+    if (format != "mp3" && format != "m4b")
+        return fail("The format is mp3 or m4b.");
+    options.format = format == "m4b" ? Exporter::M4b : Exporter::Mp3;
     options.layout = command.parser.isSet("split") ? Exporter::ChapterFiles : Exporter::SingleFile;
     options.folder = QDir(command.parser.isSet("output") ? command.parser.value("output") : QDir::currentPath())
                          .absolutePath();
@@ -503,104 +500,6 @@ int voices(const QStringList &arguments) {
     return 0;
 }
 
-QJsonObject syncStatus(const SyncService &sync) {
-    return QJsonObject{{"available", sync.available()},
-                       {"connected", sync.connected()},
-                       {"provider", sync.provider()},
-                       {"account", sync.account()},
-                       {"lastSynced", sync.lastSynced().isValid() ? sync.lastSynced().toString(Qt::ISODate) : QString()},
-                       {"pendingUploads", sync.pendingUploads()},
-                       {"error", sync.error()}};
-}
-
-int syncCommand(const QStringList &arguments) {
-    Command command("sync", "Sync through Dropbox or Google Drive: books for the phone, reading places, removals "
-                            "and settings.");
-    command.parser.addPositionalArgument("action",
-                                         "now (the default), status, connect [dropbox|drive], disconnect, or send "
-                                         "<bundle.omabook>",
-                                         "[action]");
-    command.json();
-    if (!command.parse(arguments))
-        return command.parser.isSet("help") ? 0 : 1;
-    const QStringList positional = command.parser.positionalArguments();
-    const QString action = positional.value(0, "now");
-    const bool json = command.parser.isSet("json");
-
-    Library library;
-    KeyringTokenStore keyring;
-    SyncService sync(&library, &keyring);
-    sync.setSynchronous(true);
-    if (!sync.available())
-        return fail("This build of omareader has no sync: it was built without a Dropbox or Google key.");
-    auto report = [&](int status) {
-        if (json) {
-            printJson(syncStatus(sync));
-        } else if (status == 0) {
-            out() << (sync.connected() ? "Connected to " + sync.providerName()
-                                             + (sync.account().isEmpty() ? QString() : " as " + sync.account())
-                                       : QString("Not connected"))
-                  << Qt::endl;
-            if (sync.lastSynced().isValid())
-                out() << "Last synced " << sync.lastSynced().toString(Qt::ISODate) << Qt::endl;
-            if (sync.pendingUploads() > 0)
-                out() << sync.pendingUploads() << " book(s) waiting to go to the phone" << Qt::endl;
-        }
-        if (!sync.error().isEmpty())
-            err() << "omareader: " << sync.error() << Qt::endl;
-        return status;
-    };
-
-    if (action == "status")
-        return report(0);
-    if (action == "disconnect") {
-        sync.disconnectSync();
-        return report(0);
-    }
-    if (action == "connect") {
-        QEventLoop loop;
-        QObject::connect(&sync, &SyncService::stateChanged, &loop, [&] {
-            if (!sync.connecting())
-                loop.quit();
-        });
-        // With both providers built in, the user says which.
-        QString provider = positional.value(1);
-        if (provider.isEmpty())
-            provider = sync.dropboxAvailable() && !sync.driveAvailable() ? SyncService::Dropbox
-                       : sync.driveAvailable() && !sync.dropboxAvailable() ? SyncService::Drive
-                                                                            : QString();
-        if (provider.isEmpty())
-            return fail("Say which: omareader sync connect dropbox, or omareader sync connect drive.");
-        if (provider != SyncService::Dropbox && provider != SyncService::Drive)
-            return fail(provider + " isn't a provider omareader knows. Use dropbox or drive.");
-        if (!sync.connectProvider(provider)) {
-            if (sync.error().isEmpty())
-                return fail("This build of omareader has no " + SyncService::nameOf(provider) + " sync.");
-            return report(1);
-        }
-        err() << "Open this page to connect " << SyncService::nameOf(provider)
-              << " (it should have opened already):\n"
-              << sync.authorizeUrl() << Qt::endl;
-        loop.exec();
-        return report(sync.connected() && sync.error().isEmpty() ? 0 : 1);
-    }
-    if (!sync.connected())
-        return fail("Sync isn't connected. Run omareader sync connect first.");
-    if (action == "send") {
-        const QString path = positional.value(1);
-        const QJsonObject manifest = SyncFormat::bundleManifest(path);
-        if (manifest.isEmpty())
-            return fail(path.isEmpty() ? "Name the .omabook to send." : path + " isn't an omareader bundle.");
-        sync.queueUpload(path, manifest.value("id").toString(), manifest.value("title").toString(),
-                         manifest.value("author").toString());
-        return report(sync.error().isEmpty() && sync.pendingUploads() == 0 ? 0 : 1);
-    }
-    if (action != "now")
-        return fail("Use omareader sync [now|status|connect|disconnect|send <bundle>].");
-    sync.syncNow();
-    return report(sync.error().isEmpty() ? 0 : 1);
-}
-
 // Fetches a page and prints the article the window would offer to add,
 // without adding it: the window owns the library while it is open.
 int fetchPage(const QStringList &arguments) {
@@ -688,13 +587,12 @@ QString usage() {
            "  doctor [--engine E] [--json]    Check that read-aloud is ready, with hardware advice\n"
            "  setup [--engine kokoro|qwen]    Install a voice engine and its models (uses the network)\n"
            "  voices [--engine E] [--json]    List an engine's voices, languages and tuning\n"
-           "  sync [now|status|connect|...]   Sync through Dropbox or Google Drive (uses the network once connected)\n"
            "  skill [install]                 Print the skill for coding agents, or install it\n"
            "  version                         Print the version\n";
 }
 
 bool isCommand(const QString &word) {
-    return QStringList{"info", "text", "export", "fetch", "doctor", "setup", "voices", "sync", "skill", "help", "--help", "-h", "version", "--version"}
+    return QStringList{"info", "text", "export", "fetch", "doctor", "setup", "voices", "skill", "help", "--help", "-h", "version", "--version"}
         .contains(word);
 }
 
@@ -709,7 +607,6 @@ int run(const QStringList &arguments) {
     if (command == "setup") return setup(rest);
     if (command == "voices") return voices(rest);
     if (command == "skill") return skill(rest);
-    if (command == "sync") return syncCommand(rest);
     if (command == "version" || command == "--version") {
         out() << "omareader " << QCoreApplication::applicationVersion() << Qt::endl;
         return 0;

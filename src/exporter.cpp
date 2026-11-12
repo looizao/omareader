@@ -1,20 +1,13 @@
 #include "exporter.h"
 
 #include "filepicker.h"
-#include "syncstate.h"
-#include "zipwriter.h"
 
 #include <QCoreApplication>
-#include <QCryptographicHash>
-#include <QDateTime>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSettings>
@@ -58,7 +51,7 @@ void writeFormatArguments(QStringList &arguments, Exporter::Format format) {
 Exporter::Exporter(QObject *parent) : QObject(parent) {
     QSettings settings;
     m_layout = qBound(0, settings.value("export/layout", int(SingleFile)).toInt(), int(ChapterFiles));
-    m_format = qBound(0, settings.value("export/format", int(Mp3)).toInt(), int(Phone));
+    m_format = qBound(0, settings.value("export/format", int(Mp3)).toInt(), int(M4b));
     m_folder = settings.value("export/folder").toString();
     if (m_folder.isEmpty())
         m_folder = defaultFolder();
@@ -79,7 +72,7 @@ void Exporter::setLayout(int layout) {
 }
 
 void Exporter::setFormat(int format) {
-    format = qBound(0, format, int(Phone));
+    format = qBound(0, format, int(M4b));
     if (format == m_format)
         return;
     m_format = format;
@@ -160,8 +153,6 @@ QList<Exporter::Track> Exporter::plan(const Book &book, int firstChapter, int la
 QString Exporter::extension(Format format, Layout layout) {
     if (format == Mp3)
         return "mp3";
-    if (format == Phone)
-        return "omabook";
     // A single file is an audiobook; chapters on their own are plain AAC.
     return layout == SingleFile ? "m4b" : "m4a";
 }
@@ -264,68 +255,6 @@ QStringList Exporter::joinArguments(Format format, const QString &list, const QS
     return arguments;
 }
 
-QString Exporter::phoneEntryName(const QString &folder, int number, const QString &extension) {
-    return QString("%1/%2.%3").arg(folder).arg(number, 3, 10, QChar('0')).arg(extension);
-}
-
-QString Exporter::phoneBookId(const Book &book) {
-    // The same book exported again, with any voice or speed, keeps its id, so
-    // the phone replaces it and keeps the place it was at.
-    return SyncFormat::bookId(book.title, book.author);
-}
-
-QByteArray Exporter::phoneManifest(const Book &book, const VoiceSettings &voice, const QStringList &chapterTitles,
-                                   const QList<qint64> &frames, int sampleRate, bool hasCover,
-                                   const QList<int> &chapterIndices) {
-    QJsonArray chapters;
-    for (int i = 0; i < chapterTitles.size() && i < frames.size(); ++i) {
-        QJsonObject chapter{
-            {"title", chapterTitles.at(i)},
-            {"audio", phoneEntryName("audio", i + 1, "m4a")},
-            {"text", phoneEntryName("text", i + 1, "json")},
-            {"duration", sampleRate > 0 ? qint64(qRound64(frames.at(i) * 1000.0 / sampleRate)) : 0},
-        };
-        // Bundle chapters skip the book's empty ones, so a synced position,
-        // which counts the book's chapters, needs to know which this is.
-        if (i < chapterIndices.size())
-            chapter.insert("chapter", chapterIndices.at(i));
-        chapters.append(chapter);
-    }
-    QJsonObject manifest{
-        {"format", "omabook"},
-        {"version", 1},
-        {"id", phoneBookId(book)},
-        {"title", book.title},
-        {"author", book.author},
-        {"created", QDateTime::currentDateTimeUtc().toString(Qt::ISODate)},
-        {"voice", QJsonObject{{"engine", voice.engine},
-                              {"voice", voice.voice},
-                              {"language", voice.language},
-                              {"speed", voice.speed}}},
-        {"chapters", chapters},
-    };
-    if (hasCover)
-        manifest.insert("cover", "cover.jpg");
-    return QJsonDocument(manifest).toJson(QJsonDocument::Compact);
-}
-
-QByteArray Exporter::phoneChapter(const Book &book, int chapter, const QString &title, const QList<int> &words,
-                                  const QList<int> &sentences) {
-    QJsonArray paragraphs;
-    if (chapter >= 0 && chapter < book.chapters.size())
-        for (const Paragraph &paragraph : book.chapters.at(chapter).paragraphs)
-            paragraphs.append(QJsonObject{{"text", paragraph.text}, {"level", paragraph.level}});
-    QJsonArray flat;
-    for (const int value : words)
-        flat.append(value);
-    QJsonArray starts;
-    for (const int value : sentences)
-        starts.append(value);
-    return QJsonDocument(
-               QJsonObject{{"title", title}, {"paragraphs", paragraphs}, {"words", flat}, {"sentences", starts}})
-        .toJson(QJsonDocument::Compact);
-}
-
 bool Exporter::start(BookPtr book, const Options &options) {
     if (m_running)
         return false;
@@ -424,8 +353,6 @@ void Exporter::startTrack() {
     m_failed.clear();
     m_runDone = false;
     m_trackFrames = 0;
-    m_trackWords.clear();
-    m_trackSentences.clear();
     emit progressChanged();
     if (m_track >= m_tracks.size()) {
         assemble();
@@ -478,7 +405,6 @@ void Exporter::writeReady() {
             // Every engine delivers at the same rate, whatever it speaks at.
             if (!m_encoder && !startEncoder(Synthesizer::SampleRate))
                 return;
-            recordWords(id, *it);
             writeSamples(it->audio.samples);
             m_ready.erase(it);
             const double pause = Synthesis::pauseAfter(*m_book, id, m_options.synthesis.voice);
@@ -500,22 +426,6 @@ void Exporter::writeSamples(const QByteArray &samples) {
     m_trackFrames += samples.size() / qsizetype(sizeof(float));
 }
 
-void Exporter::recordWords(int sentence, const SpokenSentence &spoken) {
-    if (m_options.format != Phone || m_sampleRate <= 0)
-        return;
-    // The same alignment narration highlights with, placed on the chapter's
-    // timeline where this sentence starts.
-    const QList<WordTiming> timings =
-        Speech::align(m_book->sentenceWords(sentence), spoken.words, spoken.audio.seconds());
-    const double offset = double(m_trackFrames) / m_sampleRate;
-    const Sentence &s = m_book->sentences.at(sentence);
-    m_trackSentences << int(m_trackWords.size() / 5);
-    for (int k = 0; k < s.words.size() && k < timings.size(); ++k)
-        m_trackWords << s.paragraph << s.words.at(k).start << s.words.at(k).length
-                     << int(qRound64((offset + timings.at(k).start) * 1000))
-                     << int(qRound64((offset + timings.at(k).end) * 1000));
-}
-
 bool Exporter::startEncoder(int sampleRate) {
     if (m_sampleRate == 0)
         m_sampleRate = sampleRate;
@@ -524,7 +434,7 @@ bool Exporter::startEncoder(int sampleRate) {
     QString name;
     QString cover;
     QHash<QString, QString> tags;
-    if (m_options.layout == ChapterFiles && m_options.format != Phone) {
+    if (m_options.layout == ChapterFiles) {
         name = trackFileName(m_track + 1, int(m_tracks.size()), track.title, extension);
         cover = m_cover;
         tags = {{"title", track.title},
@@ -582,19 +492,12 @@ void Exporter::onEncoderFinished(int code, QProcess::ExitStatus status) {
     m_trackFiles.append(name);
     m_trackTitles.append(m_tracks.at(m_track).title);
     m_trackLengths.append(m_trackFrames);
-    m_trackTimings.append(m_trackWords);
-    m_trackSentenceStarts.append(m_trackSentences);
-    m_trackChapters.append(m_tracks.at(m_track).chapter);
     startTrack();
 }
 
 void Exporter::assemble() {
     if (m_trackFiles.isEmpty()) {
         fail(tr("The voice produced no audio for this book."));
-        return;
-    }
-    if (m_options.format == Phone) {
-        assemblePhone();
         return;
     }
     const QString bookName = safeName(m_book->title);
@@ -640,36 +543,6 @@ void Exporter::assemble() {
     connect(m_joiner.get(), &QProcess::finished, this, &Exporter::onJoinFinished);
     m_joiner->start(m_options.ffmpeg,
                     joinArguments(m_options.format, list.fileName(), metadata.fileName(), m_cover, output));
-}
-
-void Exporter::assemblePhone() {
-    // The manifest goes first so a reader can tell what the bundle is from
-    // its first few hundred bytes.
-    const QString output = m_work->filePath("book.omabook");
-    ZipWriter zip(output);
-    bool ok = zip.open()
-              && zip.addData("manifest.json", phoneManifest(*m_book, m_options.synthesis.voice, m_trackTitles,
-                                                            m_trackLengths, m_sampleRate, !m_cover.isEmpty(),
-                                                            m_trackChapters));
-    if (ok && !m_cover.isEmpty())
-        ok = zip.addFile("cover.jpg", m_cover);
-    for (int i = 0; ok && i < m_trackFiles.size(); ++i)
-        ok = zip.addFile(phoneEntryName("audio", i + 1, "m4a"), m_work->filePath(m_trackFiles.at(i)))
-             && zip.addData(phoneEntryName("text", i + 1, "json"),
-                            phoneChapter(*m_book, m_trackChapters.value(i), m_trackTitles.at(i),
-                                         m_trackTimings.value(i), m_trackSentenceStarts.value(i)));
-    if (!ok || !zip.finish()) {
-        fail(tr("Could not write the phone bundle: %1").arg(zip.error()));
-        return;
-    }
-    const QString target = uniquePath(QDir(m_options.folder).filePath(safeName(m_book->title) + ".omabook"), false);
-    if (!QFile::rename(output, target)) {
-        fail(tr("Could not move the audio into %1.").arg(target));
-        return;
-    }
-    const BookPtr book = m_book;
-    succeed(target);
-    emit phoneBundleReady(target, phoneBookId(*book), book->title, book->author);
 }
 
 void Exporter::onJoinFinished(int code, QProcess::ExitStatus status) {
@@ -769,9 +642,4 @@ void Exporter::reset() {
     m_trackFiles.clear();
     m_trackTitles.clear();
     m_trackLengths.clear();
-    m_trackWords.clear();
-    m_trackSentences.clear();
-    m_trackTimings.clear();
-    m_trackSentenceStarts.clear();
-    m_trackChapters.clear();
 }

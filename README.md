@@ -10,9 +10,8 @@ window, C++ and Qt Quick, driven from the keyboard, following your theme and
 language.
 
 Everything runs on your machine. omareader has no accounts and talks to the
-network only when you ask it to (setup, adding a web page, and sync if you
-turn it on):
-books are parsed locally and the voice is
+network only when you ask it to (setup, and adding a web page): books are
+parsed locally and the voice is
 [Kokoros](https://github.com/lucasjinreal/Kokoros), a Rust build of Kokoro that
 runs on the CPU. If you have an NVIDIA GPU, you can add
 [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) as a second voice engine,
@@ -152,8 +151,7 @@ sentence you are on.
 Press E (or the ⤓ button) to turn the whole book into audio for your phone, a
 podcast app or an audiobook player. Choose one file with chapter markers or a
 folder with one file per chapter, as MP3 (plays everywhere) or M4B (an AAC
-audiobook), or a bundle for omareader on Android, which highlights the words
-as they play (see below). The files use the voice and speed you read with, carry the title,
+audiobook). The files use the voice and speed you read with, carry the title,
 author, track numbers and cover, and land in `~/Music/Audiobooks` unless you
 pick another folder.
 
@@ -165,72 +163,6 @@ going after you close the dialog, at a lower priority so reading aloud stays
 smooth. It is built in a hidden folder and renamed into place at the end, so
 a cancelled export leaves nothing behind and an earlier export is never
 replaced. Exports need `ffmpeg`.
-
-## On your phone
-
-`android/` is omareader for Android: the same read-along, from audio the
-desktop already made. The phone synthesises nothing, so it needs no model
-and no GPU. It uses the network only for sync, and only once you
-connect it.
-
-1. On the desktop, press E and choose **omareader for Android**. The export
-   is one `.omabook` file: each chapter's audio as AAC, the text, and the time
-   of every word (the format is in [docs/omabook.md](docs/omabook.md)).
-2. With sync on (below), that's all: the book arrives on the phone
-   by itself. Otherwise save it into a Google Drive or Dropbox folder, or
-   copy it over any way you like.
-3. On the phone, open the file from Drive or Dropbox with omareader, or press
-   + in the app and pick it. The book is copied into the app.
-
-Press play and the words light up as they are heard, like on the desktop.
-Tap a word to read from there; scroll away and the view stays put until you
-tap **Back to the voice**. The buttons move by chapter and by sentence, and
-the speed and text size are in the top bar. Playback carries on with the
-screen off, with the lock screen, headphone and Bluetooth controls, and each
-book remembers where it stopped. Exporting a book again, with another voice or
-speed, replaces it on the phone and keeps your place.
-
-### Sync through Dropbox or Google Drive
-
-Connect Dropbox or Google Drive (the same one on both) in the desktop's
-settings (A, at the bottom) and in the phone's sync screen (the arrows
-beside +), and the two keep in step:
-
-- Books you export for the phone go to it, and download there on Wi-Fi
-  (or on mobile data, if you allow it).
-- Your place in each book follows you, both ways. When the desktop jumps to
-  where you stopped on the phone, it says so.
-- Removing a book on one removes it from the other.
-- The listening speed is shared; the text size is kept per kind of device.
-
-Whichever change was made last wins. omareader sees only its own files:
-`Apps/omareader` in your Dropbox, or a folder named `omareader` in your
-Google Drive, where it can reach only the files it made. The desktop keeps
-the sign-in in your keyring; on the phone Dropbox's is in the Android
-Keystore and Google's stays with Google Play services. Disconnecting
-revokes it. Sync runs at
-start, when you come back to the window, shortly after a change and every
-15 minutes. `omareader sync status` shows how it's going. The details are in
-[docs/sync.md](docs/sync.md).
-
-In the car, omareader shows up in Android Auto as a media app: your books
-as a grid of covers with how far you have got, each playing from where you
-left it at your reading speed. The chapters are in the queue, the buttons
-beside play go back 10 seconds and forward 30, and "Hey Google, play Dune on
-omareader" finds a book by its title or author. Pressing play when the car
-connects, or on headphones with the app closed, picks up the last book.
-
-The app is about 0.8 MB: Kotlin with the platform's own views and Media3's
-player trimmed to AAC audio, no AppCompat, Compose or other libraries. To
-install it on a phone with USB debugging on, run `bin/android install`; the
-release is signed with your debug key unless `android/keystore.properties`
-names another (`storeFile`, `storePassword`, `keyAlias`, `keyPassword`).
-
-Beta testers get it from Google Play's internal testing track: each release
-(every push to main), or a run of CI with **play** ticked, sends the build
-there. Setting that up
-is in [docs/play.md](docs/play.md); the privacy policy Play links to is
-[docs/privacy.md](docs/privacy.md).
 
 ## Keyboard
 
@@ -268,11 +200,9 @@ omareader text book.epub --chapter 3     # the text as omareader reads it
 omareader fetch https://example.com/post # a web page's article, without adding it
 omareader export book.epub --split       # audio, one MP3 per chapter
 omareader export book.epub --format m4b  # one M4B audiobook with chapters
-omareader export book.epub --format omabook  # for omareader on Android
 omareader export book.epub --engine qwen --voice ryan --tune temperature=0.7
 omareader voices --engine qwen           # voices, languages and tuning ranges
 omareader doctor --json                  # is read-aloud ready?
-omareader sync status                    # sync, if connected
 omareader skill install                  # agent skill for ~/.claude/skills
 ```
 
@@ -307,22 +237,7 @@ omareader skill install                  # agent skill for ~/.claude/skills
   its layout.
 - `src/exporter.cpp` synthesises the book for exports and pipes the
   samples into `ffmpeg`, then joins the chapters into one file with chapter
-  markers, or keeps them as a folder of tracks. For the phone it also keeps
-  every word's time, and `src/zipwriter.cpp` packs the chapters' audio and
-  text into one `.omabook`.
-- `src/syncstate.cpp` and `src/syncengine.cpp` merge each book's place and
-  presence, and the settings, as timestamped registers where the newest
-  change wins; `src/oauth.cpp` signs in through the browser and keeps the
-  access token fresh, `src/dropbox.cpp` and `src/drive.cpp` speak Dropbox's
-  and Google Drive's APIs, and `src/sync.cpp` runs a sync on a worker
-  thread and applies what came back. The Android side (`Sync.kt`,
-  `SyncEngine.kt`, `Dropbox.kt`, `Drive.kt`) does the same
-  against the same fixtures (`android/app/src/test/resources/sync`).
-- `android/` imports a bundle into the app's storage
-  (`BundleImporter.kt`), plays it in a media session service
-  (`PlaybackService.kt`), and on each frame looks up the word at the playback
-  position by binary search and moves one highlight span
-  (`ReaderActivity.kt`).
+  markers, or keeps them as a folder of tracks.
 
 ## Development
 
@@ -330,27 +245,11 @@ omareader skill install                  # agent skill for ~/.claude/skills
 bin/build        # build/omareader
 bin/test         # Qt Test suite, offscreen
 bin/install      # ~/.local/bin and ~/.local/share, no sudo
-bin/android test     # the Android app's unit tests and lint
-bin/android install  # build the APK and install it over adb
-bin/android device-test  # the tests that need Android, on an emulator
-bin/android bundle   # the signed bundle for Google Play
-bin/android publish  # send it to Play internal testing (docs/play.md)
 ```
 
-The Android build needs a JDK and the Android SDK (`ANDROID_HOME`, or
-`~/Android/Sdk`); the Gradle wrapper fetches the rest.
-
-Sync needs a Dropbox app (set up as in [docs/sync.md](docs/sync.md)) whose
-key goes in `DROPBOX_APP_KEY`; both builds read it, and leave sync out when
-it is empty. `OMAREADER_DROPBOX_KEY` overrides it at run time on the
-desktop. Google Drive needs a Google Cloud project with a desktop and an
-Android client (same doc): the desktop client's id goes in
-`GOOGLE_CLIENT_ID`, and its secret in `GOOGLE_CLIENT_SECRET`, which git
-ignores and CI writes from the repository secret of the same name. The
-Android build turns Drive on when `GOOGLE_CLIENT_ID` is set.
-
 CI builds and tests every push and pull request in an Arch Linux container,
-builds the package, and tests and builds the Android app. Every push to main
+builds the package, and lints the shell scripts, all at once, with a
+compiler cache kept between runs. Every push to main
 is a release: `bin/release patch` (or `minor` for a new feature) bumps
 `VERSION` and the PKGBUILD, commits, and pushes, and CI tags the version and
 publishes a GitHub release with the source tarball, the Arch package, and a

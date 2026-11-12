@@ -5,9 +5,8 @@ import QtQuick.Layouts
 import Omareader
 
 // Exports the open book as audio for a phone: one file with chapter markers
-// or a folder with a file per chapter, in MP3 or M4B, or a bundle for the
-// omareader phone app that highlights the words as they play. The export
-// carries on in the background once the dialog is closed.
+// or a folder with a file per chapter, in MP3 or M4B. The export carries on
+// in the background once the dialog is closed.
 Popup {
     id: dialog
     modal: true
@@ -82,44 +81,19 @@ Popup {
                 checked: exporter.format === Exporter.M4b
                 onToggled: if (checked) exporter.format = Exporter.M4b
             }
-            RadioButton {
-                text: qsTr("omareader for Android, with the words highlighted")
-                checked: exporter.format === Exporter.Phone
-                onToggled: if (checked) exporter.format = Exporter.Phone
-            }
-            CheckBox {
-                Layout.leftMargin: 8
-                visible: exporter.format === Exporter.Phone && sync.connected
-                text: qsTr("Send it to your phone through %1").arg(sync.providerName)
-                checked: sync.sendExports
-                onToggled: sync.sendExports = checked
-            }
-            Label {
-                Layout.fillWidth: true
-                Layout.leftMargin: 8
-                visible: exporter.format === Exporter.Phone && !(sync.connected && sync.sendExports)
-                text: qsTr("Save it in a Google Drive or Dropbox folder, then open the .omabook file on your phone with omareader.")
-                wrapMode: Text.Wrap
-                color: Colors.muted
-                font.pixelSize: 13
-            }
 
-            // A phone bundle is always one file.
             Label {
                 Layout.topMargin: 8
-                visible: exporter.format !== Exporter.Phone
                 text: qsTr("Files")
                 color: Colors.body
                 font.weight: Font.Medium
             }
             RadioButton {
-                visible: exporter.format !== Exporter.Phone
                 text: qsTr("One file with chapter markers")
                 checked: exporter.layout === Exporter.SingleFile
                 onToggled: if (checked) exporter.layout = Exporter.SingleFile
             }
             RadioButton {
-                visible: exporter.format !== Exporter.Phone
                 text: qsTr("A folder with one file per chapter")
                 checked: exporter.layout === Exporter.ChapterFiles
                 onToggled: if (checked) exporter.layout = Exporter.ChapterFiles

@@ -1,10 +1,12 @@
 # Builds and tests every push and pull request on Arch Linux (what Omarchy
-# runs), builds the Arch package and the Android app, and releases every push
-# to main: each one bumps VERSION (bin/release patch|minor), and once the
-# build passes this tags v<VERSION> and publishes the GitHub release. A push
-# that forgot the bump fails here. Each release also goes to Play's internal
-# testing track, and so does main when the workflow is run by hand with
-# "play" ticked (docs/play.md).
+# runs), builds the Arch package, and releases every push to main: each one
+# bumps VERSION (bin/release patch|minor), and once the build passes this
+# tags v<VERSION> and publishes the GitHub release. A push that forgot the
+# bump fails here.
+#
+# The jobs run side by side and the release waits for all of them. Arch
+# containers install only what building and testing need, and a compiler
+# cache carried between runs means a change recompiles only what it touched.
 name: CI
 
 on:
@@ -13,11 +15,6 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
-    inputs:
-      play:
-        description: Send the Android app to Play internal testing
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -27,19 +24,16 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  DEPENDENCIES: >-
-    git qt6-base qt6-declarative qt6-multimedia qt6-svg qt6-wayland
-    xdg-desktop-portal poppler ffmpeg libsecret ttf-dejavu shellcheck python
+  # The package's other runtime dependencies (qt6-wayland, xdg-desktop-portal)
+  # take no part in building or testing it.
+  BUILD_DEPENDENCIES: qt6-base qt6-declarative qt6-multimedia qt6-svg ccache
+  CCACHE_MAXSIZE: 300M
 
 jobs:
-  test:
-    name: Build and test
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
-    container: archlinux:base-devel
     steps:
-      - name: Install dependencies
-        run: pacman -Syu --noconfirm --needed $DEPENDENCIES
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -50,25 +44,71 @@ jobs:
           echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "VERSION is not x.y.z: $version"; exit 1; }
           grep -qx "pkgver=$version" pkgbuild/PKGBUILD || { echo "pkgbuild/PKGBUILD pkgver does not match VERSION $version"; exit 1; }
 
+      # ShellCheck comes with the runner; on Arch it would bring the whole
+      # Haskell runtime along.
       - name: Lint shell scripts
         run: shellcheck bin/* src/setup-kokoros.sh src/setup-qwen.sh
 
-      # The Google desktop client's secret stays out of git (docs/sync.md);
-      # the build reads it from this ignored file. Without the repository
-      # secret, as on a fork, the build simply has no Google Drive.
-      - name: Write the Google client secret
-        env:
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      # The tests also read PDFs (poppler), export audio (ffmpeg), run a fake
+      # Qwen worker (python) and draw the window (a font).
+      - name: Install dependencies
         run: |
-          if [ -n "$GOOGLE_CLIENT_SECRET" ]; then
-            printf '%s' "$GOOGLE_CLIENT_SECRET" > GOOGLE_CLIENT_SECRET
-          fi
+          sed -i 's/^#\?ParallelDownloads.*/ParallelDownloads = 16/' /etc/pacman.conf
+          pacman -Syu --noconfirm --needed $BUILD_DEPENDENCIES poppler ffmpeg python ttf-dejavu
 
-      - name: Build
-        run: bin/build
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Test
-        run: bin/test
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-test-${{ github.sha }}
+          restore-keys: ccache-test-
+
+      - name: Build and test
+        run: |
+          export PATH="/usr/lib/ccache/bin:$PATH" CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
+          bin/test
+          ccache --show-stats
+
+  package:
+    name: Arch package
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Install dependencies
+        run: |
+          sed -i 's/^#\?ParallelDownloads.*/ParallelDownloads = 16/' /etc/pacman.conf
+          pacman -Syu --noconfirm --needed $BUILD_DEPENDENCIES
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-package-${{ github.sha }}
+          restore-keys: ccache-package-
+
+      # makepkg refuses to run as root, and sudo would reset PATH. The test
+      # job has already run the tests, and the runtime dependencies that
+      # only matter on a desktop aren't installed, hence --nocheck --nodeps.
+      - name: Build the package
+        run: |
+          export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
+          useradd -m builder
+          mkdir -p "$CCACHE_DIR"
+          chown -R builder:builder .
+          sudo -u builder env PATH="/usr/lib/ccache/bin:$PATH" CCACHE_DIR="$CCACHE_DIR" CCACHE_MAXSIZE="$CCACHE_MAXSIZE" \
+            sh -c 'cd pkgbuild && makepkg -f --noconfirm --nocheck --nodeps'
+          ccache --show-stats
 
       - name: Smoke-test the command line
         env:
@@ -77,41 +117,8 @@ jobs:
           build/omareader version
           build/omareader skill > /dev/null
           build/omareader export --help > /dev/null
-          build/omareader sync --help > /dev/null
           build/omareader setup --dry-run || true
           build/omareader doctor --json || test $? -eq 1
-
-  package:
-    name: Arch package
-    needs: test
-    runs-on: ubuntu-latest
-    container: archlinux:base-devel
-    steps:
-      - name: Install dependencies
-        run: pacman -Syu --noconfirm --needed $DEPENDENCIES namcap
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      # The Google desktop client's secret stays out of git (docs/sync.md);
-      # the build reads it from this ignored file. Without the repository
-      # secret, as on a fork, the build simply has no Google Drive.
-      - name: Write the Google client secret
-        env:
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-        run: |
-          if [ -n "$GOOGLE_CLIENT_SECRET" ]; then
-            printf '%s' "$GOOGLE_CLIENT_SECRET" > GOOGLE_CLIENT_SECRET
-          fi
-
-      # makepkg refuses to run as root.
-      - name: Build the package
-        run: |
-          useradd -m builder
-          chown -R builder:builder .
-          sudo -u builder sh -c 'cd pkgbuild && makepkg -f --noconfirm'
-          namcap pkgbuild/omareader-*.pkg.tar.zst || true
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -119,39 +126,13 @@ jobs:
           path: pkgbuild/omareader-*.pkg.tar.zst
           if-no-files-found: error
 
-  android:
-    name: Android app
-    runs-on: ubuntu-latest
-    steps:
-      # The version code counts the commits, so it needs the whole history.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      # The runner comes with JDK 21 and the Android SDK; the Gradle wrapper
-      # checks its download against the SHA-256 sum in its properties.
-      - name: Test, lint and build the release APK
-        run: |
-          export JAVA_HOME="$JAVA_HOME_21_X64"
-          bin/android test
-          bin/android build
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: android
-          path: android/app/build/outputs/apk/release/app-release.apk
-          if-no-files-found: error
-
   release:
     name: Release
-    needs: [package, android]
+    needs: [lint, test, package]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    outputs:
-      published: ${{ steps.version.outputs.publish }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -215,70 +196,3 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "omareader $VERSION" \
             --generate-notes
-
-  # Signs the bundle with the upload key and sends it to internal testing.
-  # The key lives in the "play" environment, which only main can use, and the
-  # Play API is reached through workload identity federation, so no Google
-  # key is stored here. Until that is set up, the run stops after the signed
-  # bundle, which is what the first, manual upload to Play needs.
-  play:
-    name: Play internal testing
-    needs: [test, android, release]
-    if: >-
-      !cancelled() && needs.test.result == 'success' && needs.android.result == 'success' &&
-      github.ref == 'refs/heads/main' &&
-      (needs.release.outputs.published == 'true' || (github.event_name == 'workflow_dispatch' && inputs.play))
-    runs-on: ubuntu-latest
-    environment: play
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Build the signed bundle
-        env:
-          UPLOAD_KEYSTORE: ${{ secrets.UPLOAD_KEYSTORE }}
-          UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.UPLOAD_KEYSTORE_PASSWORD }}
-        run: |
-          if [ -z "$UPLOAD_KEYSTORE" ] || [ -z "$UPLOAD_KEYSTORE_PASSWORD" ]; then
-            echo "The play environment has no upload key; see docs/play.md."
-            exit 1
-          fi
-          export JAVA_HOME="$JAVA_HOME_21_X64"
-          umask 077
-          printf '%s' "$UPLOAD_KEYSTORE" | base64 -d > "$RUNNER_TEMP/upload.p12"
-          printf 'storeFile=%s\nstorePassword=%s\nkeyAlias=upload\nkeyPassword=%s\n' \
-            "$RUNNER_TEMP/upload.p12" "$UPLOAD_KEYSTORE_PASSWORD" "$UPLOAD_KEYSTORE_PASSWORD" \
-            > android/keystore.properties
-          bin/android bundle
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: android-bundle
-          path: android/app/build/outputs/bundle/release/app-release.aab
-          if-no-files-found: error
-
-      - name: Sign in to Google
-        id: google
-        if: vars.PLAY_SERVICE_ACCOUNT != ''
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
-        with:
-          workload_identity_provider: ${{ vars.PLAY_WIF_PROVIDER }}
-          service_account: ${{ vars.PLAY_SERVICE_ACCOUNT }}
-          token_format: access_token
-          access_token_scopes: https://www.googleapis.com/auth/androidpublisher
-          create_credentials_file: false
-
-      - name: Send it to internal testing
-        if: vars.PLAY_SERVICE_ACCOUNT != ''
-        env:
-          PLAY_ACCESS_TOKEN: ${{ steps.google.outputs.access_token }}
-        run: bin/android publish
-
-      - name: Remove the upload key
-        if: always()
-        run: rm -f "$RUNNER_TEMP/upload.p12" android/keystore.properties

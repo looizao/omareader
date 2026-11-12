@@ -101,11 +101,8 @@ signals:
     void chapterChanged();
     void progressChanged();
     void appearanceChanged();
-    // The open book moved to a place reached on another device.
-    void movedBySync();
 
 private:
-    void followSync(const QString &path);
     void setChapter(int chapter, int anchorParagraph);
     void setError(const QString &error);
     void followNarrator();

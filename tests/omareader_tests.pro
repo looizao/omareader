@@ -10,7 +10,5 @@ SOURCES += omareader_tests.cpp fixtures.cpp $$files(../src/*.cpp)
 SOURCES -= ../src/main.cpp
 RESOURCES += ../src/resources.qrc
 
-CONFIG += link_pkgconfig
-PKGCONFIG += libsecret-1
-# The shared sync fixtures live with the Android tests.
+# Some tests read files from the source tree, such as the translations.
 DEFINES += OMAREADER_SOURCE=\\\"$$PWD/..\\\"

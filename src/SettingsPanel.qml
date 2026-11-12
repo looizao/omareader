@@ -3,7 +3,7 @@ import QtQuick.Controls
 import QtQuick.Controls.Material
 import QtQuick.Layouts
 
-// The engine, its voice, speed and tuning, how the page looks, and sync.
+// The engine, its voice, speed and tuning, and how the page looks.
 Drawer {
     id: panel
     edge: Qt.RightEdge
@@ -347,126 +347,6 @@ Drawer {
                 text: qsTr("Serif typeface")
                 checked: reader.serif
                 onToggled: reader.serif = checked
-            }
-
-            // Sync through the user's Dropbox or Google Drive; hidden in a
-            // build with neither.
-            ColumnLayout {
-                visible: sync.available
-                Layout.fillWidth: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                spacing: 6
-
-                Label {
-                    Layout.topMargin: 24
-                    Layout.bottomMargin: 4
-                    text: qsTr("Sync")
-                    font.pixelSize: 20
-                    font.family: "serif"
-                    color: Colors.text
-                }
-                Label {
-                    Layout.fillWidth: true
-                    text: qsTr("Keep your phone and this computer in step through your Dropbox or Google Drive: books you export for the phone, where you stopped, books you remove, the speed and the text size. omareader only sees its own files there. Connect the same one on your phone.")
-                    wrapMode: Text.Wrap
-                    font.pixelSize: 12
-                    color: Colors.muted
-                }
-                Flow {
-                    Layout.fillWidth: true
-                    Layout.topMargin: 4
-                    visible: !sync.connected && !sync.connecting
-                    spacing: 8
-                    AccentButton {
-                        visible: sync.dropboxAvailable
-                        text: qsTr("Connect Dropbox")
-                        onClicked: sync.connectDropbox()
-                    }
-                    AccentButton {
-                        visible: sync.driveAvailable
-                        text: qsTr("Connect Google Drive")
-                        onClicked: sync.connectDrive()
-                    }
-                }
-                RowLayout {
-                    visible: sync.connecting
-                    Layout.fillWidth: true
-                    spacing: 8
-                    BusyIndicator {
-                        running: visible
-                        Layout.preferredWidth: 22
-                        Layout.preferredHeight: 22
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        text: qsTr("Waiting for %1 in your browser…").arg(sync.providerName)
-                        wrapMode: Text.Wrap
-                        color: Colors.body
-                    }
-                    Button {
-                        flat: true
-                        text: qsTr("Cancel")
-                        onClicked: sync.cancelConnect()
-                    }
-                }
-                Label {
-                    Layout.fillWidth: true
-                    visible: sync.connected
-                    text: sync.account !== "" ? qsTr("Connected to %1 as %2").arg(sync.providerName).arg(sync.account)
-                                              : qsTr("Connected to %1").arg(sync.providerName)
-                    wrapMode: Text.Wrap
-                    color: Colors.body
-                }
-                Label {
-                    Layout.fillWidth: true
-                    visible: sync.connected
-                    text: sync.busy ? qsTr("Syncing…")
-                        : isNaN(sync.lastSynced) ? qsTr("Not synced yet")
-                        : qsTr("Last synced %1").arg(sync.lastSynced.toLocaleString(Qt.locale(), Locale.ShortFormat))
-                    font.pixelSize: 12
-                    color: Colors.muted
-                }
-                Label {
-                    Layout.fillWidth: true
-                    visible: sync.connected && sync.pendingUploads > 0
-                    text: sync.pendingUploads === 1 ? qsTr("One book is waiting to go to your phone.")
-                                                    : qsTr("%1 books are waiting to go to your phone.").arg(sync.pendingUploads)
-                    wrapMode: Text.Wrap
-                    font.pixelSize: 12
-                    color: Colors.muted
-                }
-                Switch {
-                    visible: sync.connected
-                    Layout.leftMargin: -8
-                    text: qsTr("Send books exported for the phone")
-                    checked: sync.sendExports
-                    onToggled: sync.sendExports = checked
-                }
-                RowLayout {
-                    visible: sync.connected
-                    spacing: 4
-                    Button {
-                        flat: true
-                        enabled: !sync.busy
-                        text: qsTr("Sync now")
-                        onClicked: sync.syncNow()
-                    }
-                    Button {
-                        flat: true
-                        text: qsTr("Disconnect")
-                        onClicked: sync.disconnectSync()
-                    }
-                }
-                Label {
-                    Layout.fillWidth: true
-                    visible: sync.error !== ""
-                    text: sync.error
-                    textFormat: Text.PlainText
-                    wrapMode: Text.Wrap
-                    font.pixelSize: 12
-                    color: "#f2a0a6"
-                }
             }
 
             Item { Layout.preferredHeight: 24 }

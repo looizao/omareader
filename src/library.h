@@ -23,15 +23,11 @@ struct LibraryEntry {
     int paragraph = 0;
     int sentence = 0;
     int sentenceCount = 0;
-    // The start of the sentence reached in its paragraph, so a position
-    // synced from another device (which has no sentence numbers) can be
-    // found again; -1 for positions saved before it was kept.
+    // The start of the sentence reached in its paragraph, which finds the
+    // place again even when the sentences are split differently; -1 for
+    // positions saved before it was kept.
     int offset = -1;
     QDateTime opened;
-    // When the position last changed and when the book was added, in ms
-    // since 1970 UTC, which sync compares with other devices' changes.
-    qint64 positionAt = 0;
-    qint64 addedAt = 0;
 };
 
 class Library : public QObject {
@@ -52,9 +48,6 @@ public:
     void opened(const Book &book);
     void savePosition(const QString &path, int chapter, int paragraph, int sentence, int sentenceCount,
                       int offset = -1);
-    // A position another device reached, taken as it is with its own time.
-    // The sentence is estimated from progress until the book is opened.
-    void applySyncedPosition(const QString &path, int chapter, int paragraph, int offset, double progress, qint64 at);
     // Saves pasted text as a library item and returns its path, or an empty
     // string when there is no text to save or it can't be written. A web
     // page's text comes with the address it was fetched from and its byline.
@@ -64,24 +57,18 @@ public:
     bool isText(const QString &path) const;
     // Forgets a book. A book's file stays; a pasted text goes to the trash.
     Q_INVOKABLE void remove(const QString &path);
-    // The same, for a removal that came from another device.
-    void forget(const QString &path);
     bool save() const;
     // A web page's site, as its card shows it.
     static QString siteOf(const QString &source);
 
 signals:
     void changed();
-    // The user removed a book here (not through sync).
-    void removed(const QString &path, const QString &title, const QString &author);
-    void positionSynced(const QString &path);
 
 private:
     void load();
     QString storeCover(const Book &book) const;
     int indexOf(const QString &path) const;
     void sort();
-    void removeAt(int index, bool synced);
 
     QString m_file;
     QString m_coverDirectory;

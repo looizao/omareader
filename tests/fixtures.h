@@ -31,7 +31,7 @@ QByteArray untitledPage();
 }
 
 // A tiny HTTP/1.1 server on localhost that answers each request with a
-// handler, for testing the Dropbox client and sign-in without Dropbox.
+// handler, for testing web page imports without the network.
 class FakeHttpServer {
 public:
     struct Request {
@@ -55,48 +55,4 @@ public:
 private:
     Handler m_handler;
     std::unique_ptr<QTcpServer> m_server;
-};
-
-// Google Drive's API in memory, enough of it for the Drive client: files
-// with properties, revisions and the trash, listing in pages of two, and
-// multipart and resumable uploads. It can refuse a stale token, be busy,
-// lose a piece of an upload, or forget an upload session.
-struct FakeDrive {
-    struct File {
-        QString id;
-        QString name;
-        QString mimeType;
-        QString parent;
-        QHash<QString, QString> properties;
-        QByteArray data;
-        QString created;
-        QString modified;
-        int revision = 1;
-        bool trashed = false;
-    };
-    struct Session {
-        QString fileId; // empty for a new file
-        QByteArray metadata;
-        qint64 total = 0;
-        QByteArray received;
-    };
-
-    FakeHttpServer::Response handle(const FakeHttpServer::Request &request);
-    File *file(const QString &id);
-    // The files with this omareaderPath property, trashed or not.
-    QList<File *> withPath(const QString &path);
-    File &add(const QString &path, const QByteArray &data, const QString &parent = {});
-    QString stamp();
-
-    QString base; // the server's URL, for session links
-    QString token = QStringLiteral("fresh");
-    QList<File> files;
-    QHash<QString, Session> sessions;
-    int tokenRequests = 0;
-    QByteArray lastTokenRequest;
-    int busy = 0; // 429s still to give
-    bool losePiece = false; // fail the next piece after the first
-    bool expireSession = false; // the next piece finds its session gone
-    int clock = 0;
-    int nextId = 0;
 };

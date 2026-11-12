@@ -16,16 +16,11 @@
 #include "narrator.h"
 #include "portalfilepicker.h"
 #include "reader.h"
-#include "sync.h"
 #include "theme.h"
 #include "titleagent.h"
-#include "tokenstore.h"
 #include "translator.h"
+#include "version.h"
 #include "webimport.h"
-
-#ifndef OMAREADER_VERSION
-#define OMAREADER_VERSION "0.0.0"
-#endif
 
 int main(int argc, char *argv[]) {
     QStringList arguments;
@@ -64,11 +59,6 @@ int main(int argc, char *argv[]) {
     reader.setExporter(&exporter);
     TitleAgent titleAgent;
     WebImport webImport;
-    KeyringTokenStore keyring;
-    SyncService sync(&library, &keyring);
-    sync.setNarrator(&narrator);
-    sync.setReader(&reader);
-    sync.setExporter(&exporter);
 
     qmlRegisterType<ReadingHighlight>("Omareader", 1, 0, "ReadingHighlight");
     qmlRegisterUncreatableType<Narrator>("Omareader", 1, 0, "Narrator", "Use the narrator context property.");
@@ -84,7 +74,6 @@ int main(int argc, char *argv[]) {
     engine.rootContext()->setContextProperty("exporter", &exporter);
     engine.rootContext()->setContextProperty("titleAgent", &titleAgent);
     engine.rootContext()->setContextProperty("webImport", &webImport);
-    engine.rootContext()->setContextProperty("sync", &sync);
     engine.load(QUrl("qrc:/Main.qml"));
     if (engine.rootObjects().isEmpty())
         return 1;

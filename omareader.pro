@@ -8,24 +8,15 @@ QMAKE_LFLAGS += $$(LDFLAGS)
 TARGET = omareader
 TEMPLATE = app
 
-# VERSION is the one place the version lives; bin/release bumps it.
+# VERSION is the one place the version lives; bin/release bumps it. It goes
+# into a generated header only main.cpp includes rather than onto every
+# compile line, so a release rebuilds one file and the compiler cache in CI
+# keeps the rest.
 APP_VERSION = $$cat($$PWD/VERSION)
-DEFINES += OMAREADER_VERSION=\\\"$$APP_VERSION\\\"
-
-# The Dropbox app key for sync (docs/sync.md); public, as PKCE needs no
-# secret. Empty builds without sync.
-DROPBOX_KEY = $$cat($$PWD/DROPBOX_APP_KEY)
-DEFINES += OMAREADER_DROPBOX_KEY=\\\"$$DROPBOX_KEY\\\"
-
-# The Google desktop client for Drive sync (docs/sync.md): the id is in
-# GOOGLE_CLIENT_ID, the secret in GOOGLE_CLIENT_SECRET, which git ignores and
-# CI writes from a repository secret. They go into a generated header rather
-# than DEFINES, so the secret never shows on a compile line in a build log.
-include(googleclient.pri)
-
-# Each provider's sign-in is kept in the Secret Service keyring.
-CONFIG += link_pkgconfig
-PKGCONFIG += libsecret-1
+VERSION_HEADER = "$${LITERAL_HASH}pragma once"
+VERSION_HEADER += "$${LITERAL_HASH}define OMAREADER_VERSION \"$$APP_VERSION\""
+write_file($$OUT_PWD/version.h, VERSION_HEADER)
+INCLUDEPATH += $$OUT_PWD
 
 HEADERS += \
     src/article.h \
@@ -43,20 +34,12 @@ HEADERS += \
     src/qwen.h \
     src/reader.h \
     src/speech.h \
-    src/dropbox.h \
-    src/drive.h \
-    src/oauth.h \
-    src/sync.h \
-    src/syncengine.h \
-    src/syncstate.h \
-    src/tokenstore.h \
     src/synthesizer.h \
     src/theme.h \
     src/titleagent.h \
     src/translator.h \
     src/voicesettings.h \
-    src/webimport.h \
-    src/zipwriter.h
+    src/webimport.h
 
 SOURCES += \
     src/main.cpp \
@@ -74,19 +57,11 @@ SOURCES += \
     src/qwen.cpp \
     src/reader.cpp \
     src/speech.cpp \
-    src/dropbox.cpp \
-    src/drive.cpp \
-    src/oauth.cpp \
-    src/sync.cpp \
-    src/syncengine.cpp \
-    src/syncstate.cpp \
-    src/tokenstore.cpp \
     src/synthesizer.cpp \
     src/theme.cpp \
     src/titleagent.cpp \
     src/translator.cpp \
     src/voicesettings.cpp \
-    src/webimport.cpp \
-    src/zipwriter.cpp
+    src/webimport.cpp
 
 RESOURCES += src/resources.qrc
