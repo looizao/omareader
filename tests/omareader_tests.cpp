@@ -1,3 +1,8 @@
+// Test code gains nothing from the optimiser, and this file is by far the
+// slowest to compile, so it is built without it. The code under test in
+// src/ keeps the flags it is built with.
+#pragma GCC optimize("O0")
+
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>

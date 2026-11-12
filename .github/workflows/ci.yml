@@ -4,9 +4,10 @@
 # tags v<VERSION> and publishes the GitHub release. A push that forgot the
 # bump fails here.
 #
-# The jobs run side by side and the release waits for all of them. Arch
-# containers install only what building and testing need, and a compiler
-# cache carried between runs means a change recompiles only what it touched.
+# The jobs run side by side and the release waits for all of them. The Arch
+# jobs run their commands in an image that already holds what building and
+# testing need (.github/ci-image), and a compiler cache carried between runs
+# means a change recompiles only what it touched.
 name: CI
 
 on:
@@ -22,12 +23,6 @@ permissions:
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
-env:
-  # The package's other runtime dependencies (qt6-wayland, xdg-desktop-portal)
-  # take no part in building or testing it.
-  BUILD_DEPENDENCIES: qt6-base qt6-declarative qt6-multimedia qt6-svg ccache
-  CCACHE_MAXSIZE: 300M
 
 jobs:
   lint:
@@ -47,20 +42,15 @@ jobs:
       # ShellCheck comes with the runner; on Arch it would bring the whole
       # Haskell runtime along.
       - name: Lint shell scripts
-        run: shellcheck bin/* src/setup-kokoros.sh src/setup-qwen.sh
+        run: shellcheck bin/* src/setup-kokoros.sh src/setup-qwen.sh .github/ci-image/run
 
+  # The Arch jobs run on the runner and step into the image for their
+  # commands (.github/ci-image/run), so the checkout, the compiler cache
+  # and the package they leave behind are plain files on the runner.
   test:
     name: Build and test
     runs-on: ubuntu-latest
-    container: archlinux:base-devel
     steps:
-      # The tests also read PDFs (poppler), export audio (ffmpeg), run a fake
-      # Qwen worker (python) and draw the window (a font).
-      - name: Install dependencies
-        run: |
-          sed -i 's/^#\?ParallelDownloads.*/ParallelDownloads = 16/' /etc/pacman.conf
-          pacman -Syu --noconfirm --needed $BUILD_DEPENDENCIES poppler ffmpeg python ttf-dejavu
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -72,21 +62,12 @@ jobs:
           restore-keys: ccache-test-
 
       - name: Build and test
-        run: |
-          export PATH="/usr/lib/ccache/bin:$PATH" CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
-          bin/test
-          ccache --show-stats
+        run: .github/ci-image/run sh -c 'bin/test && ccache --show-stats'
 
   package:
     name: Arch package
     runs-on: ubuntu-latest
-    container: archlinux:base-devel
     steps:
-      - name: Install dependencies
-        run: |
-          sed -i 's/^#\?ParallelDownloads.*/ParallelDownloads = 16/' /etc/pacman.conf
-          pacman -Syu --noconfirm --needed $BUILD_DEPENDENCIES
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -97,28 +78,30 @@ jobs:
           key: ccache-package-${{ github.sha }}
           restore-keys: ccache-package-
 
-      # makepkg refuses to run as root, and sudo would reset PATH. The test
-      # job has already run the tests, and the runtime dependencies that
-      # only matter on a desktop aren't installed, hence --nocheck --nodeps.
+      # makepkg refuses to run as root, so the image has a builder user, who
+      # is given the directories the build writes to. The test job runs the
+      # tests, and the runtime dependencies that only matter on a desktop
+      # (qt6-wayland, xdg-desktop-portal) aren't in the image, hence
+      # --nocheck --nodeps.
       - name: Build the package
         run: |
-          export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
-          useradd -m builder
-          mkdir -p "$CCACHE_DIR"
-          chown -R builder:builder .
-          sudo -u builder env PATH="/usr/lib/ccache/bin:$PATH" CCACHE_DIR="$CCACHE_DIR" CCACHE_MAXSIZE="$CCACHE_MAXSIZE" \
-            sh -c 'cd pkgbuild && makepkg -f --noconfirm --nocheck --nodeps'
-          ccache --show-stats
+          .github/ci-image/run sh -euc '
+            mkdir -p build .ccache
+            chown -R builder: build pkgbuild .ccache
+            cd pkgbuild
+            runuser -u builder -- env HOME=/home/builder makepkg -f --noconfirm --nocheck --nodeps
+            ccache --show-stats
+          '
 
       - name: Smoke-test the command line
-        env:
-          QT_QPA_PLATFORM: offscreen
         run: |
-          build/omareader version
-          build/omareader skill > /dev/null
-          build/omareader export --help > /dev/null
-          build/omareader setup --dry-run || true
-          build/omareader doctor --json || test $? -eq 1
+          .github/ci-image/run sh -euc '
+            build/omareader version
+            build/omareader skill > /dev/null
+            build/omareader export --help > /dev/null
+            build/omareader setup --dry-run || true
+            build/omareader doctor --json || test $? -eq 1
+          '
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

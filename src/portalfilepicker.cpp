@@ -253,3 +253,8 @@ void PortalFilePicker::clearPending() {
     m_pendingPath.clear();
     m_pending = false;
 }
+
+// Compiled as part of this file, not on its own; see omareader.pro.
+// FilePicker has no source file of its own, so its moc output joins in.
+#include "moc_filepicker.cpp"
+#include "moc_portalfilepicker.cpp"

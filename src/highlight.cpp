@@ -130,3 +130,6 @@ void ReadingHighlight::apply() {
     }
     m_applying = false;
 }
+
+// Compiled as part of this file, not on its own; see omareader.pro.
+#include "moc_highlight.cpp"

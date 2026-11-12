@@ -9,7 +9,7 @@ url='https://github.com/looizao/omareader'
 license=('MIT')
 depends=('qt6-base' 'qt6-declarative' 'qt6-multimedia' 'qt6-wayland' 'xdg-desktop-portal' 'poppler' 'ffmpeg')
 makedepends=('gcc' 'make')
-options=('!debug')
+options=('!debug' '!lto')
 optdepends=('calibre: open Kindle (MOBI, AZW3) and other formats'
             'rust: build Kokoros with omareader setup'
             'opus: build Kokoros with omareader setup'

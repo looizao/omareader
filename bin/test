@@ -11,6 +11,10 @@ mkdir -p "$ROOT/build/tests"
 cd "$ROOT/build/tests"
 
 qmake6 "$ROOT/tests/omareader_tests.pro"
+# moc's output first. make leaves a file whose moc output isn't ready for
+# the end, and the test class's file, the slowest to compile, would then
+# be built on its own after everything else.
+make -j"$(nproc)" mocables
 make -j"$(nproc)"
 
 export QT_QPA_PLATFORM=offscreen

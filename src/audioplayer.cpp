@@ -131,3 +131,6 @@ void AudioPlayer::resume() {
     m_sink->resume();
     pump();
 }
+
+// Compiled as part of this file, not on its own; see omareader.pro.
+#include "moc_audioplayer.cpp"

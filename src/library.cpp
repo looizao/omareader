@@ -232,3 +232,6 @@ void Library::remove(const QString &path) {
     save();
     emit changed();
 }
+
+// Compiled as part of this file, not on its own; see omareader.pro.
+#include "moc_library.cpp"

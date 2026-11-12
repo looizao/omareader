@@ -64,4 +64,9 @@ SOURCES += \
     src/voicesettings.cpp \
     src/webimport.cpp
 
+# Each source file ends by including its header's moc output
+# (#include "moc_reader.cpp"), which qmake then leaves out of the build as a
+# file of its own. Compiled alone, every one of them would read the same Qt
+# headers again for a few lines of code.
+
 RESOURCES += src/resources.qrc

@@ -1,0 +1,37 @@
+#!/bin/sh
+# Runs a command in CI's container image (the Dockerfile next to this file),
+# from a job on the runner itself:
+#
+#   .github/ci-image/run bin/test
+#
+# The checkout is mounted at the path it has on the runner and is the working
+# directory, and every compiler call goes through ccache, kept in .ccache.
+#
+# GitHub can start a job in a container by itself (container:), but Docker
+# then unpacks the image onto the runner's disk and waits for it to be
+# written out, 12 to 20 seconds in all. podman keeping the image in memory,
+# under /dev/shm, has it running in about 8.
+set -eu
+
+IMAGE=ghcr.io/looizao/omareader-ci:latest
+
+if command -v podman > /dev/null 2>&1; then
+  engine="sudo podman --root /dev/shm/containers/storage --runroot /dev/shm/containers/run"
+else
+  engine=docker
+fi
+
+# Before the command, anything the image lacks is installed: nothing, unless
+# a package joined the list since the image was last built. The engine's
+# words are split on purpose, and $@ is for the shell in the container.
+# shellcheck disable=SC2016,SC2086
+exec $engine run --rm --network host \
+  --volume "$PWD:$PWD" --workdir "$PWD" \
+  --env PATH=/usr/lib/ccache/bin:/usr/local/sbin:/usr/local/bin:/usr/bin \
+  --env CCACHE_DIR="$PWD/.ccache" --env CCACHE_MAXSIZE=100M \
+  --env QT_QPA_PLATFORM=offscreen \
+  "$IMAGE" sh -euc '
+    packages="$(cat .github/ci-image/packages)"
+    pacman -Q $packages > /dev/null 2>&1 || pacman -Syu --noconfirm --needed $packages
+    exec "$@"
+  ' sh "$@"

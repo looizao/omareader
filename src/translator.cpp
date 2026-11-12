@@ -135,3 +135,6 @@ void Translator::reload() {
     QGuiApplication::setLayoutDirection(locale.textDirection());
     emit changed();
 }
+
+// Compiled as part of this file, not on its own; see omareader.pro.
+#include "moc_translator.cpp"

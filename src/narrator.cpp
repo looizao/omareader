@@ -594,3 +594,6 @@ void Narrator::stopPreview() {
     m_previewPlayer.close();
     setPreviewing(false);
 }
+
+// Compiled as part of this file, not on its own; see omareader.pro.
+#include "moc_narrator.cpp"

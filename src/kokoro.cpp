@@ -272,3 +272,6 @@ void KokoroRunner::handleLine(const QString &rawLine) {
             m_recentErrors.removeFirst();
     }
 }
+
+// Compiled as part of this file, not on its own; see omareader.pro.
+#include "moc_kokoro.cpp"

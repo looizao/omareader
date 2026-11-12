@@ -249,8 +249,9 @@ bin/install      # ~/.local/bin and ~/.local/share, no sudo
 
 CI builds and tests every push and pull request in an Arch Linux container,
 builds the package, and lints the shell scripts, all at once, with a
-compiler cache kept between runs. Every push to main
-is a release: `bin/release patch` (or `minor` for a new feature) bumps
+compiler cache kept between runs. The container image already holds the
+dependencies; it is built from `.github/ci-image` and rebuilt every week.
+Every push to main is a release: `bin/release patch` (or `minor` for a new feature) bumps
 `VERSION` and the PKGBUILD, commits, and pushes, and CI tags the version and
 publishes a GitHub release with the source tarball, the Arch package, and a
 PKGBUILD that builds from the tarball. A push to main without a bump fails.

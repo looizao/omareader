@@ -344,3 +344,6 @@ QString WebImport::unsupported(const QByteArray &contentType) const {
         return tr("This address leads to a file, not a web page with text to read.");
     return tr("This address leads to %1 content, not a web page with text to read.").arg(QString::fromLatin1(mime));
 }
+
+// Compiled as part of this file, not on its own; see omareader.pro.
+#include "moc_webimport.cpp"

@@ -1,0 +1,56 @@
+# Builds the container image CI's jobs run their commands in
+# (.github/ci-image) and pushes it to the GitHub container registry: when
+# its contents change, and every week so the tests keep running against a
+# current Arch Linux. Until a rebuild lands, CI installs whatever the image
+# lacks by itself, so adding a dependency never breaks a build.
+name: CI image
+
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  push:
+    branches: [main]
+    paths:
+      - .github/ci-image/**
+      - .github/workflows/ci-image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-image
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}-ci
+
+jobs:
+  build:
+    name: Build and push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Sign in to the container registry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      # zstd unpacks several times faster than gzip, and unpacking is most
+      # of what fetching the image costs a job. The builder comes from
+      # buildx create because the default one can't push in this format.
+      - name: Build and push
+        run: |
+          docker buildx create --use
+          docker buildx build .github/ci-image \
+            --progress plain \
+            --provenance=false \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.description=Arch Linux with omareader's build and test dependencies, for its CI" \
+            --output "type=image,name=$IMAGE:latest,push=true,compression=zstd,compression-level=19,force-compression=true,oci-mediatypes=true"

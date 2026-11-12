@@ -106,3 +106,6 @@ void Theme::reload() {
         emit changed();
     }
 }
+
+// Compiled as part of this file, not on its own; see omareader.pro.
+#include "moc_theme.cpp"

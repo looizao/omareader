@@ -1,0 +1,4 @@
+gcc make fakeroot file which pkgconf ccache
+qt6-base
+qt6-declarative qt6-multimedia qt6-svg
+poppler ffmpeg python ttf-dejavu

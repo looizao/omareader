@@ -77,6 +77,13 @@ release once per push, not once per commit.
   agent for pasted text (`TitleAgent`) runs a coding agent that may use the
   network, so it stays off until the user turns it on in the dialog.
 - Never modify the user's books; save app data atomically (`QSaveFile`).
+- A source file whose header has `Q_OBJECT` ends with
+  `#include "moc_<name>.cpp"`, so moc's output is compiled with it instead
+  of as one more file reading the same Qt headers.
+- A package the build or the tests need goes in `.github/ci-image/packages`
+  (and in the PKGBUILD's `depends` when the app needs it to run). CI
+  installs it on the spot until the image is rebuilt, which the push to
+  main starts.
 - Comments explain why, in full sentences. No em dashes in prose.
 
 ## Traps found so far

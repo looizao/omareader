@@ -450,3 +450,6 @@ void QwenClient::setHeld(bool held) {
     m_held = held;
     m_worker->schedule();
 }
+
+// Compiled as part of this file, not on its own; see omareader.pro.
+#include "moc_qwen.cpp"

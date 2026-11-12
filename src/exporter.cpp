@@ -643,3 +643,6 @@ void Exporter::reset() {
     m_trackTitles.clear();
     m_trackLengths.clear();
 }
+
+// Compiled as part of this file, not on its own; see omareader.pro.
+#include "moc_exporter.cpp"

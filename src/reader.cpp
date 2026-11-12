@@ -337,3 +337,6 @@ void Reader::setSerif(bool serif) {
     QSettings().setValue("reader/serif", serif);
     emit appearanceChanged();
 }
+
+// Compiled as part of this file, not on its own; see omareader.pro.
+#include "moc_reader.cpp"

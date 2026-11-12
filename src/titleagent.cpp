@@ -246,3 +246,6 @@ void TitleAgent::cancel() {
     m_workDirectory.reset();
     emit busyChanged();
 }
+
+// Compiled as part of this file, not on its own; see omareader.pro.
+#include "moc_titleagent.cpp"

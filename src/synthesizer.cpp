@@ -200,3 +200,6 @@ void QwenSynthesizer::setHeld(bool held) {
     if (m_client && m_running)
         m_client->setHeld(held);
 }
+
+// Compiled as part of this file, not on its own; see omareader.pro.
+#include "moc_synthesizer.cpp"
