@@ -50,7 +50,10 @@ in order, before it counts as done:
 3. **Push it to main** and wait for the full CI run on GitHub
    (`.github/workflows/ci.yml`) to finish green: every job, not just the
    first. Fix anything it reports, push again, and wait again.
-4. **Install it locally** so the user can test it: run `bin/install`. It
+4. **Release it** once that run is green: run `bin/release` with the next
+   version (see Releases) and wait for the CI run on the release commit to
+   finish green as well, including the release and Play jobs.
+5. **Install it locally** so the user can test it: run `bin/install`. It
    needs no sudo: it builds and copies the binary to `~/.local/bin` and the
    icon and launcher entry under `~/.local/share`. If it reports missing
    dependencies, give the user the `sudo pacman -S` command it prints rather
@@ -64,13 +67,16 @@ Then tell the user what changed, how it was tested, and what to try.
 
 `bin/release <x.y.z>` bumps `VERSION` and `pkgbuild/PKGBUILD` and pushes;
 CI tags `v<x.y.z>`, publishes the GitHub release, and sends the Android app
-to Play internal testing. Only release when the user asks.
+to Play internal testing.
+
+Every change pushed to main gets its own release (step 4 above). Bump the
+patch number for fixes and small changes, and the minor number for new
+features; leave the major number alone unless the user asks. Several commits
+pushed together share one release.
 
 Beta testers install the Android app from Play's internal testing track
-(`docs/play.md`). To send main to them between releases, run CI with
-`gh workflow run ci.yml -f play=true`, but only when the user asks: it goes
-straight to their testers' phones. The upload key lives in the `play`
-environment's secrets; never print it or commit it.
+(`docs/play.md`), so every release reaches their phones. The upload key
+lives in the `play` environment's secrets; never print it or commit it.
 
 ## Conventions
 
