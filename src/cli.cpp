@@ -10,6 +10,7 @@
 #include "synthesizer.h"
 #include "tokenstore.h"
 #include "voicesettings.h"
+#include "webimport.h"
 
 #include <QCommandLineParser>
 #include <QCoreApplication>
@@ -165,6 +166,7 @@ int info(const QStringList &arguments) {
                    {"title", book->title},
                    {"author", book->author},
                    {"format", book->format},
+                   {"source", book->source},
                    {"hasCover", !book->cover.isEmpty()},
                    {"sentences", book->sentenceCount()},
                    {"words", book->wordCount()},
@@ -174,6 +176,8 @@ int info(const QStringList &arguments) {
     out() << book->title << Qt::endl;
     if (!book->author.isEmpty())
         out() << book->author << Qt::endl;
+    if (!book->source.isEmpty())
+        out() << book->source << Qt::endl;
     out() << book->format.toUpper() << ", " << book->wordCount() << " words" << Qt::endl << Qt::endl;
     for (const auto &value : std::as_const(chapters)) {
         const QJsonObject c = value.toObject();
@@ -597,6 +601,41 @@ int syncCommand(const QStringList &arguments) {
     return report(sync.error().isEmpty() ? 0 : 1);
 }
 
+// Fetches a page and prints the article the window would offer to add,
+// without adding it: the window owns the library while it is open.
+int fetchPage(const QStringList &arguments) {
+    Command command("fetch", "Fetch a web page and print its article as omareader would add it (uses the network).");
+    command.parser.addPositionalArgument("url", "The page's address");
+    command.json();
+    if (!command.parse(arguments))
+        return command.parser.isSet("help") ? 0 : 1;
+    const QStringList positional = command.parser.positionalArguments();
+    if (positional.size() != 1)
+        return fail("Use: omareader fetch <url> [--json]");
+    WebImport page;
+    QEventLoop loop;
+    QObject::connect(&page, &WebImport::fetched, &loop, &QEventLoop::quit);
+    QObject::connect(&page, &WebImport::failed, &loop, &QEventLoop::quit);
+    page.fetch(positional.first());
+    if (page.busy())
+        loop.exec();
+    if (!page.hasArticle())
+        return fail(page.error());
+    if (command.parser.isSet("json")) {
+        printJson({{"title", page.title()},
+                   {"author", page.author()},
+                   {"site", page.site()},
+                   {"source", page.source()},
+                   {"text", page.text()}});
+        return 0;
+    }
+    out() << page.title() << Qt::endl;
+    if (!page.author().isEmpty())
+        out() << page.author() << Qt::endl;
+    out() << page.source() << Qt::endl << Qt::endl << page.text() << Qt::endl;
+    return 0;
+}
+
 int skill(const QStringList &arguments) {
     Command command("skill", "Print the agent skill, or install it with: skill install.");
     command.parser.addPositionalArgument("install", "Copy to ~/.agents/skills/omareader and link into ~/.claude/skills",
@@ -645,6 +684,7 @@ QString usage() {
            "  info <book> [--json]            Show a book's metadata and chapters\n"
            "  text <book> [--chapter N]       Print a book's text as omareader reads it\n"
            "  export <book> [--split]         Read a book aloud into MP3 or M4B files\n"
+           "  fetch <url> [--json]            Print the article a web page adds (uses the network)\n"
            "  doctor [--engine E] [--json]    Check that read-aloud is ready, with hardware advice\n"
            "  setup [--engine kokoro|qwen]    Install a voice engine and its models (uses the network)\n"
            "  voices [--engine E] [--json]    List an engine's voices, languages and tuning\n"
@@ -654,7 +694,7 @@ QString usage() {
 }
 
 bool isCommand(const QString &word) {
-    return QStringList{"info", "text", "export", "doctor", "setup", "voices", "sync", "skill", "help", "--help", "-h", "version", "--version"}
+    return QStringList{"info", "text", "export", "fetch", "doctor", "setup", "voices", "sync", "skill", "help", "--help", "-h", "version", "--version"}
         .contains(word);
 }
 
@@ -664,6 +704,7 @@ int run(const QStringList &arguments) {
     if (command == "info") return info(rest);
     if (command == "text") return text(rest);
     if (command == "export") return exportAudio(rest);
+    if (command == "fetch") return fetchPage(rest);
     if (command == "doctor") return doctor(rest);
     if (command == "setup") return setup(rest);
     if (command == "voices") return voices(rest);

@@ -21,6 +21,13 @@ void writeOdt(const QString &path);
 // reading FAIL, and stops with a fatal error when the model path contains
 // "broken".
 QByteArray fakeQwenWorker();
+// A made-up news page the way sites build them: a header, menus, a cookie
+// banner, adverts, a sidebar, share buttons, comments, related stories and
+// a footer around one article, with its title and byline in the page's
+// metadata.
+QByteArray articlePage();
+// A page with no title anywhere, only text.
+QByteArray untitledPage();
 }
 
 // A tiny HTTP/1.1 server on localhost that answers each request with a

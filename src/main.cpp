@@ -21,6 +21,7 @@
 #include "titleagent.h"
 #include "tokenstore.h"
 #include "translator.h"
+#include "webimport.h"
 
 #ifndef OMAREADER_VERSION
 #define OMAREADER_VERSION "0.0.0"
@@ -62,6 +63,7 @@ int main(int argc, char *argv[]) {
     exporter.setPicker(&picker);
     reader.setExporter(&exporter);
     TitleAgent titleAgent;
+    WebImport webImport;
     KeyringTokenStore keyring;
     SyncService sync(&library, &keyring);
     sync.setNarrator(&narrator);
@@ -81,6 +83,7 @@ int main(int argc, char *argv[]) {
     engine.rootContext()->setContextProperty("reader", &reader);
     engine.rootContext()->setContextProperty("exporter", &exporter);
     engine.rootContext()->setContextProperty("titleAgent", &titleAgent);
+    engine.rootContext()->setContextProperty("webImport", &webImport);
     engine.rootContext()->setContextProperty("sync", &sync);
     engine.load(QUrl("qrc:/Main.qml"));
     if (engine.rootObjects().isEmpty())

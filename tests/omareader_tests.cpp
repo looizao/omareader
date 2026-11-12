@@ -3,6 +3,8 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QClipboard>
+#include <QGuiApplication>
 #include <QProcess>
 #include <functional>
 #include <QQuickWindow>
@@ -19,12 +21,14 @@
 #include <QSettings>
 #include <QSignalSpy>
 #include <QStandardPaths>
+#include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QUrlQuery>
 #include <QtEndian>
 #include <QtTest>
 
+#include "article.h"
 #include "audioplayer.h"
 #include "book.h"
 #include "bookloader.h"
@@ -49,6 +53,7 @@
 #include "tokenstore.h"
 #include "translator.h"
 #include "voicesettings.h"
+#include "webimport.h"
 #include "zipwriter.h"
 
 // The real window (qrc:/Main.qml) with everything main() gives it, drawn
@@ -73,6 +78,7 @@ public:
         context->setContextProperty("exporter", &exporter);
         context->setContextProperty("titleAgent", &titleAgent);
         context->setContextProperty("sync", &sync);
+        context->setContextProperty("webImport", &webImport);
     }
 
     bool show(QSize size = {1100, 720}) {
@@ -126,6 +132,7 @@ public:
     TitleAgent titleAgent;
     MemoryTokenStore tokens;
     SyncService sync;
+    WebImport webImport;
     QQmlApplicationEngine engine;
     QQuickWindow *window = nullptr;
 };
@@ -142,6 +149,26 @@ static QRect brightBoxInCircle(const QImage &image, const QRect &area, int thres
             if (QLineF(centre, QPointF(x + 0.5, y + 0.5)).length() <= radius && qGray(image.pixel(x, y)) > threshold)
                 box |= QRect(x, y, 1, 1);
     return box;
+}
+
+// How many pixels in area are light, as text is on the dark theme.
+static int brightPixels(const QImage &image, const QRect &area, int threshold = 150) {
+    int count = 0;
+    for (int y = area.top(); y <= area.bottom(); ++y)
+        for (int x = area.left(); x <= area.right(); ++x)
+            count += qGray(image.pixel(x, y)) > threshold;
+    return count;
+}
+
+// How many pixels in area are the error box's red border or text.
+static int redPixels(const QImage &image, const QRect &area) {
+    int count = 0;
+    for (int y = qMax(0, area.top()); y <= qMin(image.height() - 1, area.bottom()); ++y)
+        for (int x = qMax(0, area.left()); x <= qMin(image.width() - 1, area.right()); ++x) {
+            const QColor c = image.pixelColor(x, y);
+            count += c.red() > 140 && c.red() > c.green() + 40 && c.red() > c.blue() + 40;
+        }
+    return count;
 }
 
 // Every book here is made up inside the test, so nothing personal or
@@ -1921,6 +1948,384 @@ private slots:
         QCOMPARE(reader.sentence(), 2);
     }
 
+    // Web pages, fetched once and read like pasted text. Every page here is
+    // made up and served from this computer.
+
+    void articleKeepsTheStoryAndDropsTheRest() {
+        const Article article = ArticleExtractor::extract(Fixtures::articlePage(),
+                                                          QUrl("https://www.fieldjournal.example/2026/terns"),
+                                                          "text/html; charset=utf-8");
+        QCOMPARE(article.title, QString("Why Terns Fly So Far"));
+        QCOMPARE(article.author, QString("Ana Ribeiro"));
+        QCOMPARE(article.site, QString("The Field Journal"));
+        // The heading that repeats the title goes, as the reader shows the title.
+        QVERIFY2(article.text.startsWith("Every year the Arctic tern"), qPrintable(article.text));
+        for (const char *kept : {"Every year the Arctic tern", "**prevailing winds**", "*S-shaped*", "## Following the wind",
+                                 "three trips to the Moon", "They see two summers every year.", "`tern_tracks.csv`"})
+            QVERIFY2(article.text.contains(QString::fromUtf8(kept)), qPrintable(QString("lost: ") + kept + "\n" + article.text));
+        // The site around the article, and anything that would run or load.
+        for (const char *dropped : {"cookies", "Accept all", "About us", "binoculars", "Most read", "gulls", "Great article",
+                                    "Related stories", "Penguins", "Copyright", "Privacy", "Share on", "track(", "color:",
+                                    "loadComments", "tern.jpg", "http", "By Ana"})
+            QVERIFY2(!article.text.contains(QString::fromUtf8(dropped)),
+                     qPrintable(QString("kept: ") + dropped + "\n" + article.text));
+
+        // It reads back as the reader shows it: a heading, styled words and
+        // the list's items as paragraphs of their own.
+        const auto chapters = BookLoader::markdownChapters(article.text, false);
+        QList<Paragraph> paragraphs;
+        for (const Chapter &chapter : chapters)
+            paragraphs += chapter.paragraphs;
+        QStringList texts;
+        for (const Paragraph &p : paragraphs)
+            texts << p.text;
+        QVERIFY2(texts.contains("Following the wind"), qPrintable(texts.join(" | ")));
+        QCOMPARE(paragraphs.at(texts.indexOf("Following the wind")).level, 2);
+        QVERIFY(texts.contains("They spend more time in daylight than any other animal."));
+        const Paragraph &winds = paragraphs.at(1);
+        QCOMPARE(paragraphs.first().level, 0);
+        QVERIFY2(winds.text.startsWith("The birds do not fly"), qPrintable(winds.text));
+        QVERIFY(!winds.styles.isEmpty());
+        QCOMPARE(winds.text.mid(winds.styles.first().start, winds.styles.first().length), QString("prevailing winds"));
+        QCOMPARE(winds.styles.first().flags, int(TextStyle::Bold));
+    }
+
+    void articleTitleFallsBackToTheFirstWords() {
+        const Article article = ArticleExtractor::extract(Fixtures::untitledPage(), QUrl("https://harbour.example/day"));
+        QVERIFY2(article.text.startsWith("Rain fell over the harbour all morning"), qPrintable(article.text));
+        QCOMPARE(article.title, PastedTitle::fromText(article.text));
+        QVERIFY(article.title.startsWith("Rain fell over the harbour"));
+        QCOMPARE(article.site, QString("harbour.example"));
+
+        // Plain text comes whole, its marks kept as they are.
+        const QString plain = "1. Not a list but a date\n\n*Not italic* and a_b_c\n\n# not a heading";
+        const Article text = ArticleExtractor::extract(plain.toUtf8(), QUrl("https://notes.example/a.txt"), "text/plain");
+        QStringList texts;
+        for (const Chapter &chapter : BookLoader::markdownChapters(text.text, false))
+            for (const Paragraph &p : chapter.paragraphs) {
+                texts << p.text;
+                QVERIFY(p.styles.isEmpty());
+                QCOMPARE(p.level, 0);
+            }
+        QCOMPARE(texts, (QStringList{"1. Not a list but a date", "*Not italic* and a_b_c", "# not a heading"}));
+        QCOMPARE(text.title, PastedTitle::fromText(text.text));
+        QVERIFY(text.title.startsWith("1. Not a list but a date"));
+        // Markdown is taken as Markdown.
+        const Article markdown = ArticleExtractor::extract("# Notes\n\nSome *words*.", QUrl("https://notes.example/a"),
+                                                           "text/markdown; charset=utf-8");
+        QCOMPARE(markdown.text, QString("# Notes\n\nSome *words*."));
+    }
+
+    void articleTitleDropsTheSiteName() {
+        using ArticleExtractor::cleanTitle;
+        QCOMPARE(cleanTitle("Why Terns Fly | The Field Journal", "The Field Journal"), QString("Why Terns Fly"));
+        QCOMPARE(cleanTitle("The Field Journal - Why Terns Fly", "The Field Journal"), QString("Why Terns Fly"));
+        QCOMPARE(cleanTitle("Arctic tern - Wikipedia", {}, "en.wikipedia.org"), QString("Arctic tern"));
+        QCOMPARE(cleanTitle("  Arctic   tern  ", {}, "example.com"), QString("Arctic tern"));
+        // A title that only has a dash in it keeps it.
+        QCOMPARE(cleanTitle("Rock - Paper", {}, "games.example"), QString("Rock - Paper"));
+    }
+
+    void articleReadsItsMetadataFromThePage() {
+        // JSON-LD names the author when the page shows none, and its name
+        // wins over a headline that doesn't match the title.
+        const QByteArray page =
+            "<html><head><title>Arctic tern - Encyclopedia</title>"
+            "<script type=\"application/ld+json\">{\"@type\":\"Article\",\"name\":\"Arctic tern\","
+            "\"headline\":\"species of seabird\",\"author\":[{\"@type\":\"Person\",\"name\":\"Lee Moss\"}]}</script>"
+            "</head><body><div class=\"article\">"
+            "<p>The Arctic tern is a tern in the family Laridae. It breeds in the Arctic and sub-Arctic regions.</p>"
+            "<p>It sees two summers each year as it migrates along a convoluted route from its northern breeding grounds.</p>"
+            "</div></body></html>";
+        const Article article = ArticleExtractor::extract(page, QUrl("https://encyclopedia.example/wiki/Arctic_tern"));
+        QCOMPARE(article.title, QString("Arctic tern"));
+        QCOMPARE(article.author, QString("Lee Moss"));
+        QCOMPARE(article.site, QString("encyclopedia.example"));
+    }
+
+    void articleEscapesMarkdownSoItReadsBack() {
+        for (const QString &line : {QString("1. Not a list"), QString("# not a heading"), QString("*not italic*"),
+                                    QString("snake_case_name and __init__"), QString("[a link](https://x.example)"),
+                                    QString("- not an item"), QString("> not a quote"), QString("2 * 3 * 4 = 24"),
+                                    QString("`not code`"), QString("a <b>tag</b> &amp; more"), QString("~~kept~~"),
+                                    QString("C:\\path\\to\\file")}) {
+            const QString escaped = ArticleExtractor::escapeMarkdown(line);
+            const auto chapters = BookLoader::markdownChapters(escaped, false);
+            QCOMPARE(chapters.size(), 1);
+            QCOMPARE(chapters.first().paragraphs.size(), 1);
+            const Paragraph &p = chapters.first().paragraphs.first();
+            QVERIFY2(p.text == line, qPrintable(line + " came back as " + p.text + " from " + escaped));
+            QVERIFY2(p.styles.isEmpty() && p.level == 0, qPrintable(line));
+        }
+    }
+
+    void articleDecodesTheCharset() {
+        // Windows-1252, named by the page.
+        const QByteArray page = "<html><head><meta charset=\"windows-1252\"><title>Caf\xE9 notes</title></head><body>"
+                                "<p>The caf\xE9 said \x93hello\x94 to everyone who came in from the rain that day.</p>"
+                                "</body></html>";
+        Article article = ArticleExtractor::extract(page, QUrl("https://cafe.example/"));
+        QCOMPARE(article.title, QString::fromUtf8("Café notes"));
+        QVERIFY2(article.text.contains(QString::fromUtf8("The café said “hello”")), qPrintable(article.text));
+        // The response's charset wins over the page's, and Latin-1 reads as
+        // browsers read it.
+        const QByteArray labelled = "<html><head><meta charset=\"utf-8\"></head><body><p>Na\xEFve \x96 ok.</p></body></html>";
+        QCOMPARE(ArticleExtractor::decode(labelled, "text/html; charset=ISO-8859-1").contains(QString::fromUtf8("Naïve – ok.")),
+                 true);
+        // UTF-8 without a label.
+        QVERIFY(ArticleExtractor::decode("<p>Olá</p>", "text/html").contains(QString::fromUtf8("Olá")));
+    }
+
+    void webAddressesAreChecked() {
+        QString error;
+        QCOMPARE(WebImport::parseAddress("example.com/story?id=1", &error), QUrl("https://example.com/story?id=1"));
+        QCOMPARE(WebImport::parseAddress("  http://example.com/a  ", &error), QUrl("http://example.com/a"));
+        QCOMPARE(WebImport::parseAddress("HTTPS://Example.com", &error).host(), QString("example.com"));
+        QVERIFY(WebImport::parseAddress("http://localhost:8080/x", &error).isValid());
+        QVERIFY(WebImport::parseAddress("http://[::1]:8080/x", &error).isValid());
+        for (const QString address : {"", "hello", "https://exa mple.com", "https://", "http://intranet/page"}) {
+            error.clear();
+            QVERIFY2(!WebImport::parseAddress(address, &error).isValid(), qPrintable(address));
+            QVERIFY2(error.contains("such as https://example.com"), qPrintable(address + ": " + error));
+        }
+        for (const QString address : {"ftp://example.com/file", "file:///etc/passwd", "javascript:alert(1)",
+                                       "data:text/html,<p>hi</p>", "mailto:someone@example.com"}) {
+            error.clear();
+            QVERIFY2(!WebImport::parseAddress(address, &error).isValid(), qPrintable(address));
+            QVERIFY2(error.contains("http:// or https://"), qPrintable(address + ": " + error));
+        }
+
+        const QUrl base("https://site.example/old/page");
+        QCOMPARE(WebImport::refreshTarget("<head><meta http-equiv=\"refresh\" content=\"0; url=/new/\"></head>", base),
+                 QUrl("https://site.example/new/"));
+        QCOMPARE(WebImport::refreshTarget("<META HTTP-EQUIV=Refresh CONTENT='1;URL=next.html'>", base),
+                 QUrl("https://site.example/old/next.html"));
+        // A page that waits has something to show, and only web pages are followed.
+        QVERIFY(!WebImport::refreshTarget("<meta http-equiv=\"refresh\" content=\"30; url=/new/\">", base).isValid());
+        QVERIFY(!WebImport::refreshTarget("<meta http-equiv=\"refresh\" content=\"0; url=javascript:x()\">", base).isValid());
+        QVERIFY(!WebImport::refreshTarget("<meta http-equiv=\"refresh\" content=\"0; url=page\">", base).isValid());
+        QVERIFY(!WebImport::refreshTarget("<meta name=\"viewport\" content=\"width=device-width\">", base).isValid());
+    }
+
+    void webImportFetchesOnlyThePage() {
+        FakeHttpServer server([](const FakeHttpServer::Request &r) -> FakeHttpServer::Response {
+            const QList<QPair<QByteArray, QByteArray>> html{{"Content-Type", "text/html; charset=utf-8"},
+                                                            {"Set-Cookie", "visitor=1; Path=/"}};
+            if (r.target == "/story")
+                return {200, Fixtures::articlePage(), html};
+            if (r.target == "/old")
+                return {301, {}, {{"Location", "/story"}}};
+            if (r.target == "/moved")
+                return {200, "<html><head><meta http-equiv=\"refresh\" content=\"0; url=/old\"></head><body></body></html>", html};
+            return {404, "missing", {}};
+        });
+        WebImport web;
+        QSignalSpy fetched(&web, &WebImport::fetched);
+        QSignalSpy failed(&web, &WebImport::failed);
+        web.fetch(server.url() + "/story#comments");
+        QVERIFY(web.busy());
+        QCOMPARE(web.fetching(), QString("127.0.0.1"));
+        QTRY_COMPARE(fetched.count(), 1);
+        QCOMPARE(failed.count(), 0);
+        QVERIFY(!web.busy());
+        QVERIFY(web.hasArticle());
+        QVERIFY(web.error().isEmpty());
+        QCOMPARE(web.title(), QString("Why Terns Fly So Far"));
+        QCOMPARE(web.author(), QString("Ana Ribeiro"));
+        QCOMPARE(web.source(), server.url() + "/story");
+        QVERIFY(web.text().contains("Following the wind"));
+        // The page only: none of its scripts, styles or images.
+        QCOMPARE(server.requests.size(), 1);
+        QCOMPARE(server.requests.first().method, QByteArray("GET"));
+        QVERIFY(server.requests.first().headers.value("user-agent").contains("omareader"));
+
+        // Moved pages are followed, and keep the address they ended up at,
+        // and no cookie carries from one fetch to the next.
+        web.fetch(server.url() + "/moved");
+        QTRY_COMPARE(fetched.count(), 2);
+        QCOMPARE(web.source(), server.url() + "/story");
+        QCOMPARE(server.requests.size(), 4);
+        for (const auto &request : std::as_const(server.requests))
+            QVERIFY(!request.headers.contains("cookie"));
+        QCOMPARE(failed.count(), 0);
+    }
+
+    void webImportExplainsWhatWentWrong() {
+        FakeHttpServer server([](const FakeHttpServer::Request &r) -> FakeHttpServer::Response {
+            const QList<QPair<QByteArray, QByteArray>> html{{"Content-Type", "text/html"}};
+            if (r.target == "/missing")
+                return {404, "<p>Not found</p>", html};
+            if (r.target == "/private")
+                return {403, "<p>Log in</p>", html};
+            if (r.target == "/busy")
+                return {429, {}, {}};
+            if (r.target == "/broken")
+                return {500, {}, {}};
+            if (r.target == "/paper.pdf")
+                return {200, "%PDF-1.4 binary", {{"Content-Type", "application/pdf"}}};
+            if (r.target == "/picture")
+                return {200, "\x89PNG", {{"Content-Type", "image/png"}}};
+            if (r.target == "/unlabelled")
+                return {200, QByteArray("PK\x03\x04zipped", 10), {}};
+            if (r.target == "/empty")
+                return {200, "<html><body><nav><a href=\"/\">Home</a></nav><script>render()</script></body></html>", html};
+            if (r.target == "/big")
+                return {200, "<p>" + QByteArray(5000, 'a') + "</p>", html};
+            if (r.target == "/elsewhere")
+                return {302, {}, {{"Location", "ftp://files.example/story"}}};
+            return {200, Fixtures::articlePage(), html};
+        });
+        // A port nothing listens on.
+        QTcpServer closed;
+        QVERIFY(closed.listen(QHostAddress::LocalHost));
+        const QString refused = QString("http://127.0.0.1:%1/").arg(closed.serverPort());
+        closed.close();
+
+        WebImport web;
+        web.setMaxBytes(4000);
+        const QList<QPair<QString, QString>> cases{
+            {"hello", "such as https://example.com"},
+            {"ftp://example.com/x", "http:// or https://"},
+            {server.url() + "/missing", "no page at this address (HTTP 404)"},
+            {server.url() + "/private", "login or a paywall"},
+            {server.url() + "/busy", "too many requests"},
+            {server.url() + "/broken", "(HTTP 500)"},
+            {server.url() + "/paper.pdf", "a PDF file"},
+            {server.url() + "/picture", "image/png content"},
+            {server.url() + "/unlabelled", "leads to a file"},
+            {server.url() + "/empty", "No readable text"},
+            {server.url() + "/big", "larger than"},
+            {server.url() + "/elsewhere", "on to ftp://files.example/story, which isn't a web page"},
+            {refused, "couldn't be reached"},
+        };
+        for (const auto &[address, reason] : cases) {
+            QSignalSpy failed(&web, &WebImport::failed);
+            QSignalSpy fetched(&web, &WebImport::fetched);
+            web.fetch(address);
+            QTRY_COMPARE_WITH_TIMEOUT(failed.count(), 1, 10000);
+            QVERIFY2(web.error().contains(reason), qPrintable(address + ": " + web.error()));
+            QCOMPARE(failed.first().first().toString(), web.error());
+            QCOMPARE(fetched.count(), 0);
+            QVERIFY(!web.busy());
+            QVERIFY(!web.hasArticle());
+            QVERIFY(web.text().isEmpty());
+        }
+        // The next fetch starts clean.
+        QSignalSpy fetched(&web, &WebImport::fetched);
+        web.fetch(server.url() + "/story");
+        QVERIFY(web.error().isEmpty());
+        QTRY_COMPARE(fetched.count(), 1);
+    }
+
+    void webImportGivesUpOnASilentSiteOrWhenCancelled() {
+        // Takes the connection and never answers.
+        QTcpServer silent;
+        QVERIFY(silent.listen(QHostAddress::LocalHost));
+        QList<QTcpSocket *> held;
+        connect(&silent, &QTcpServer::newConnection, this, [&] {
+            while (QTcpSocket *socket = silent.nextPendingConnection())
+                held << socket;
+        });
+        const QString address = QString("http://127.0.0.1:%1/slow").arg(silent.serverPort());
+
+        WebImport web;
+        web.setTimeout(300);
+        QSignalSpy failed(&web, &WebImport::failed);
+        QSignalSpy fetched(&web, &WebImport::fetched);
+        web.fetch(address);
+        QTRY_COMPARE(failed.count(), 1);
+        QCOMPARE(web.error(), QString("127.0.0.1 took too long to answer."));
+        QVERIFY(!web.busy());
+
+        // Cancelling stops it quietly, leaving no error and no article.
+        web.setTimeout(30000);
+        QSignalSpy busy(&web, &WebImport::busyChanged);
+        web.fetch(address);
+        QVERIFY(web.busy());
+        QVERIFY(web.error().isEmpty());
+        QTRY_COMPARE(held.size(), 2);
+        web.cancel();
+        QVERIFY(!web.busy());
+        QTest::qWait(200);
+        QCOMPARE(failed.count(), 1);
+        QCOMPARE(fetched.count(), 0);
+        QVERIFY(web.error().isEmpty());
+        QVERIFY(!web.hasArticle());
+        QCOMPARE(busy.count(), 2);
+
+        qDeleteAll(held);
+    }
+
+    void webPagesStayInTheLibrary() {
+        QTemporaryDir dir;
+        const QString file = dir.filePath("library.json");
+        const QString text = "# Why Terns Fly\n\nEvery year the tern flies far. It rests on the wind.\n\n"
+                             "## Following the wind\n\nIt glides **most** of the way.";
+        QString path;
+        {
+            Library library(file, dir.filePath("covers"));
+            Reader reader(&library, nullptr, nullptr);
+            QVERIFY(reader.addText(" Why Terns Fly ", text, "https://www.fieldjournal.example/2026/terns", "Ana Ribeiro"));
+            QTRY_VERIFY(reader.hasBook());
+            path = reader.path();
+            QCOMPARE(reader.title(), QString("Why Terns Fly"));
+            QCOMPARE(library.entry(path).source, QString("https://www.fieldjournal.example/2026/terns"));
+            QCOMPARE(library.entry(path).author, QString("Ana Ribeiro"));
+            QCOMPARE(library.entry(path).format, QString("web"));
+            const QVariantMap card = library.books().first().toMap();
+            QCOMPARE(card.value("site").toString(), QString("fieldjournal.example"));
+            QCOMPARE(card.value("source").toString(), QString("https://www.fieldjournal.example/2026/terns"));
+            reader.setVisibleParagraph(2);
+            const int sentence = reader.sentence();
+            QVERIFY(sentence > 0);
+            reader.saveNow();
+            reader.closeBook();
+        }
+
+        // Kept in the app's own folder, read without the network after a
+        // restart, from where it was left.
+        Library library(file, dir.filePath("covers"));
+        QCOMPARE(library.count(), 1);
+        QVERIFY(library.isText(path));
+        QVERIFY(path.startsWith(library.textDirectory()));
+        QCOMPARE(library.entry(path).source, QString("https://www.fieldjournal.example/2026/terns"));
+        QString error;
+        const auto book = BookLoader::load(path, &error);
+        QVERIFY2(book, qPrintable(error));
+        QCOMPARE(book->source, QString("https://www.fieldjournal.example/2026/terns"));
+        QCOMPARE(book->author, QString("Ana Ribeiro"));
+        QCOMPARE(book->format, QString("web"));
+        const int saved = library.entry(path).sentence;
+        QVERIFY(saved > 0);
+        Reader reader(&library, nullptr, nullptr);
+        reader.open(path);
+        QTRY_VERIFY(reader.hasBook());
+        QCOMPARE(reader.sentence(), saved);
+        QCOMPARE(library.entry(path).source, QString("https://www.fieldjournal.example/2026/terns"));
+    }
+
+    // The web page dialog and its messages are new; check each of their
+    // strings so none ships in English to a Portuguese reader.
+    void everyWebPageStringHasAPortugueseTranslation() {
+        QFile file(QString(OMAREADER_SOURCE) + "/src/i18n/pt-BR.json");
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QJsonObject catalog = QJsonDocument::fromJson(file.readAll()).object();
+        static const QRegularExpression call("\\b(?:qsTr|tr)\\(\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+        int found = 0;
+        for (const QString name : {"src/UrlDialog.qml", "src/webimport.cpp", "src/LibraryView.qml", "src/HelpOverlay.qml"}) {
+            QFile source(QString(OMAREADER_SOURCE) + "/" + name);
+            QVERIFY(source.open(QIODevice::ReadOnly));
+            const QString text = QString::fromUtf8(source.readAll());
+            for (auto it = call.globalMatch(text); it.hasNext();) {
+                QString key = it.next().captured(1);
+                key.replace("\\\"", "\"").replace("\\n", "\n");
+                ++found;
+                QVERIFY2(catalog.contains(key), qPrintable(name + ": no pt-BR entry for: " + key));
+            }
+        }
+        QVERIFY(found > 40);
+    }
+
     void titleAgentPrefersOmarchysDefault() {
         QTemporaryDir dir;
         const QString defaults = dir.filePath("agent");
@@ -2708,6 +3113,75 @@ private slots:
                  qPrintable(QString("the cross is %1, %2 px off the button's centre").arg(offset.x()).arg(offset.y())));
         // And it is a cross, not a dot: about 12 px each way.
         QVERIFY2(cross.width() >= 7 && cross.height() >= 7, qPrintable(QString("cross is %1x%2").arg(cross.width()).arg(cross.height())));
+    }
+
+    void libraryAddsAWebPageFromItsAddress() {
+        FakeHttpServer server([](const FakeHttpServer::Request &r) -> FakeHttpServer::Response {
+            if (r.target == "/missing")
+                return {404, {}, {}};
+            return {200, Fixtures::articlePage(), {{"Content-Type", "text/html; charset=utf-8"}}};
+        });
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        QVERIFY(app.show());
+        QObject *dialog = app.window->findChild<QObject *>("urlDialog");
+        QVERIFY(dialog);
+
+        // U opens it, from the keyboard alone.
+        QTest::keyClick(app.window, Qt::Key_U);
+        QTRY_VERIFY(dialog->property("opened").toBool());
+        QQuickItem *address = app.items("urlAddress").value(0);
+        QVERIFY(address);
+        QTRY_VERIFY(address->hasActiveFocus());
+
+        // A failed fetch says why on screen and adds nothing.
+        address->setProperty("text", server.url() + "/missing");
+        QTest::keyClick(app.window, Qt::Key_Return);
+        QTRY_VERIFY(!app.items("urlError").isEmpty());
+        QImage shot = app.grab("url-dialog-error");
+        QVERIFY(redPixels(shot, app.area(shot, app.items("urlError").first())) > 50);
+        QCOMPARE(app.library.count(), 0);
+
+        // The article comes back to check, with its title ready to edit.
+        address->setProperty("text", server.url() + "/story");
+        QTest::keyClick(app.window, Qt::Key_Return);
+        QQuickItem *title = nullptr;
+        QTRY_VERIFY((title = app.items("urlTitle").value(0)) && title->hasActiveFocus());
+        QCOMPARE(title->property("text").toString(), QString("Why Terns Fly So Far"));
+        QQuickItem *text = app.items("urlText").value(0);
+        QVERIFY(text->property("text").toString().startsWith("Every year the Arctic tern"));
+        QVERIFY(app.items("urlError").isEmpty());
+        shot = app.grab("url-dialog-review");
+        // The text is drawn in its box, light on dark.
+        const QRect box = app.area(shot, text).intersected(shot.rect());
+        QVERIFY2(brightPixels(shot, box) > 500, qPrintable(QString::number(brightPixels(shot, box))));
+        QCOMPARE(app.library.count(), 0);
+
+        // Editing the title and pressing Enter adds it and opens it.
+        title->setProperty("text", "Terns");
+        QTest::keyClick(app.window, Qt::Key_Return);
+        QTRY_VERIFY(app.reader.hasBook());
+        QTRY_VERIFY(!dialog->property("opened").toBool());
+        QCOMPARE(app.library.count(), 1);
+        QCOMPARE(app.reader.title(), QString("Terns"));
+        QCOMPARE(app.library.entry(app.reader.path()).source, server.url() + "/story");
+        QCOMPARE(app.library.entry(app.reader.path()).author, QString("Ana Ribeiro"));
+        QCOMPARE(server.requests.size(), 2);
+        app.grab("url-dialog-added");
+        QVERIFY(!app.webImport.hasArticle());
+
+        // Back in the library, a copied link opens the dialog with it filled in.
+        app.reader.closeBook();
+        QTRY_VERIFY(!app.reader.hasBook());
+        QGuiApplication::clipboard()->setText(server.url() + "/other");
+        QTest::keyClick(app.window, Qt::Key_V, Qt::ControlModifier);
+        QTRY_VERIFY(dialog->property("opened").toBool());
+        QCOMPARE(app.items("urlAddress").value(0)->property("text").toString(), server.url() + "/other");
+        QCOMPARE(server.requests.size(), 2);
+        app.grab("url-dialog-pasted");
+        QTest::keyClick(app.window, Qt::Key_Escape);
+        QTRY_VERIFY(!dialog->property("opened").toBool());
+        QCOMPARE(app.library.count(), 1);
     }
 
 private:

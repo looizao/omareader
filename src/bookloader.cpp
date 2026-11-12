@@ -144,6 +144,13 @@ QString collectRunText(QXmlStreamReader &xml) {
 
 }
 
+QString BookLoader::decodeHtmlEntity(const QString &name, bool *known) {
+    const QString decoded = decodeEntity(name);
+    if (known)
+        *known = !decoded.isEmpty() || entities().contains(name);
+    return decoded;
+}
+
 QStringList BookLoader::nativeExtensions() {
     return {"epub", "pdf", "fb2", "docx", "odt", "txt", "text", "md", "markdown", "html", "htm", "xhtml"};
 }
@@ -1256,13 +1263,18 @@ bool BookLoader::loadPdf(Book &book, QString *error) {
 
 // Pasted text is kept as JSON so its title travels with it, and marked so
 // any other JSON file is turned away rather than read as a book.
-QByteArray BookLoader::pastedText(const QString &title, const QString &text, const QDateTime &created) {
-    return QJsonDocument(QJsonObject{{"kind", "omareader-text"},
-                                     {"version", 1},
-                                     {"title", title},
-                                     {"created", created.toUTC().toString(Qt::ISODate)},
-                                     {"text", text}})
-        .toJson();
+QByteArray BookLoader::pastedText(const QString &title, const QString &text, const QDateTime &created,
+                                  const QString &source, const QString &author) {
+    QJsonObject o{{"kind", "omareader-text"},
+                  {"version", 1},
+                  {"title", title},
+                  {"created", created.toUTC().toString(Qt::ISODate)},
+                  {"text", text}};
+    if (!source.isEmpty())
+        o.insert("source", source);
+    if (!author.isEmpty())
+        o.insert("author", author);
+    return QJsonDocument(o).toJson();
 }
 
 bool BookLoader::loadPastedText(Book &book, const QByteArray &data, QString *error) {
@@ -1271,8 +1283,12 @@ bool BookLoader::loadPastedText(Book &book, const QByteArray &data, QString *err
         *error = tr("omareader can't open .%1 files.").arg("json");
         return false;
     }
-    book.format = "text";
+    // A web page keeps the address it came from, and is never fetched
+    // again: what was saved is what reads.
+    book.source = o.value("source").toString();
+    book.format = book.source.isEmpty() ? "text" : "web";
     book.title = o.value("title").toString().simplified();
+    book.author = o.value("author").toString().simplified();
     // Pasted text often comes from chat apps and notes written in Markdown,
     // whose marks read as formatting rather than aloud. It is one piece,
     // however many headings it has, so it stays one chapter.

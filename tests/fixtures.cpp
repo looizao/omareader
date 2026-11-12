@@ -399,3 +399,77 @@ FakeHttpServer::Response FakeDrive::handle(const FakeHttpServer::Request &r) {
     }
     return {404, "", {}};
 }
+
+QByteArray Fixtures::articlePage() {
+    return R"html(<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Why Terns Fly So Far | The Field Journal</title>
+<meta property="og:site_name" content="The Field Journal">
+<meta property="og:title" content="Why Terns Fly So Far">
+<meta name="author" content="Ana Ribeiro">
+<link rel="stylesheet" href="https://cdn.example.com/site.css">
+<script src="https://ads.example.com/tracker.js"></script>
+<script>window.track('page');</script>
+<style>body { color: red; }</style>
+<script type="application/ld+json">
+{"@context": "https://schema.org", "@type": "NewsArticle", "headline": "Why Terns Fly So Far",
+ "author": {"@type": "Person", "name": "Ana Ribeiro"}, "publisher": {"name": "The Field Journal"}}
+</script>
+</head>
+<body>
+<div id="cookie-banner" class="cookie-consent">We use cookies to improve your experience. <button>Accept all</button></div>
+<header class="site-header">
+  <a href="/" class="logo">The Field Journal</a>
+  <nav class="menu"><ul><li><a href="/news">News</a></li><li><a href="/birds">Birds</a></li><li><a href="/about">About us</a></li></ul></nav>
+</header>
+<div class="ad-banner sponsor">Buy binoculars today! Huge discounts on every pair.</div>
+<main>
+<article class="post">
+  <h1>Why Terns Fly So Far</h1>
+  <div class="byline">By <a href="/authors/ana" rel="author">Ana Ribeiro</a></div>
+  <div class="share social"><a href="#">Share on Facebook</a> <a href="#">Share on X</a></div>
+  <p>Every year the Arctic tern flies from the far north to the far south and back again, a round trip
+  longer than any other bird makes. Scientists have followed them with tiny trackers for more than a decade.</p>
+  <p>The birds do not fly in a straight line. They follow the <b>prevailing winds</b> across the Atlantic,
+  tracing a wide <i>S-shaped</i> path that adds thousands of kilometres but saves a great deal of effort.</p>
+  <h2>Following the wind</h2>
+  <p>Over a lifetime of thirty years, a single tern may travel a distance equal to three trips to the Moon
+  and back. Most of that flight is spent gliding, resting on the wind rather than beating its wings.</p>
+  <img src="https://images.example.com/tern.jpg" alt="A tern in flight">
+  <p>Researchers found that the birds stop for weeks in the middle of the ocean, where cold water rises and
+  food is plentiful, before they carry on toward the ice at the other end of the world.</p>
+  <ul>
+    <li>They see two summers every year.</li>
+    <li>They spend more time in daylight than any other animal.</li>
+  </ul>
+  <p>Use <code>tern_tracks.csv</code> to follow along with the data, which the team shares freely with anyone who asks.</p>
+</article>
+<aside class="sidebar">
+  <h3>Most read</h3>
+  <ul><li><a href="/1">Ten birds you have never heard of</a></li><li><a href="/2">The secret life of gulls</a></li></ul>
+</aside>
+<section class="comments" id="comments">
+  <h3>Comments</h3>
+  <div class="comment"><p>Great article, thanks for sharing it with everyone here!</p></div>
+</section>
+<div class="related-stories">
+  <h3>Related stories</h3>
+  <a href="/3">Penguins on the move</a> <a href="/4">How swifts sleep in the air</a>
+</div>
+</main>
+<footer class="site-footer"><p>Copyright 2026 The Field Journal. All rights reserved.</p><a href="/privacy">Privacy policy</a></footer>
+<script>loadComments();</script>
+</body>
+</html>
+)html";
+}
+
+QByteArray Fixtures::untitledPage() {
+    return R"html(<html><body><div class="content">
+<p>Rain fell over the harbour all morning, and the boats stayed tied up while their crews mended nets.</p>
+<p>By the afternoon the clouds had lifted and the first of them went out past the lighthouse.</p>
+</div></body></html>
+)html";
+}

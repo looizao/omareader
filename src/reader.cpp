@@ -159,10 +159,10 @@ void Reader::openDialog() {
         m_picker->openBook();
 }
 
-bool Reader::addText(const QString &title, const QString &text) {
+bool Reader::addText(const QString &title, const QString &text, const QString &source, const QString &author) {
     if (!m_library || m_loading)
         return false;
-    const QString path = m_library->addText(title, text);
+    const QString path = m_library->addText(title, text, source, author);
     if (path.isEmpty()) {
         if (!text.trimmed().isEmpty())
             setError(tr("The text couldn't be saved in %1.").arg(m_library->textDirectory()));

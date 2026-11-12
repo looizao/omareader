@@ -16,6 +16,7 @@
         <file alias="ChoiceBox.qml">ChoiceBox.qml</file>
         <file alias="ExportDialog.qml">ExportDialog.qml</file>
         <file alias="PasteDialog.qml">PasteDialog.qml</file>
+        <file alias="UrlDialog.qml">UrlDialog.qml</file>
         <file alias="skill.md">skill.md</file>
         <file alias="setup-kokoros.sh">setup-kokoros.sh</file>
         <file alias="setup-qwen.sh">setup-qwen.sh</file>

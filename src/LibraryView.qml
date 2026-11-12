@@ -7,19 +7,34 @@ import QtQuick.Layouts
 FocusScope {
     id: root
 
-    // Whether the dialog for pasted text is up, which owns the keys then.
-    property bool pasteOpen: false
+    // Whether a dialog for adding text or a web page is up, which owns the
+    // keys then.
+    property bool dialogOpen: false
     signal addTextRequested(bool fromClipboard)
+    // An empty address opens the dialog empty.
+    signal addPageRequested(string address)
 
     Shortcut {
         sequence: "N"
-        enabled: root.visible && !root.pasteOpen && !removeDialog.opened
+        enabled: root.visible && !root.dialogOpen && !removeDialog.opened
         onActivated: root.addTextRequested(false)
     }
     Shortcut {
-        sequence: StandardKey.Paste
-        enabled: root.visible && !root.pasteOpen && !removeDialog.opened
-        onActivated: root.addTextRequested(true)
+        sequence: "U"
+        enabled: root.visible && !root.dialogOpen && !removeDialog.opened
+        onActivated: root.addPageRequested("")
+    }
+    // A copied link means its page; any other text is pasted as it is.
+    Shortcut {
+        sequences: [StandardKey.Paste]
+        enabled: root.visible && !root.dialogOpen && !removeDialog.opened
+        onActivated: {
+            const address = webImport.clipboardAddress()
+            if (address !== "")
+                root.addPageRequested(address)
+            else
+                root.addTextRequested(true)
+        }
     }
 
     // Asks before a book leaves the library, since a click on the card's
@@ -65,6 +80,14 @@ FocusScope {
             }
             Rectangle { width: 8; height: 8; radius: 4; color: theme.accent; Layout.alignment: Qt.AlignBaseline }
             Item { Layout.fillWidth: true }
+            Button {
+                objectName: "addPageButton"
+                flat: true
+                text: qsTr("Add web page")
+                onClicked: root.addPageRequested("")
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Add an article from its web address (U, or Ctrl+V with a link copied)")
+            }
             Button {
                 objectName: "addTextButton"
                 flat: true
@@ -180,7 +203,7 @@ FocusScope {
                         Layout.preferredWidth: 164
                         text: card.modelData.missing
                               ? qsTr("File not found")
-                              : qsTr("%1 · %2%").arg(card.modelData.format)
+                              : qsTr("%1 · %2%").arg(card.modelData.site !== "" ? card.modelData.site : card.modelData.format)
                                     .arg(Math.round(card.modelData.progress * 100).toLocaleString(Qt.locale(), 'f', 0))
                         elide: Text.ElideRight
                         color: Colors.muted
@@ -270,7 +293,7 @@ FocusScope {
                     width: parent.width
                     horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.Wrap
-                    text: qsTr("Press O or drop a file here to open an EPUB, PDF, FB2, DOCX, ODT, Markdown, HTML or text book. Kindle formats open through Calibre. Press N to paste text instead.")
+                    text: qsTr("Press O or drop a file here to open an EPUB, PDF, FB2, DOCX, ODT, Markdown, HTML or text book. Kindle formats open through Calibre. Press N to paste text, or U to add a web page.")
                     color: Colors.muted
                 }
             }
@@ -279,7 +302,7 @@ FocusScope {
         Label {
             Layout.fillWidth: true
             visible: grid.count > 0
-            text: qsTr("Enter opens · N adds text · Delete forgets a book (the file stays, pasted text goes to the trash) · ? shows every shortcut")
+            text: qsTr("Enter opens · N adds text · U adds a web page · Delete forgets a book (the file stays, pasted text goes to the trash) · ? shows every shortcut")
             color: Colors.muted
             font.pixelSize: 12
             horizontalAlignment: Text.AlignHCenter

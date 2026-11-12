@@ -10,13 +10,15 @@
 // ~/.local/share/omareader/library.json. It only remembers paths: books stay
 // where they are and are never copied or modified. Text pasted into the
 // library is the exception: having no file of its own, it is saved beside
-// the library in texts/.
+// the library in texts/, as is the text of a web page added from its
+// address.
 struct LibraryEntry {
     QString path;
     QString title;
     QString author;
     QString format;
     QString cover; // a thumbnail in the cache, if the book has a cover
+    QString source; // a web page's address
     int chapter = 0;
     int paragraph = 0;
     int sentence = 0;
@@ -54,8 +56,10 @@ public:
     // The sentence is estimated from progress until the book is opened.
     void applySyncedPosition(const QString &path, int chapter, int paragraph, int offset, double progress, qint64 at);
     // Saves pasted text as a library item and returns its path, or an empty
-    // string when there is no text to save or it can't be written.
-    QString addText(const QString &title, const QString &text);
+    // string when there is no text to save or it can't be written. A web
+    // page's text comes with the address it was fetched from and its byline.
+    QString addText(const QString &title, const QString &text, const QString &source = {},
+                    const QString &author = {});
     QString textDirectory() const { return m_textDirectory; }
     bool isText(const QString &path) const;
     // Forgets a book. A book's file stays; a pasted text goes to the trash.
@@ -63,6 +67,8 @@ public:
     // The same, for a removal that came from another device.
     void forget(const QString &path);
     bool save() const;
+    // A web page's site, as its card shows it.
+    static QString siteOf(const QString &source);
 
 signals:
     void changed();

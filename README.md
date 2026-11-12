@@ -10,7 +10,8 @@ window, C++ and Qt Quick, driven from the keyboard, following your theme and
 language.
 
 Everything runs on your machine. omareader has no accounts and talks to the
-network only when you ask it to (setup, and sync if you turn it on):
+network only when you ask it to (setup, adding a web page, and sync if you
+turn it on):
 books are parsed locally and the voice is
 [Kokoros](https://github.com/lucasjinreal/Kokoros), a Rust build of Kokoro that
 runs on the CPU. If you have an NVIDIA GPU, you can add
@@ -105,6 +106,24 @@ agent sends the start of the text to its provider; omareader itself still
 makes no network connection. The agent runs one turn in an empty folder with
 no tools, and if it isn't signed in, fails or takes longer than 45 seconds,
 the first words stay as the title.
+
+## Web pages
+
+To read an article from the web, press U in the library (or Ctrl+V with its
+link copied), or click Add web page, and give its address. omareader fetches
+that one page, finds the article in it the way Firefox's Reader View does,
+and shows you its text and title to check before anything is saved. The
+site's menus, adverts, sidebars, comments and related links are left out;
+headings, paragraphs, lists and bold or italic words stay.
+
+The page is fetched only when you press Fetch, and only the page itself:
+nothing it links to (images, styles, scripts) is loaded, none of its scripts
+run, and no cookies are kept from one fetch to the next. Redirects are
+followed only to other web pages, never from https down to http. Once added,
+it is kept like pasted text, with the address it came from, and reads
+offline from then on; it is never fetched again. Pages that need a login, or
+that build their text with scripts, have nothing to add, and the dialog says
+so. Esc stops a fetch that is taking too long.
 
 ## Reading aloud
 
@@ -231,6 +250,7 @@ is in [docs/play.md](docs/play.md); the privacy policy Play links to is
 | + / − | Bigger / smaller text |
 | O | Open a book |
 | N, Ctrl+V | In the library: add pasted text |
+| U, Ctrl+V with a link | In the library: add a web page |
 | B or Backspace | Back to the library |
 | Enter, Delete | In the library: open, remove a book after a confirmation (the file stays; pasted text goes to the trash) |
 | Esc | Close panels and messages |
@@ -245,6 +265,7 @@ exits 0 or 1 with errors on stderr, and `--json` prints one JSON object.
 ```sh
 omareader info book.epub --json          # metadata and chapters
 omareader text book.epub --chapter 3     # the text as omareader reads it
+omareader fetch https://example.com/post # a web page's article, without adding it
 omareader export book.epub --split       # audio, one MP3 per chapter
 omareader export book.epub --format m4b  # one M4B audiobook with chapters
 omareader export book.epub --format omabook  # for omareader on Android
@@ -278,6 +299,10 @@ omareader skill install                  # agent skill for ~/.claude/skills
   maps the playback position to the word being heard.
 - `src/library.cpp` keeps pasted text as small JSON files the loader reads
   like plain text; `src/titleagent.cpp` asks a coding agent for a title.
+- `src/webimport.cpp` fetches a web page the user asked for, and only that
+  page; `src/article.cpp` parses it without running anything, scores its
+  blocks as Mozilla's Readability does to find the article, and writes it
+  out as the Markdown pasted text is kept in.
 - `src/highlight.cpp` colours that word inside the paragraph without changing
   its layout.
 - `src/exporter.cpp` synthesises the book for exports and pipes the

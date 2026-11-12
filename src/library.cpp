@@ -42,6 +42,7 @@ void Library::load() {
         e.author = o.value("author").toString();
         e.format = o.value("format").toString();
         e.cover = o.value("cover").toString();
+        e.source = o.value("source").toString();
         e.chapter = o.value("chapter").toInt();
         e.paragraph = o.value("paragraph").toInt();
         e.sentence = o.value("sentence").toInt();
@@ -65,6 +66,7 @@ bool Library::save() const {
                                  {"author", e.author},
                                  {"format", e.format},
                                  {"cover", e.cover},
+                                 {"source", e.source},
                                  {"chapter", e.chapter},
                                  {"paragraph", e.paragraph},
                                  {"sentence", e.sentence},
@@ -95,9 +97,18 @@ QVariantList Library::books() const {
                                 {"progress", qBound(0.0, progress, 1.0)},
                                 {"missing", !QFileInfo::exists(e.path)},
                                 {"pasted", isText(e.path)},
+                                {"source", e.source},
+                                {"site", siteOf(e.source)},
                                 {"opened", e.opened}});
     }
     return list;
+}
+
+QString Library::siteOf(const QString &source) {
+    QString host = QUrl(source).host();
+    if (host.startsWith("www."))
+        host = host.mid(4);
+    return host;
 }
 
 int Library::indexOf(const QString &path) const {
@@ -147,6 +158,8 @@ void Library::opened(const Book &book) {
     e.title = book.title;
     e.author = book.author;
     e.format = book.format;
+    if (!book.source.isEmpty())
+        e.source = book.source;
     e.sentenceCount = book.sentenceCount();
     if (e.cover.isEmpty() || !QFileInfo::exists(e.cover))
         e.cover = storeCover(book);
@@ -202,7 +215,7 @@ bool Library::isText(const QString &path) const {
     return QFileInfo(path).absolutePath() == QFileInfo(m_textDirectory).absoluteFilePath();
 }
 
-QString Library::addText(const QString &title, const QString &text) {
+QString Library::addText(const QString &title, const QString &text, const QString &source, const QString &author) {
     if (text.trimmed().isEmpty())
         return {};
     // Pasted text can be private, so only its owner can read it.
@@ -217,7 +230,7 @@ QString Library::addText(const QString &title, const QString &text) {
     if (!file.open(QIODevice::WriteOnly))
         return {};
     file.setPermissions(QFile::ReadOwner | QFile::WriteOwner);
-    file.write(BookLoader::pastedText(name, text, now));
+    file.write(BookLoader::pastedText(name, text, now, source, author.simplified()));
     if (!file.commit())
         return {};
 
@@ -225,7 +238,9 @@ QString Library::addText(const QString &title, const QString &text) {
     LibraryEntry e;
     e.path = path;
     e.title = name;
-    e.format = "text";
+    e.author = author.simplified();
+    e.source = source;
+    e.format = source.isEmpty() ? "text" : "web";
     e.opened = now;
     m_entries.append(e);
     sort();

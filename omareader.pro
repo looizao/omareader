@@ -28,6 +28,7 @@ CONFIG += link_pkgconfig
 PKGCONFIG += libsecret-1
 
 HEADERS += \
+    src/article.h \
     src/audioplayer.h \
     src/book.h \
     src/bookloader.h \
@@ -54,10 +55,12 @@ HEADERS += \
     src/titleagent.h \
     src/translator.h \
     src/voicesettings.h \
+    src/webimport.h \
     src/zipwriter.h
 
 SOURCES += \
     src/main.cpp \
+    src/article.cpp \
     src/audioplayer.cpp \
     src/book.cpp \
     src/bookloader.cpp \
@@ -83,6 +86,7 @@ SOURCES += \
     src/titleagent.cpp \
     src/translator.cpp \
     src/voicesettings.cpp \
+    src/webimport.cpp \
     src/zipwriter.cpp
 
 RESOURCES += src/resources.qrc

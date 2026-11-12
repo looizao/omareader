@@ -53,6 +53,7 @@ struct Book {
     QString format;
     QString title;
     QString author;
+    QString source; // the web address a page added from the web came from
     QByteArray cover;
     QList<Chapter> chapters;
 

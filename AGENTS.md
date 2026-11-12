@@ -92,7 +92,10 @@ the `play` environment's secrets; never print it or commit it.
   Android).
 - The app touches the network only when the user asks. Kokoros downloads a
   missing model on its own, so synthesis only starts once both model files
-  exist (`KokoroSetup`). `omareader setup` downloads the engine. The title
+  exist (`KokoroSetup`). `omareader setup` downloads the engine. Adding a
+  web page (`WebImport`) fetches that one page when the user presses Fetch,
+  loads nothing it links to, runs none of its scripts and keeps no cookies;
+  its text is then kept and never fetched again. The title
   agent for pasted text (`TitleAgent`) runs a coding agent that may use the
   network, so it stays off until the user turns it on in the dialog.
   Sync (`docs/sync.md`) talks only to the API of the provider the user

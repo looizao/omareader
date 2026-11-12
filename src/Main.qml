@@ -40,6 +40,8 @@ ApplicationWindow {
         onActivated: {
             if (pasteDialog.opened)
                 pasteDialog.close()
+            else if (urlDialog.opened)
+                urlDialog.dismiss()
             else if (win.helpVisible)
                 win.helpVisible = false
             else if (win.message !== "")
@@ -62,8 +64,9 @@ ApplicationWindow {
             anchors.fill: parent
             visible: !reader.hasBook
             focus: visible
-            pasteOpen: pasteDialog.opened
+            dialogOpen: pasteDialog.opened || urlDialog.opened
             onAddTextRequested: fromClipboard => pasteDialog.start(fromClipboard)
+            onAddPageRequested: address => urlDialog.start(address)
         }
 
         ReaderView {
@@ -239,6 +242,11 @@ ApplicationWindow {
         PasteDialog {
             id: pasteDialog
             objectName: "pasteDialog"
+        }
+
+        UrlDialog {
+            id: urlDialog
+            objectName: "urlDialog"
         }
 
         HelpOverlay {

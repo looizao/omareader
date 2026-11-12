@@ -70,8 +70,9 @@ public:
     Q_INVOKABLE void open(const QString &pathOrUrl);
     Q_INVOKABLE void openDialog();
     // Saves pasted text to the library and opens it; false when there is
-    // nothing to save.
-    Q_INVOKABLE bool addText(const QString &title, const QString &text);
+    // nothing to save. A web page's text keeps its address and byline.
+    Q_INVOKABLE bool addText(const QString &title, const QString &text, const QString &source = {},
+                             const QString &author = {});
     Q_INVOKABLE void closeBook();
     Q_INVOKABLE void goToChapter(int chapter);
     Q_INVOKABLE void nextChapter();

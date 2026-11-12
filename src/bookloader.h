@@ -36,8 +36,13 @@ public:
                                       int pagesPerChapter = 10);
     static QList<PdfOutlineItem> pdfOutline(const QString &pdftohtmlXml);
     static QString decodeText(const QByteArray &bytes);
-    // Text pasted into the library, as the JSON file that keeps it.
-    static QByteArray pastedText(const QString &title, const QString &text, const QDateTime &created);
+    // A named or numeric HTML entity, without its & and ;. known says
+    // whether it is one, since some (&shy;) stand for nothing.
+    static QString decodeHtmlEntity(const QString &name, bool *known = nullptr);
+    // Text pasted into the library, as the JSON file that keeps it. A web
+    // page added from its address also keeps the address and its byline.
+    static QByteArray pastedText(const QString &title, const QString &text, const QDateTime &created,
+                                 const QString &source = {}, const QString &author = {});
 
 private:
     static bool loadEpub(Book &book, QString *error);
