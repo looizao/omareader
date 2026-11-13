@@ -2699,8 +2699,16 @@ private slots:
         QSet<int> tops;
         QList<qreal> firstLines;
         for (int sentence = 0; sentence < 5; ++sentence) {
-            app.narrator.showForTests(Narrator::Paused, sentence, 2);
-            QTRY_VERIFY(glass() && glass()->property("settled").toBool());
+            // A word whose pane sits on one line; where the lines break
+            // depends on the fonts installed, so near a line's end the next
+            // word is tried.
+            QList<QQuickItem *> panes;
+            for (int word = 2; word < 8 && panes.size() != 1; ++word) {
+                app.narrator.showForTests(Narrator::Paused, sentence, word);
+                QTRY_VERIFY(glass() && glass()->property("settled").toBool());
+                panes = app.items("readingGlassPane");
+            }
+            QCOMPARE(panes.size(), 1);
             // The page's lines keep their places as the voice moves on: the
             // highlight changes colours, never where a line is.
             QList<qreal> lines;
@@ -2716,8 +2724,6 @@ private slots:
                 return out.join(",");
             };
             QVERIFY2(lines == firstLines, qPrintable(QString("sentence %1: lines at %2, were at %3").arg(sentence).arg(join(lines)).arg(join(firstLines))));
-            const QList<QQuickItem *> panes = app.items("readingGlassPane");
-            QCOMPARE(panes.size(), 1);
             const QImage shot = app.grab(QString("glass-line-%1").arg(sentence));
             const QRect pane = app.area(shot, panes.first());
             tops << pane.top();
