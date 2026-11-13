@@ -1,15 +1,20 @@
 import QtQuick
 import Omareader
 
-// The glass window highlight: a pane about three words wide that rests on
+// The glass window highlight: a pane about five words wide that rests on
 // the line over the word being spoken and glides along as the voice reads,
 // showing the words under it bright and slightly enlarged.
 //
 // The paragraph's lines are treated as one track laid end to end, so at the
 // end of a line the pane slides off it while the same share slides in at the
-// start of the next, instead of jumping down. It moves from each word to the
-// next over the time the voice takes between them, so it keeps the pace of
-// speech, and a light spring rounds off the changes of pace between words.
+// start of the next, instead of jumping down.
+//
+// Speech is uneven: the voice hurries over short words, lingers on long ones
+// and stops at commas. Eyes following the text move at an even pace, so a
+// pane that kept step with each word would keep running away from them.
+// Instead the pane moves at the voice's average pace over the last few
+// seconds, leans gently toward the spoken word when it drifts from it, and
+// is held so the spoken word never leaves it.
 Item {
     id: glass
     objectName: "readingGlass"
@@ -33,8 +38,12 @@ Item {
     readonly property real padX: Math.round(body.font.pixelSize * 0.5)
     readonly property real padY: 3
     readonly property real margin: 24
-    readonly property real magnify: 1.07
-    // About three ordinary words wide; only a longer word stretches it.
+    // Slight: the words at the pane's edges are pushed out by this share of
+    // half its width, and on a pane this wide more would crowd the page's
+    // words just outside it.
+    readonly property real magnify: 1.04
+    // About five ordinary words wide, which leaves the spoken word room to
+    // be ahead of or behind the pane's centre; only a longer word stretches it.
     readonly property real baseWidth: Math.ceil(sample.advanceWidth) + 2 * padX
     readonly property real stride: body.width + 2 * gap
     readonly property real paneHeight: Math.ceil(metrics.height) + 2 * padY
@@ -57,10 +66,25 @@ Item {
     property real toU: 0
     property real fromWidth: baseWidth
     property real toWidth: baseWidth
+    property real fromHalf: 0
+    property real toHalf: 0
     property real elapsed: 0
     readonly property real progress: wordSeconds > 0 ? Math.min(1, elapsed / wordSeconds) : 0
     readonly property real targetU: fromU + (toU - fromU) * progress
     readonly property real targetWidth: fromWidth + (toWidth - fromWidth) * progress
+    // Half the width of the word being spoken, on its way to the next.
+    readonly property real targetHalf: fromHalf + (toHalf - fromHalf) * progress
+
+    // The voice's pace along the track, in pixels a second, averaged over
+    // about paceSeconds; how long it has been measured; and where the voice
+    // was at the last step.
+    property real pace: 0
+    property real paceAge: 0
+    property real lastTarget: 0
+    readonly property real paceSeconds: 3
+    // How strongly the pane leans toward the spoken word, per second of
+    // distance. Weak, so the pace stays even; the hold below does the rest.
+    readonly property real pull: 1
     readonly property bool settled: placed && !moving()
 
     x: body.x
@@ -71,7 +95,7 @@ Item {
     TextMetrics {
         id: sample
         font: glass.body.font
-        text: "three plain words"
+        text: "about five plain words wide"
     }
     FontMetrics {
         id: metrics
@@ -105,7 +129,8 @@ Item {
         const right = Math.abs(b.y - a.y) < 1 ? b.x : body.width
         return {
             u: lineOf(start) * stride + gap + (a.x + right) / 2,
-            width: Math.max(baseWidth, right - a.x + 2 * padX + body.font.pixelSize * 0.5)
+            width: Math.max(baseWidth, right - a.x + 2 * padX + body.font.pixelSize * 0.5),
+            half: (right - a.x) / 2
         }
     }
 
@@ -118,23 +143,61 @@ Item {
         const next = nextWordStart >= 0 ? place(nextWordStart, nextWordEnd) : word
         fromU = word.u
         fromWidth = word.width
+        fromHalf = word.half
         toU = next.u
         toWidth = next.width
+        toHalf = next.half
         elapsed = 0
         // A first word, or one more than a line away (a skip, a click), is
         // a new place to start from, not somewhere to glide to.
         if (!placed || Math.abs(targetU - u) > stride * 1.5) {
+            if (!placed)
+                pace = paceAge = 0
             u = targetU
             paneWidth = targetWidth
             speedU = speedWidth = 0
+            lastTarget = targetU
             placed = true
         }
     }
 
     function moving() {
-        return (playing && progress < 1) || Math.abs(targetU - u) >= 0.5 || Math.abs(targetWidth - paneWidth) >= 0.5
+        return playing || Math.abs(targetU - u) >= 0.5 || Math.abs(targetWidth - paneWidth) >= 0.5
                || Math.abs(speedU) >= 1 || Math.abs(speedWidth) >= 1
     }
+
+    // One step while the voice plays: on at the voice's average pace.
+    function follow(dt) {
+        const spoken = targetU
+        const moved = spoken - lastTarget
+        lastTarget = spoken
+        // The voice's travel this step, early or late words included, so
+        // the average comes out right; a skip says nothing about the pace.
+        if (moved >= 0 && moved < stride) {
+            paceAge += dt
+            // Until paceSeconds have been heard, a plain average of them.
+            pace += (moved / dt - pace) * dt / Math.min(paceSeconds, paceAge)
+        }
+        // Never backward: when the pane is ahead it waits for the voice.
+        u += Math.max(0, pace + pull * (spoken - u)) * dt
+        // However the pace runs, the spoken word stays inside the pane.
+        const room = Math.max(0, paneWidth / 2 - targetHalf - padX)
+        u = Math.min(Math.max(u, spoken - room), spoken + room)
+        speedU = 0
+    }
+
+    // One step while the voice is paused: settle over the word.
+    function settle(dt) {
+        const w0 = 14
+        speedU += (w0 * w0 * (targetU - u) - 2 * w0 * speedU) * dt
+        u += speedU * dt
+        if (Math.abs(targetU - u) < 0.5 && Math.abs(speedU) < 1) {
+            u = targetU
+            speedU = 0
+        }
+    }
+
+    onPlayingChanged: lastTarget = targetU
 
     onWordStartChanged: aim()
     onNextWordStartChanged: aim()
@@ -163,20 +226,19 @@ Item {
             const now = Date.now()
             const dt = Math.min(0.05, Math.max(0, (now - last) / 1000))
             last = now
-            if (glass.playing)
+            if (glass.playing) {
                 glass.elapsed += dt
-            // A light spring: enough to round off a change of pace, not
-            // enough to fall far behind the voice.
+                glass.follow(dt)
+            } else {
+                glass.settle(dt)
+            }
+            // The width eases to the word's on a light spring.
             const w0 = 14
-            glass.speedU += (w0 * w0 * (glass.targetU - glass.u) - 2 * w0 * glass.speedU) * dt
-            glass.u += glass.speedU * dt
             glass.speedWidth += (w0 * w0 * (glass.targetWidth - glass.paneWidth) - 2 * w0 * glass.speedWidth) * dt
             glass.paneWidth += glass.speedWidth * dt
-            if (Math.abs(glass.targetU - glass.u) < 0.5 && Math.abs(glass.speedU) < 1
-                    && Math.abs(glass.targetWidth - glass.paneWidth) < 0.5 && Math.abs(glass.speedWidth) < 1) {
-                glass.u = glass.targetU
+            if (Math.abs(glass.targetWidth - glass.paneWidth) < 0.5 && Math.abs(glass.speedWidth) < 1) {
                 glass.paneWidth = glass.targetWidth
-                glass.speedU = glass.speedWidth = 0
+                glass.speedWidth = 0
             }
         }
     }

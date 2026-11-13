@@ -2554,7 +2554,7 @@ private slots:
         AppWindow app(dir.path());
         QVERIFY(app.show());
         const QString text = "The voice reads these plain words aloud while a glass window glides along the line over "
-                             "each one of them in turn, and a long word like incomprehensibilities stretches it, and "
+                             "each one of them in turn, and a long word like pneumonoultramicroscopicsilicovolcanoconiosis stretches it, and "
                              "then the reading goes on across many more lines of the column until it comes to an end";
         QVERIFY(app.reader.addText("Glass", text));
         QTRY_COMPARE(app.items("bookParagraph").size(), 1);
@@ -2576,14 +2576,15 @@ private slots:
         };
         auto spoken = [&]() { return text.mid(app.narrator.wordStart(), app.narrator.wordEnd() - app.narrator.wordStart()); };
 
-        // Over an ordinary word, one pane centred on it, wide enough for it and its neighbours.
+        // Over an ordinary word, one pane centred on it, wide enough for it
+        // and two words either side.
         speak(4);
         QCOMPARE(spoken(), QString("plain"));
         QList<QRectF> one = panes();
         QCOMPARE(one.size(), 1);
         const qreal width = one.first().width();
         const QRectF text4 = glass()->mapRectToScene(QRectF(0, 0, glass()->width(), glass()->height()));
-        QVERIFY2(width > app.reader.fontSize() * 6 && width < app.reader.fontSize() * 12, qPrintable(QString::number(width)));
+        QVERIFY2(width > app.reader.fontSize() * 10 && width < app.reader.fontSize() * 18, qPrintable(QString::number(width)));
 
         // The colour highlight is gone: no accent box, and the words in the
         // pane are drawn bright.
@@ -2623,9 +2624,9 @@ private slots:
                  "the pane never passed between the two words");
         QCOMPARE(panes().first().width(), width);
 
-        // While the voice plays, it moves on at the pace of speech, from the
-        // spoken word toward the next over the time between them, before the
-        // next word has even started.
+        // While the voice plays, it moves on with the voice, toward the next
+        // word before that word has even started, and has it inside once it
+        // is spoken.
         speak(4);
         const qreal still = panes().first().center().x();
         app.narrator.showForTests(Narrator::Playing, 0, 4, 2.0);
@@ -2633,17 +2634,20 @@ private slots:
         const qreal halfway = panes().first().center().x();
         QVERIFY2(halfway > still + 10 && halfway < to - 5,
                  qPrintable(QString("from %1 toward %2, at %3 after half the word").arg(still).arg(to).arg(halfway)));
-        QTRY_VERIFY_WITH_TIMEOUT(qAbs(panes().first().center().x() - to) < 2, 3000);
+        QTest::qWait(1200);
+        const QRectF later = panes().first();
+        QVERIFY2(later.left() < to - app.reader.fontSize() && later.right() > to + app.reader.fontSize(),
+                 qPrintable(QString("the next word at %1, the pane from %2 to %3").arg(to).arg(later.left()).arg(later.right())));
         app.narrator.showForTests(Narrator::Paused, 0, 4);
 
         // Only a word too long for it stretches it.
         int word = 0;
         for (; word < 60; ++word) {
             app.narrator.showForTests(Narrator::Paused, 0, word);
-            if (spoken() == "incomprehensibilities")
+            if (spoken() == "pneumonoultramicroscopicsilicovolcanoconiosis")
                 break;
         }
-        QCOMPARE(spoken(), QString("incomprehensibilities"));
+        QCOMPARE(spoken(), QString("pneumonoultramicroscopicsilicovolcanoconiosis"));
         speak(word);
         QVERIFY2(panes().first().width() > width + 10, qPrintable(QString("%1 and %2").arg(panes().first().width()).arg(width)));
         app.grab("glass-long-word");
@@ -2677,6 +2681,93 @@ private slots:
         QSettings().remove("reader");
     }
 
+    void glassWindowKeepsASteadyPace() {
+        QSettings().remove("reader");
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        QVERIFY(app.show());
+        const QString text = "The voice reads these plain words aloud at its own pace, quick over the short ones and slow "
+                             "over others, and it stops for a moment at each comma. Then it goes on again across the "
+                             "lines of the column, word after word, while the eyes follow the glass along. It pauses "
+                             "at the end of every sentence, and starts the next one a little later than the last.";
+        QVERIFY(app.reader.addText("Pace", text));
+        QTRY_COMPARE(app.items("bookParagraph").size(), 1);
+        QTest::mouseMove(app.window, QPoint(550, 700));
+        auto glass = [&]() { return app.items("readingGlass").value(0); };
+
+        // Speech is uneven: some words go by quickly, others take three or
+        // four times as long, and a comma or a full stop holds the voice.
+        const QList<double> pattern = {0.12, 0.14, 0.45, 0.12, 0.3, 0.16, 0.12, 0.6, 0.15, 0.25};
+        struct Sample { qint64 ms; qreal u, spoken, width, half; };
+        QList<Sample> samples;
+        QElapsedTimer clock;
+        clock.start();
+        int sentence = 0, word = 0, step = 0;
+        while (clock.elapsed() < 7000) {
+            app.narrator.showForTests(Narrator::Playing, sentence, word, pattern.at(step % pattern.size()));
+            if (app.narrator.wordStart() < 0) {
+                ++sentence;
+                word = 0;
+                if (sentence > 3)
+                    break;
+                continue;
+            }
+            QElapsedTimer wordClock;
+            wordClock.start();
+            while (wordClock.elapsed() < qint64(pattern.at(step % pattern.size()) * 1000)) {
+                QTest::qWait(20);
+                if (QQuickItem *g = glass())
+                    samples << Sample{clock.elapsed(), g->property("u").toReal(), g->property("targetU").toReal(),
+                                      g->property("paneWidth").toReal(), g->property("targetHalf").toReal()};
+            }
+            ++word;
+            ++step;
+        }
+        app.narrator.showForTests(Narrator::Paused, 0, 0);
+        QVERIFY(samples.size() > 150);
+
+        // The spoken word is always well inside the pane, never at or past its edge.
+        for (const Sample &s : samples)
+            QVERIFY2(qAbs(s.spoken - s.u) + s.half < s.width / 2 - 4,
+                     qPrintable(QString("at %1 ms the word at %2 (half %3) and the pane at %4, %5 wide")
+                                    .arg(s.ms).arg(s.spoken).arg(s.half).arg(s.u).arg(s.width)));
+
+        // After the first second, the pane moves on at an even pace while the
+        // voice's own pace swings from word to word, and never goes back.
+        auto speeds = [&](auto value) {
+            QList<qreal> out;
+            int from = 0;
+            while (from < samples.size() && samples[from].ms < 1500)
+                ++from;
+            for (int i = from; i < samples.size(); ++i) {
+                int j = i;
+                while (j < samples.size() && samples[j].ms - samples[i].ms < 250)
+                    ++j;
+                if (j >= samples.size())
+                    break;
+                out << (value(samples[j]) - value(samples[i])) * 1000.0 / (samples[j].ms - samples[i].ms);
+                i = j - 1;
+            }
+            return out;
+        };
+        auto spread = [](const QList<qreal> &values) {
+            qreal mean = 0, var = 0;
+            for (qreal v : values) mean += v;
+            mean /= values.size();
+            for (qreal v : values) var += (v - mean) * (v - mean);
+            return std::sqrt(var / values.size()) / mean;
+        };
+        const QList<qreal> pane = speeds([](const Sample &s) { return s.u; });
+        const QList<qreal> voice = speeds([](const Sample &s) { return s.spoken; });
+        QVERIFY(pane.size() >= 15);
+        for (int i = 1; i < samples.size(); ++i)
+            QVERIFY2(samples[i].u >= samples[i - 1].u - 0.5, qPrintable(QString("went back at %1 ms").arg(samples[i].ms)));
+        QVERIFY2(spread(pane) < 0.3 && spread(pane) < spread(voice) / 2,
+                 qPrintable(QString("the pane's pace varies by %1, the voice's by %2").arg(spread(pane)).arg(spread(voice))));
+        app.reader.closeBook();
+        QSettings().remove("reader");
+    }
+
     void glassWindowSitsOnTheLineItCovers() {
         QSettings().remove("reader");
         QTemporaryDir dir;
@@ -2703,7 +2794,7 @@ private slots:
             // depends on the fonts installed, so near a line's end the next
             // word is tried.
             QList<QQuickItem *> panes;
-            for (int word = 2; word < 8 && panes.size() != 1; ++word) {
+            for (int word = 2; word < 12 && panes.size() != 1; ++word) {
                 app.narrator.showForTests(Narrator::Paused, sentence, word);
                 QTRY_VERIFY(glass() && glass()->property("settled").toBool());
                 panes = app.items("readingGlassPane");
