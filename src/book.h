@@ -54,6 +54,9 @@ struct Book {
     QString title;
     QString author;
     QString source; // the web address a page added from the web came from
+    // A hash of the book's file, which its bookmarks and notes are kept
+    // under; filled in when the book is opened, see Annotations.
+    QString fingerprint;
     QByteArray cover;
     QList<Chapter> chapters;
 

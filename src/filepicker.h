@@ -13,11 +13,16 @@ public:
     virtual ~FilePicker() = default;
 
     virtual void openBook() = 0;
-    // Asks for a folder, such as where audio exports go.
-    virtual void chooseFolder(const QString &current) { Q_UNUSED(current); }
+    // Asks for a folder: "export" for where audio exports go, "sync" for
+    // the folder bookmarks and notes are kept in step through. The answer
+    // carries the same purpose, so only the one who asked takes it.
+    virtual void chooseFolder(const QString &current, const QString &purpose) {
+        Q_UNUSED(current);
+        Q_UNUSED(purpose);
+    }
 
 signals:
     void openSelected(const QUrl &url);
-    void folderSelected(const QUrl &url);
+    void folderSelected(const QUrl &url, const QString &purpose);
     void failed(const QString &message);
 };

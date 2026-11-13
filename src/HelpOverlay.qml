@@ -5,6 +5,7 @@ import QtQuick.Layouts
 // Every shortcut, on ?.
 Rectangle {
     id: overlay
+    objectName: "helpOverlay"
     signal closed()
     color: Qt.alpha(Colors.background, 0.92)
 
@@ -21,6 +22,10 @@ Rectangle {
         ["← / →", qsTr("Previous / next chapter")],
         ["↑ ↓ PgUp PgDn", qsTr("Scroll")],
         ["T", qsTr("Contents")],
+        ["M", qsTr("Bookmark this place, or remove its bookmark")],
+        [qsTr("Drag over text"), qsTr("Highlight it, add a note or copy it")],
+        [qsTr("Click a highlight"), qsTr("Its note")],
+        ["N", qsTr("Bookmarks, highlights and notes")],
         ["A", qsTr("Voice and appearance")],
         ["E", qsTr("Export as audio")],
         ["+ / −", qsTr("Bigger / smaller text")],
@@ -52,7 +57,7 @@ Rectangle {
             Layout.fillWidth: true
             columns: 2
             columnSpacing: 24
-            rowSpacing: 8
+            rowSpacing: 6
             Repeater {
                 model: overlay.shortcuts.length * 2
                 Label {

@@ -19,6 +19,7 @@ write_file($$OUT_PWD/version.h, VERSION_HEADER)
 INCLUDEPATH += $$OUT_PWD
 
 HEADERS += \
+    src/annotations.h \
     src/article.h \
     src/audioplayer.h \
     src/book.h \
@@ -44,6 +45,7 @@ HEADERS += \
 
 SOURCES += \
     src/main.cpp \
+    src/annotations.cpp \
     src/article.cpp \
     src/audioplayer.cpp \
     src/book.cpp \

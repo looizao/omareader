@@ -2,5 +2,9 @@
   "%1% of the book · %n min left in chapter": {
     "one": "%1% of the book · %n min left in chapter",
     "other": "%1% of the book · %n min left in chapter"
+  },
+  "In step through %1 with %n other computer(s).": {
+    "one": "In step through %1 with %n other computer.",
+    "other": "In step through %1 with %n other computers."
   }
 }

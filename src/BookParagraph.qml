@@ -5,6 +5,11 @@ import Omareader
 // spoken are marked in place, by a glass window over the word or by colour;
 // clicking a word reads aloud from there, and right-clicking it looks it up.
 // In focus mode the paragraphs around the voice dim, and what was read fades.
+//
+// The reader's highlights are tinted with the accent, those with a note
+// underlined, and a bookmark shows as a ribbon in the margin. Dragging over
+// the text selects it, across paragraphs; the chapter's list keeps the
+// selection, since it can run past this paragraph.
 Item {
     id: root
     objectName: "bookParagraph"
@@ -26,6 +31,14 @@ Item {
     // text still to come, so the eye is drawn forward.
     readonly property real readOpacity: 0.22
     readonly property real dimOpacity: 0.38
+    // The chapter's list, which keeps the selection and is told about clicks
+    // on a highlight.
+    readonly property var view: ListView.view
+    // This paragraph's highlights and bookmark.
+    readonly property var annotated: annotations.chapterMarks[root.index] || ({})
+    readonly property bool selected: !!root.view && root.view.hasSelection
+                                     && root.index >= root.view.selectionStartParagraph
+                                     && root.index <= root.view.selectionEndParagraph
 
     opacity: root.reading ? 1
            : root.fading && root.index < narrator.paragraph ? root.readOpacity
@@ -97,6 +110,15 @@ Item {
                      : Qt.alpha(theme.accent, subtle ? 0.07 : reader.highlightStrength === "strong" ? 0.28 : 0.14)
         wordColor: showWord && !subtle ? theme.accent : "transparent"
         wordTextColor: !showWord ? "transparent" : subtle ? theme.accent : theme.accentForeground
+
+        marks: root.annotated.marks || []
+        markColor: Qt.alpha(theme.accent, 0.3)
+        noteColor: theme.accent
+        selectionStart: !root.selected ? -1
+                        : root.index === root.view.selectionStartParagraph ? root.view.selectionStart : 0
+        selectionEnd: !root.selected ? -1
+                      : root.index === root.view.selectionEndParagraph ? root.view.selectionEnd : root.modelData.text.length
+        selectionColor: Qt.alpha(Colors.text, 0.24)
     }
 
     Loader {
@@ -115,14 +137,79 @@ Item {
         }
     }
 
+    // A bookmark, in the margin beside the paragraph's first line, standing
+    // on its baseline and about as tall as a capital letter. The baseline
+    // comes from the laid out text, since a stretched line moves its
+    // letters down.
+    Loader {
+        active: !!root.annotated.bookmark
+        sourceComponent: BookmarkIcon {
+            id: ribbon
+            objectName: "paragraphBookmark"
+            property real firstBaseline: body.font.pixelSize
+            function measure() {
+                const lines = highlight.lines()
+                if (lines.length > 0)
+                    ribbon.firstBaseline = lines[0].baseline
+            }
+            width: Math.round(height * 0.7)
+            height: Math.round(body.font.pixelSize * 0.7)
+            x: body.x - width - 14
+            y: body.y + Math.round(ribbon.firstBaseline) - height
+            color: theme.accent
+            Component.onCompleted: Qt.callLater(measure)
+            Connections {
+                target: body
+                function onContentHeightChanged() { Qt.callLater(ribbon.measure) }
+                function onLineCountChanged() { Qt.callLater(ribbon.measure) }
+            }
+        }
+    }
+
+    // A click reads aloud from the word, or opens the highlight under it; a
+    // right-click looks the word up; a drag selects. The drag is kept from the list, which would otherwise
+    // take it for scrolling.
     MouseArea {
         anchors.fill: body
         cursorShape: Qt.PointingHandCursor
         acceptedButtons: Qt.LeftButton | Qt.RightButton
+        preventStealing: true
+        property point pressPoint
+        property bool dragged: false
+        onPressed: mouse => {
+            pressPoint = Qt.point(mouse.x, mouse.y)
+            dragged = false
+            if (root.view && mouse.button === Qt.LeftButton)
+                root.view.beginSelection(root.index, body.positionAt(mouse.x, mouse.y))
+        }
+        onPositionChanged: mouse => {
+            if (!root.view || !(mouse.buttons & Qt.LeftButton)
+                    || (!dragged && Math.abs(mouse.x - pressPoint.x) + Math.abs(mouse.y - pressPoint.y) < 6))
+                return
+            dragged = true
+            const p = mapToItem(root.view, mouse.x, mouse.y)
+            root.view.dragSelection(p.x, p.y)
+        }
+        onReleased: {
+            if (dragged && root.view)
+                root.view.finishSelection()
+        }
+        onCanceled: {
+            if (root.view)
+                root.view.finishSelection()
+        }
         onClicked: mouse => {
+            if (dragged)
+                return
             const position = body.positionAt(mouse.x, mouse.y)
-            if (mouse.button === Qt.RightButton && root.ListView.view)
-                root.ListView.view.lookUpRequested(root, position)
+            if (mouse.button === Qt.RightButton) {
+                if (root.view)
+                    root.view.lookUpRequested(root, position)
+                return
+            }
+            const highlight = annotations.highlightAt(root.index, position)
+            if (highlight !== "" && root.view)
+                root.view.highlightClicked(highlight)
             else
                 reader.readFrom(root.index, position)
         }

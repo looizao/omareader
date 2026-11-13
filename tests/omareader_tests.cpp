@@ -33,6 +33,7 @@
 #include <QtTest>
 #include <zlib.h>
 
+#include "annotations.h"
 #include "article.h"
 #include "audioplayer.h"
 #include "book.h"
@@ -62,8 +63,9 @@ class AppWindow {
 public:
     AppWindow(const QString &dir)
         : library(dir + "/library.json", dir + "/covers"), reader(&library, &narrator, nullptr),
-          lookup(QStringList{dir + "/dictionaries"}) {
+          annotations(dir + "/annotations", "this-computer"), lookup(QStringList{dir + "/dictionaries"}) {
         reader.setExporter(&exporter);
+        reader.setAnnotations(&annotations);
         qmlRegisterType<ReadingHighlight>("Omareader", 1, 0, "ReadingHighlight");
         qmlRegisterUncreatableType<Narrator>("Omareader", 1, 0, "Narrator", "Use the narrator context property.");
         qmlRegisterUncreatableType<Exporter>("Omareader", 1, 0, "Exporter", "Use the exporter context property.");
@@ -75,6 +77,7 @@ public:
         context->setContextProperty("narrator", &narrator);
         context->setContextProperty("reader", &reader);
         context->setContextProperty("exporter", &exporter);
+        context->setContextProperty("annotations", &annotations);
         context->setContextProperty("titleAgent", &titleAgent);
         context->setContextProperty("webImport", &webImport);
         context->setContextProperty("lookup", &lookup);
@@ -127,6 +130,7 @@ public:
     Library library;
     Narrator narrator;
     Reader reader;
+    Annotations annotations;
     Exporter exporter;
     TitleAgent titleAgent;
     WebImport webImport;
@@ -1737,6 +1741,264 @@ private slots:
         QVERIFY(!reader.hasBook());
     }
 
+    // Bookmarks, highlights and notes.
+
+    void annotationsMergeKeepsTheLatestChange() {
+        auto make = [](const QString &id, const QString &note, int second, bool deleted = false) {
+            Annotation a;
+            a.id = id;
+            a.kind = "highlight";
+            a.note = note;
+            a.modified = QDateTime::fromSecsSinceEpoch(1767225600 + second, QTimeZone::utc());
+            a.deleted = deleted;
+            return a;
+        };
+        const QList<Annotation> here{make("a", "old", 1), make("b", "mine", 5), make("c", "kept", 3), make("e", "same", 7)};
+        const QList<Annotation> there{make("a", "new", 2), make("b", "theirs", 4), make("c", "kept", 3, true),
+                                      make("d", "only there", 1), make("e", "same, elsewhere", 7)};
+        auto byId = [](const QList<Annotation> &list) {
+            QMap<QString, Annotation> map;
+            for (const Annotation &a : list)
+                map.insert(a.id, a);
+            return map;
+        };
+        const auto merged = byId(Annotations::merge(here, there));
+        QCOMPARE(merged.size(), 5);
+        QCOMPARE(merged["a"].note, QString("new"));         // the later change
+        QCOMPARE(merged["b"].note, QString("mine"));        // ours is later
+        QVERIFY(merged["c"].deleted);                       // a removal at the same moment wins
+        QCOMPARE(merged["d"].note, QString("only there"));  // new to us
+        QCOMPARE(merged["e"].note, QString("same"));        // a tie keeps what is here
+
+        // Either computer comes to the same removals and latest changes.
+        const auto other = byId(Annotations::merge(there, here));
+        for (const QString id : {"a", "b", "c", "d"}) {
+            QCOMPARE(other[id].note, merged[id].note);
+            QCOMPARE(other[id].deleted, merged[id].deleted);
+        }
+    }
+
+    void annotationsFingerprintFollowsTheFile() {
+        QTemporaryDir dir;
+        write(dir.filePath("a.txt"), "The same words.");
+        write(dir.filePath("elsewhere.txt"), "The same words.");
+        write(dir.filePath("b.txt"), "Other words.");
+        const QString a = Annotations::fingerprint(dir.filePath("a.txt"));
+        QCOMPARE(a.size(), 32);
+        QCOMPARE(Annotations::fingerprint(dir.filePath("elsewhere.txt")), a);
+        QVERIFY(Annotations::fingerprint(dir.filePath("b.txt")) != a);
+        QVERIFY(Annotations::fingerprint(dir.filePath("missing.txt")).isEmpty());
+    }
+
+    void annotationsKeepHighlightsBookmarksAndNotes() {
+        QTemporaryDir dir;
+        auto book = std::make_shared<Book>(notedBook(dir.filePath("book.txt")));
+        const QString first = book->chapters.at(0).paragraphs.at(0).text;
+        auto at = [&](const QString &word) { return int(first.indexOf(word)); };
+        const QString folder = dir.filePath("annotations");
+        QString wider, across;
+        {
+            Annotations notes(folder, "here");
+            notes.setBook(book);
+            QCOMPARE(notes.count(), 0);
+
+            // A drag that starts and ends inside words takes in both whole words.
+            const QString id = notes.addHighlight(0, at("bright") + 2, 0, at("cold") + 2);
+            QVERIFY(!id.isEmpty());
+            QCOMPARE(notes.item(id).value("text").toString(), QString("bright cold"));
+            QCOMPARE(notes.highlightAt(0, at("cold")), id);
+            QVERIFY(notes.highlightAt(0, at("day")).isEmpty());
+            // Only spaces is nothing to highlight.
+            QVERIFY(notes.addHighlight(0, at("bright") - 1, 0, at("bright")).isEmpty());
+
+            notes.setNote(id, "  The weather.  ");
+            QCOMPARE(notes.item(id).value("note").toString(), QString("The weather."));
+            const QVariantList marks = notes.chapterMarks().at(0).toMap().value("marks").toList();
+            QCOMPARE(marks.size(), 1);
+            QCOMPARE(marks.first().toMap().value("start").toInt(), at("bright"));
+            QCOMPARE(marks.first().toMap().value("end").toInt(), at("cold") + 4);
+            QVERIFY(marks.first().toMap().value("note").toBool());
+
+            // A highlight over it folds it in, note and all.
+            wider = notes.addHighlight(0, at("a bright"), 0, at("day") + 3);
+            QCOMPARE(notes.item(wider).value("text").toString(), QString("a bright cold day"));
+            QCOMPARE(notes.item(wider).value("note").toString(), QString("The weather."));
+            QVERIFY(notes.item(id).isEmpty());
+            QCOMPARE(notes.count(), 1);
+
+            // One can run on into the next paragraph.
+            across = notes.addHighlight(1, 7, 0, at("striking"));
+            QCOMPARE(notes.item(across).value("text").toString(), QString("striking thirteen.\nAnother"));
+            QCOMPARE(notes.chapterMarks().at(1).toMap().value("marks").toList().size(), 1);
+
+            // A bookmark marks the start of the sentence, in the margin of its paragraph.
+            QVERIFY(!notes.toggleBookmark(0, 0, at("clocks")).isEmpty());
+            QVERIFY(notes.hasBookmark(0, 0));
+            QVERIFY(notes.chapterMarks().at(0).toMap().value("bookmark").toBool());
+            QCOMPARE(notes.count(), 3);
+            const QVariantList items = notes.items();
+            QCOMPARE(items.at(0).toMap().value("kind").toString(), QString("highlight"));
+            QCOMPARE(items.at(1).toMap().value("kind").toString(), QString("bookmark"));
+            QVERIFY(items.at(1).toMap().value("text").toString().startsWith("The clocks were striking"));
+            QCOMPARE(items.at(1).toMap().value("chapterTitle").toString(), QString("One"));
+        }
+
+        // Still there after a restart, readable only by their owner.
+        const QString file = folder + "/" + Annotations::fingerprint(book->path) + ".json";
+        QCOMPARE(QFileInfo(file).permissions() & (QFile::ReadOther | QFile::ReadGroup), QFileDevice::Permissions());
+        Annotations again(folder, "here");
+        again.setBook(book);
+        QCOMPARE(again.count(), 3);
+        QCOMPARE(again.item(wider).value("note").toString(), QString("The weather."));
+
+        // A second press removes the bookmark; removing a highlight takes its note.
+        QVERIFY(again.toggleBookmark(0, 0, 0).isEmpty());
+        QVERIFY(!again.hasBookmark(0, 0));
+        again.remove(across);
+        QCOMPARE(again.count(), 1);
+        // What was removed stays in the file, marked so, for the other computers.
+        const QList<Annotation> saved = Annotations::read(file);
+        QCOMPARE(saved.size(), 4);
+        QCOMPARE(std::count_if(saved.begin(), saved.end(), [](const Annotation &a) { return a.deleted; }), 3);
+
+        // Closing the book lets them go.
+        again.setBook(nullptr);
+        QCOMPARE(again.count(), 0);
+        QVERIFY(again.chapterMarks().isEmpty());
+    }
+
+    void annotationsFindTheirTextAgain() {
+        QTemporaryDir dir;
+        const Book book = notedBook(dir.filePath("book.txt"));
+        const QString folder = dir.filePath("annotations");
+        QString highlight, bookmark;
+        {
+            Annotations notes(folder, "here");
+            notes.setBook(std::make_shared<Book>(book));
+            const QString first = book.chapters.at(0).paragraphs.at(0).text;
+            highlight = notes.addHighlight(0, int(first.indexOf("striking")), 0, int(first.indexOf("thirteen")) + 3);
+            bookmark = notes.toggleBookmark(1, 0, 0);
+            QVERIFY(!highlight.isEmpty() && !bookmark.isEmpty());
+        }
+
+        // The same file read differently, as after a change to how its
+        // format is parsed: a chapter and a paragraph now come first.
+        Book moved = book;
+        moved.chapters[0].paragraphs.prepend({"A foreword nobody asked for.", 0, {}});
+        moved.chapters.prepend({"Preface", {{"Some preface text.", 0, {}}}});
+        moved.segment();
+        Annotations notes(folder, "here");
+        notes.setBook(std::make_shared<Book>(moved));
+        QVariantMap found = notes.item(highlight);
+        QVERIFY(found.value("placed").toBool());
+        QCOMPARE(found.value("chapter").toInt(), 1);
+        QCOMPARE(found.value("paragraph").toInt(), 1);
+        QCOMPARE(Annotations::passage(moved, 1, 1, found.value("start").toInt(), 1, found.value("end").toInt()),
+                 QString("striking thirteen"));
+        found = notes.item(bookmark);
+        QCOMPARE(found.value("chapter").toInt(), 2);
+        QCOMPARE(found.value("paragraph").toInt(), 0);
+
+        // Text that is gone is still listed, but marks nothing.
+        Book changed = book;
+        changed.chapters[0].paragraphs[0].text = "Different words entirely.";
+        changed.segment();
+        Annotations lost(folder, "here");
+        lost.setBook(std::make_shared<Book>(changed));
+        QCOMPARE(lost.count(), 2);
+        QVERIFY(!lost.item(highlight).value("placed").toBool());
+        QVERIFY(!lost.chapterMarks().at(0).toMap().contains("marks"));
+        QVERIFY(lost.highlightAt(0, 0).isEmpty());
+    }
+
+    void annotationsSyncThroughAFolder() {
+        QSettings().remove("annotations");
+        QTemporaryDir dir;
+        const QString sync = dir.filePath("Sync");
+
+        // Notes made before syncing go into the folder once it is chosen.
+        Annotations tablet(dir.filePath("tablet"), "tablet");
+        QVERIFY(tablet.syncFolder().isEmpty());
+        Book other = sampleBook(dir.filePath("other.txt"));
+        tablet.setBook(std::make_shared<Book>(other));
+        tablet.toggleBookmark(0, 0, 0);
+        tablet.setBook(nullptr);
+        tablet.setSyncFolder(sync);
+        const QString otherFolder = sync + "/omareader/" + Annotations::fingerprint(other.path);
+        QCOMPARE(Annotations::read(otherFolder + "/tablet.json").size(), 1);
+
+        // Two computers, each with its own copy of the book in its own place.
+        QDir().mkpath(dir.filePath("desk"));
+        auto here = std::make_shared<Book>(notedBook(dir.filePath("book.txt")));
+        auto there = std::make_shared<Book>(notedBook(dir.filePath("desk/book.txt")));
+        Annotations laptop(dir.filePath("laptop"), "laptop");
+        Annotations desktop(dir.filePath("desktop"), "desktop");
+        QCOMPARE(laptop.syncFolder(), QDir::cleanPath(sync)); // remembered
+        laptop.setBook(here);
+        desktop.setBook(there);
+        // Opening a book without notes leaves nothing in the folder.
+        const QString folder = sync + "/omareader/" + Annotations::fingerprint(here->path);
+        QVERIFY(!QFileInfo::exists(folder));
+
+        const QString id = laptop.addHighlight(0, 0, 0, 6);
+        laptop.setNote(id, "From the laptop.");
+        QTRY_COMPARE(desktop.item(id).value("note").toString(), QString("From the laptop."));
+        QTRY_COMPARE(desktop.syncedDevices(), 1);
+        QTRY_COMPARE(laptop.syncedDevices(), 1);
+        // Each computer writes only its own file, so the sync tool never has two to choose from.
+        QCOMPARE(QDir(folder).entryList({"*.json"}, QDir::Files, QDir::Name), QStringList({"desktop.json", "laptop.json"}));
+        // And keeps it on this computer too, for when the folder isn't there.
+        QCOMPARE(Annotations::read(dir.filePath("desktop") + "/" + Annotations::fingerprint(there->path) + ".json").size(), 1);
+
+        // A removal on one reaches the other.
+        desktop.toggleBookmark(0, 1, 0);
+        QTRY_VERIFY(laptop.hasBookmark(0, 1));
+        desktop.remove(id);
+        QTRY_VERIFY(laptop.item(id).isEmpty());
+        QCOMPARE(laptop.count(), 1);
+
+        // Stopping leaves the notes on each computer.
+        laptop.stopSyncing();
+        QVERIFY(laptop.syncFolder().isEmpty());
+        QCOMPARE(laptop.count(), 1);
+        QSettings().remove("annotations");
+    }
+
+    void readerBookmarksTheReadingPlace() {
+        QTemporaryDir dir;
+        Library library(dir.filePath("library.json"), dir.filePath("covers"));
+        Annotations notes(dir.filePath("annotations"), "here");
+        Reader reader(&library, nullptr, nullptr);
+        reader.setAnnotations(&notes);
+        QSignalSpy changed(&reader, &Reader::bookmarkedChanged);
+        reader.openBook(std::make_shared<Book>(notedBook(dir.filePath("book.txt"))));
+        QVERIFY(!reader.bookmarked());
+
+        reader.setVisibleParagraph(1);
+        reader.toggleBookmark();
+        QVERIFY(reader.bookmarked());
+        QVERIFY(notes.hasBookmark(0, 1));
+        QVERIFY(changed.count() > 0);
+
+        // Going to a place moves the reading position there.
+        reader.goTo(1, 0, 0);
+        QCOMPARE(reader.chapter(), 1);
+        QVERIFY(!reader.bookmarked());
+        reader.goTo(0, 1, 0);
+        QCOMPARE(reader.chapter(), 0);
+        QCOMPARE(reader.anchorParagraph(), 1);
+        QVERIFY(reader.bookmarked());
+        reader.toggleBookmark();
+        QVERIFY(!reader.bookmarked());
+
+        // A passage reads the same whichever way it was dragged.
+        QCOMPARE(reader.passage(0, 9, 0, 15), QString("bright"));
+        QCOMPARE(reader.passage(0, 15, 0, 9), QString("bright"));
+        QCOMPARE(reader.passage(0, 60, 1, 7), QString("thirteen.\nAnother"));
+        reader.closeBook();
+        QCOMPARE(notes.count(), 0);
+    }
+
     // Text pasted into the library.
 
     void pastedTitleIsTheFirstWords() {
@@ -2698,6 +2960,249 @@ private slots:
         QVERIFY2(cross.width() >= 7 && cross.height() >= 7, qPrintable(QString("cross is %1x%2").arg(cross.width()).arg(cross.height())));
     }
 
+    void readerDrawsHighlightsNotesAndBookmarks() {
+        QSettings().remove("reader");
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        QVERIFY(app.show());
+        const QString words = " has plain words in it, enough of them to wrap across a few lines of the column.";
+        QVERIFY(app.reader.addText("Notes", "First" + words + "\n\nSecond" + words + "\n\nThird" + words));
+        QTRY_COMPARE(app.items("bookParagraph").size(), 3);
+        QTest::mouseMove(app.window, QPoint(1050, 650));
+
+        // Pixels tinted with the accent, and filled with it, in each paragraph.
+        auto marks = [&](const QString &name) {
+            const QImage shot = app.grab(name);
+            QList<int> tint(3), solid(3);
+            for (QQuickItem *item : app.items("bookParagraph")) {
+                const int index = item->property("index").toInt();
+                const QRect area = app.area(shot, item).intersected(shot.rect());
+                for (int y = area.top(); y <= area.bottom(); ++y)
+                    for (int x = area.left(); x <= area.right(); ++x) {
+                        const QColor c = shot.pixelColor(x, y);
+                        tint[index] += c.red() > 50 && c.red() < 140 && c.red() > c.blue() + 30;
+                        solid[index] += c.red() > 200 && c.green() > 170 && c.blue() < 80;
+                    }
+            }
+            return std::pair{tint, solid};
+        };
+        const auto [plainTint, plainSolid] = marks("notes-plain");
+        for (int i = 0; i < 3; ++i)
+            QVERIFY2(plainTint[i] < 50 && plainSolid[i] < 10, qPrintable(QString("%1: %2, %3").arg(i).arg(plainTint[i]).arg(plainSolid[i])));
+
+        // A highlight tints its passage, and only that.
+        const QString id = app.annotations.addHighlight(1, 0, 1, 30);
+        QVERIFY(!id.isEmpty());
+        const auto [tint, solid] = marks("notes-highlight");
+        QVERIFY2(tint[1] > 2000, qPrintable(QString::number(tint[1])));
+        QVERIFY(tint[0] < 50 && tint[2] < 50);
+        QVERIFY2(solid[1] < 10, qPrintable(QString::number(solid[1])));
+
+        // A note underlines it in the accent.
+        app.annotations.setNote(id, "Worth rereading.");
+        const auto [notedTint, notedSolid] = marks("notes-note");
+        QVERIFY2(notedSolid[1] > 40, qPrintable(QString::number(notedSolid[1])));
+        QVERIFY(notedTint[1] > 2000);
+
+        // A bookmark shows as a ribbon beside its paragraph, and fills the title bar's.
+        QQuickItem *button = app.items("bookmarkButton").value(0);
+        QVERIFY(button);
+        auto accentIn = [&](const QImage &shot, QQuickItem *item) {
+            const QRect area = app.area(shot, item).intersected(shot.rect());
+            int count = 0;
+            for (int y = area.top(); y <= area.bottom(); ++y)
+                for (int x = area.left(); x <= area.right(); ++x) {
+                    const QColor c = shot.pixelColor(x, y);
+                    count += c.red() > 200 && c.green() > 170 && c.blue() < 80;
+                }
+            return count;
+        };
+        QImage shot = app.grab("notes-no-bookmark");
+        QVERIFY(app.items("paragraphBookmark").isEmpty());
+        QCOMPARE(accentIn(shot, button), 0);
+        app.reader.goTo(0, 2, 0);
+        app.reader.toggleBookmark();
+        QVERIFY(app.reader.bookmarked());
+        QTRY_COMPARE(app.items("paragraphBookmark").size(), 1);
+        QQuickItem *ribbon = app.items("paragraphBookmark").first();
+        QQuickItem *third = nullptr;
+        for (QQuickItem *item : app.items("bookParagraph"))
+            if (item->property("index").toInt() == 2)
+                third = item;
+        QVERIFY(third && third->isAncestorOf(ribbon));
+        shot = app.grab("notes-bookmark");
+        QVERIFY2(accentIn(shot, ribbon) > 60, qPrintable(QString::number(accentIn(shot, ribbon))));
+        QVERIFY2(accentIn(shot, button) > 60, qPrintable(QString::number(accentIn(shot, button))));
+        // The ribbon is drawn in the middle of its button.
+        QRect drawn;
+        const QRect area = app.area(shot, button);
+        for (int y = area.top(); y <= area.bottom(); ++y)
+            for (int x = area.left(); x <= area.right(); ++x) {
+                const QColor c = shot.pixelColor(x, y);
+                if (c.red() > 200 && c.green() > 170 && c.blue() < 80)
+                    drawn |= QRect(x, y, 1, 1);
+            }
+        const QPointF offset = QRectF(drawn).center() - QRectF(area).center();
+        QVERIFY2(qAbs(offset.x()) <= 1.0 && qAbs(offset.y()) <= 1.0,
+                 qPrintable(QString("the ribbon is %1, %2 px off the button's centre").arg(offset.x()).arg(offset.y())));
+        // The ribbon sits in the margin, clear of the text.
+        QVariant first;
+        QMetaObject::invokeMethod(third, "rectFor", Q_RETURN_ARG(QVariant, first), Q_ARG(QVariant, 0));
+        QVERIFY(ribbon->mapRectToScene(QRectF(0, 0, ribbon->width(), ribbon->height())).right()
+                < third->mapToScene(first.toRectF().topLeft()).x() - 4);
+        app.reader.closeBook();
+        QSettings().remove("reader");
+    }
+
+    void readerHighlightsWhatIsDraggedOver() {
+        QSettings().remove("reader");
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        QVERIFY(app.show());
+        const QString first = "First has plain words in it, enough of them to wrap across a few lines.";
+        const QString second = "Second has more words in it, enough of them to wrap across a few lines.";
+        QVERIFY(app.reader.addText("Drag", first + "\n\n" + second));
+        QTRY_COMPARE(app.items("bookParagraph").size(), 2);
+        auto paragraph = [&](int index) -> QQuickItem * {
+            for (QQuickItem *item : app.items("bookParagraph"))
+                if (item->property("index").toInt() == index)
+                    return item;
+            return nullptr;
+        };
+        // Where a character is on screen.
+        auto point = [&](int index, int position) {
+            QQuickItem *item = paragraph(index);
+            QVariant r;
+            QMetaObject::invokeMethod(item, "rectFor", Q_RETURN_ARG(QVariant, r), Q_ARG(QVariant, position));
+            return item->mapToScene(r.toRectF().center()).toPoint();
+        };
+
+        // From inside "plain" in the first paragraph to inside "more" in the second.
+        const QPoint from = point(0, int(first.indexOf("plain")) + 2);
+        const QPoint to = point(1, int(second.indexOf("more")) + 2);
+        QTest::mousePress(app.window, Qt::LeftButton, {}, from);
+        QTest::mouseMove(app.window, from + QPoint(20, 0));
+        QTest::mouseMove(app.window, (from + to) / 2);
+        QTest::mouseMove(app.window, to);
+        QTest::mouseRelease(app.window, Qt::LeftButton, {}, to);
+        QObject *menu = app.window->findChild<QObject *>("selectionMenu");
+        QVERIFY(menu);
+        QTRY_VERIFY(menu->property("opened").toBool());
+        QObject *list = app.window->findChild<QObject *>("chapterList");
+        QVERIFY(list->property("hasSelection").toBool());
+        QCOMPARE(list->property("selectionStartParagraph").toInt(), 0);
+        QCOMPARE(list->property("selectionEndParagraph").toInt(), 1);
+        app.grab("notes-selection");
+
+        QQuickItem *highlight = app.items("highlightSelection").value(0);
+        QVERIFY(highlight);
+        QTest::mouseClick(app.window, Qt::LeftButton, {},
+                          highlight->mapToScene(QPointF(highlight->width() / 2, highlight->height() / 2)).toPoint());
+        QTRY_COMPARE(app.annotations.count(), 1);
+        QCOMPARE(app.annotations.items().first().toMap().value("text").toString(),
+                 first.mid(first.indexOf("plain")) + "\nSecond has more");
+        QTRY_VERIFY(!menu->property("opened").toBool());
+        QVERIFY(!list->property("hasSelection").toBool());
+
+        // A click on the highlight opens its note, kept as it closes.
+        QObject *editor = app.window->findChild<QObject *>("noteEditor");
+        QVERIFY(editor);
+        QTest::mouseClick(app.window, Qt::LeftButton, {}, point(1, 2));
+        QTRY_VERIFY(editor->property("opened").toBool());
+        QQuickItem *note = app.items("noteText").value(0);
+        QTRY_VERIFY(note && note->hasActiveFocus());
+        for (const char c : QByteArray("mind the tern."))
+            QTest::keyClick(app.window, c);
+        app.grab("notes-editor");
+        QTest::keyClick(app.window, Qt::Key_Escape);
+        QTRY_VERIFY(!editor->property("opened").toBool());
+        QCOMPARE(app.annotations.items().first().toMap().value("note").toString(), QString("mind the tern."));
+        app.reader.closeBook();
+        QSettings().remove("reader");
+    }
+
+    void notesPanelListsWhatWasMarked() {
+        QSettings().remove("reader");
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        QVERIFY(app.show());
+        QVERIFY(app.reader.addText("Panel", "First paragraph to mark.\n\nSecond paragraph to bookmark."));
+        QTRY_COMPARE(app.items("bookParagraph").size(), 2);
+        const QString id = app.annotations.addHighlight(0, 0, 0, 5);
+        app.annotations.setNote(id, "A note on it.");
+        app.reader.goTo(0, 1, 0);
+        app.reader.toggleBookmark();
+
+        // N opens the drawer on the notes, listed in reading order.
+        QObject *panel = app.window->findChild<QObject *>("contentsPanel");
+        QVERIFY(panel);
+        QTest::keyClick(app.window, Qt::Key_N);
+        QTRY_VERIFY(panel->property("opened").toBool());
+        QCOMPARE(panel->property("tab").toInt(), 1);
+        QTRY_COMPARE(app.items("removeAnnotation").size(), 2);
+        app.grab("notes-panel");
+
+        // Removing one from the list removes it everywhere.
+        QQuickItem *remove = app.items("removeAnnotation").last();
+        QTest::mouseClick(app.window, Qt::LeftButton, {},
+                          remove->mapToScene(QPointF(remove->width() / 2, remove->height() / 2)).toPoint());
+        QTRY_COMPARE(app.annotations.count(), 1);
+        QVERIFY(!app.reader.bookmarked());
+
+        // T shows the contents in the same drawer, and T again closes it.
+        QTest::keyClick(app.window, Qt::Key_T);
+        QTRY_COMPARE(panel->property("tab").toInt(), 0);
+        QVERIFY(panel->property("opened").toBool());
+        QTest::keyClick(app.window, Qt::Key_T);
+        QTRY_VERIFY(!panel->property("opened").toBool());
+        app.reader.closeBook();
+        QSettings().remove("reader");
+    }
+
+    void helpShowsEveryShortcutOnScreen() {
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        QVERIFY(app.show());
+        app.window->setProperty("helpVisible", true);
+        QTRY_VERIFY(!app.items("helpOverlay").isEmpty());
+        const QImage shot = app.grab("help");
+        // Every row, the last included, is inside the window with room to spare.
+        int rows = 0;
+        std::function<void(QQuickItem *)> walk = [&](QQuickItem *item) {
+            if (item->isVisible() && QByteArray(item->metaObject()->className()).contains("Label")) {
+                ++rows;
+                const QRectF r = item->mapRectToScene(QRectF(0, 0, item->width(), item->height()));
+                QVERIFY2(r.top() >= 16 && r.bottom() <= app.window->height() - 16,
+                         qPrintable(item->property("text").toString() + " is off the window"));
+            }
+            for (QQuickItem *child : item->childItems())
+                walk(child);
+        };
+        walk(app.items("helpOverlay").first());
+        QVERIFY(rows > 40);
+        Q_UNUSED(shot);
+    }
+
+    void everyNotesStringHasAPortugueseTranslation() {
+        QFile file(QString(OMAREADER_SOURCE) + "/src/i18n/pt-BR.json");
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QJsonObject catalog = QJsonDocument::fromJson(file.readAll()).object();
+        static const QRegularExpression call("\\b(?:qsTr|tr)\\(\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+        int found = 0;
+        for (const QString name : {"src/ContentsPanel.qml", "src/NoteEditor.qml", "src/portalfilepicker.cpp"}) {
+            QFile source(QString(OMAREADER_SOURCE) + "/" + name);
+            QVERIFY(source.open(QIODevice::ReadOnly));
+            const QString text = QString::fromUtf8(source.readAll());
+            for (auto it = call.globalMatch(text); it.hasNext();) {
+                QString key = it.next().captured(1);
+                key.replace("\\\"", "\"").replace("\\n", "\n");
+                ++found;
+                QVERIFY2(catalog.contains(key), qPrintable(name + ": no pt-BR entry for: " + key));
+            }
+        }
+        QVERIFY(found > 20);
+    }
+
     void focusModeDimsAllButTheVoice() {
         QSettings().remove("reader");
         QTemporaryDir dir;
@@ -3628,6 +4133,22 @@ private:
         QDir().mkpath(setup.model);
         QDir().mkpath(setup.aligner);
         return setup;
+    }
+
+    // A book of whole sentences to highlight and bookmark, written to path
+    // so it has a file to be known by.
+    static Book notedBook(const QString &path) {
+        write(path, "noted");
+        Book book;
+        book.path = path;
+        book.title = "Noted";
+        book.format = "txt";
+        book.chapters = {{"One",
+                          {{"It was a bright cold day in April. The clocks were striking thirteen.", 0, {}},
+                           {"Another paragraph, with words that don't end soon.", 0, {}}}},
+                         {"Two", {{"Far away in another chapter. The end.", 0, {}}}}};
+        book.segment();
+        return book;
     }
 
     static Book sampleBook(const QString &path) {

@@ -84,7 +84,7 @@ only remembers where they are and where you stopped.
 
 For an article, a note or a message with no book file, press N in the library
 (or Ctrl+V to paste the clipboard straight in), or click Add text. The text is
-saved in `~/.local/share/omareader/texts`, readable only by you, and reads
+saved in `~/.local/share/omareader/omareader/texts`, readable only by you, and reads
 aloud like any book, with its place remembered. Removing it (Delete, or the
 × on its card, after a confirmation) moves it to the trash, so it can still
 be restored.
@@ -190,6 +190,39 @@ KOReader use, in `~/.stardict/dic` or `/usr/share/stardict/dic`) or dictd
 format (as the `dict-*` packages install in `/usr/share/dictd`, such as
 WordNet or GCIDE for English definitions).
 
+## Bookmarks, highlights and notes
+
+Press M (or the ribbon in the title bar) to bookmark the sentence being
+read, or the top of the page when nothing is; a ribbon then marks it in the
+margin, and M again removes it. Drag over the text to select a passage, even
+across paragraphs, and choose Highlight, Add a note, Copy or Read aloud. A
+highlight is tinted with the theme's accent, and one with a note is
+underlined; click it to read or change the note, remove it, or read aloud
+from there. A highlight that runs into another one takes it in, note and all.
+
+Press N for the book's bookmarks, highlights and notes in reading order, in
+the same drawer as the contents (T). Enter goes to one, Delete removes it.
+
+They are kept for each book in
+`~/.local/share/omareader/omareader/annotations`, readable only by you,
+under a hash of the book's file rather than its path, so the same book
+finds them wherever it is. Each one also keeps the words it marks, so if a
+book's text comes out a little differently after an update to omareader,
+they find their place again.
+
+### Keeping them in step across computers
+
+omareader has no accounts and doesn't go online for this. Instead, at the
+foot of the notes (N), choose a folder that you already keep in step between
+your computers with Syncthing, Nextcloud, a network share or the like.
+omareader writes each book's notes there as `omareader/<hash>/<computer>.json`
+and reads what your other computers wrote, picking up their changes as soon
+as the files arrive, even with the book open. Each computer writes only its
+own file, so the sync tool never has to choose between two versions; when
+the same note was changed in two places, the later change wins, and a
+removal reaches every computer. The notes stay on each computer too, so
+reading works the same when the folder isn't there.
+
 ## Exporting audio
 
 Press E (or the ⤓ button) to turn the whole book into audio for your phone, a
@@ -224,6 +257,10 @@ replaced. Exports need `ffmpeg`.
 | ← / → (or H / L) | Previous / next chapter |
 | ↑ ↓ (or K / J), PgUp, PgDn | Scroll |
 | T | Contents |
+| M | Bookmark this place, or remove its bookmark |
+| Drag over text | Highlight it, add a note, copy it or read it aloud |
+| Click a highlight | Its note |
+| N | Bookmarks, highlights and notes |
 | A | Voice and appearance |
 | E | Export as audio |
 | + / − | Bigger / smaller text |
@@ -244,6 +281,7 @@ exits 0 or 1 with errors on stderr, and `--json` prints one JSON object.
 ```sh
 omareader info book.epub --json          # metadata and chapters
 omareader text book.epub --chapter 3     # the text as omareader reads it
+omareader notes book.epub --json         # its bookmarks, highlights and notes
 omareader fetch https://example.com/post # a web page's article, without adding it
 omareader lookup running                 # what the installed dictionaries say
 omareader dictionaries --available       # dictionaries setup can install
@@ -289,7 +327,11 @@ omareader skill install                  # agent skill for ~/.claude/skills
   open a link. It tries a word's base forms when the word as written is
   missing.
 - `src/highlight.cpp` colours that word inside the paragraph, and in focus
-  mode fades the text around it, without changing its layout.
+  mode fades the text around it, without changing its layout. The reader's
+  own highlights and the selection being dragged are drawn the same way.
+- `src/annotations.cpp` keeps the bookmarks, highlights and notes: it finds
+  each one's words in the book again, and merges the files other computers
+  leave in the sync folder, the latest change to each one winning.
 - `src/exporter.cpp` synthesises the book for exports and pipes the
   samples into `ffmpeg`, then joins the chapters into one file with chapter
   markers, or keeps them as a folder of tracks.

@@ -1,5 +1,6 @@
 #include "cli.h"
 
+#include "annotations.h"
 #include "bookloader.h"
 #include "dictionary.h"
 #include "exporter.h"
@@ -182,6 +183,66 @@ int info(const QStringList &arguments) {
         out() << QString("%1. %2 (%3 words)").arg(c.value("number").toInt(), 3).arg(c.value("title").toString())
                      .arg(c.value("words").toInt())
               << Qt::endl;
+    }
+    return 0;
+}
+
+int notes(const QStringList &arguments) {
+    Command command("notes", "List a book's bookmarks, highlights and notes, as the window keeps them.");
+    command.parser.addPositionalArgument("book", "The book file");
+    command.json();
+    if (!command.parse(arguments))
+        return command.parser.isSet("help") ? 0 : 1;
+    const QStringList positional = command.parser.positionalArguments();
+    if (positional.size() != 1)
+        return fail("Use: omareader notes <book> [--json]");
+    const auto book = loadBook(positional.first());
+    if (!book)
+        return 1;
+
+    // Read as the window would find them, the sync folder's included, but
+    // nothing is written.
+    QList<Annotation> items = Annotations::stored(Annotations::fingerprint(book->path), {}, Annotations::savedSyncFolder());
+    Annotations::place(items, *book);
+    items.removeIf([](const Annotation &a) { return a.deleted; });
+    std::stable_sort(items.begin(), items.end(), [](const Annotation &a, const Annotation &b) {
+        return std::tie(a.chapter, a.paragraph, a.start) < std::tie(b.chapter, b.paragraph, b.start);
+    });
+
+    if (command.parser.isSet("json")) {
+        QJsonArray list;
+        for (const Annotation &a : std::as_const(items)) {
+            QJsonObject o{{"kind", a.kind},
+                          {"chapter", a.chapter + 1},
+                          {"chapterTitle", a.chapter < book->chapters.size() ? book->chapters.at(a.chapter).title : QString()},
+                          {"text", a.text},
+                          {"placed", a.placed},
+                          {"created", a.created.toString(Qt::ISODateWithMs)},
+                          {"modified", a.modified.toString(Qt::ISODateWithMs)}};
+            if (!a.note.isEmpty())
+                o.insert("note", a.note);
+            list.append(o);
+        }
+        printJson({{"title", book->title}, {"author", book->author}, {"annotations", list}});
+        return 0;
+    }
+    out() << book->title << Qt::endl;
+    if (items.isEmpty()) {
+        out() << "No bookmarks or highlights." << Qt::endl;
+        return 0;
+    }
+    int chapter = -1;
+    for (const Annotation &a : std::as_const(items)) {
+        if (a.chapter != chapter) {
+            chapter = a.chapter;
+            const QString title = chapter < book->chapters.size() ? book->chapters.at(chapter).title : QString();
+            out() << Qt::endl << QString("Chapter %1%2").arg(chapter + 1).arg(title.isEmpty() ? QString() : " · " + title) << Qt::endl;
+        }
+        const QString text = QString(a.text).replace('\n', ' ');
+        out() << (a.isHighlight() ? "  Highlight: " : "  Bookmark: ") << text << (a.placed ? "" : " (not found in this copy)")
+              << Qt::endl;
+        if (!a.note.isEmpty())
+            out() << "    Note: " << QString(a.note).replace('\n', "\n          ") << Qt::endl;
     }
     return 0;
 }
@@ -692,6 +753,7 @@ QString usage() {
            "  open [book]                     Open the window (the default)\n"
            "  info <book> [--json]            Show a book's metadata and chapters\n"
            "  text <book> [--chapter N]       Print a book's text as omareader reads it\n"
+           "  notes <book> [--json]           List a book's bookmarks, highlights and notes\n"
            "  export <book> [--split]         Read a book aloud into MP3 or M4B files\n"
            "  fetch <url> [--json]            Print the article a web page adds (uses the network)\n"
            "  doctor [--engine E] [--json]    Check that read-aloud is ready, with hardware advice\n"
@@ -705,7 +767,7 @@ QString usage() {
 }
 
 bool isCommand(const QString &word) {
-    return QStringList{"info", "text", "export", "fetch", "doctor", "setup", "voices", "lookup", "dictionaries", "skill", "help", "--help", "-h", "version", "--version"}
+    return QStringList{"info", "text", "notes", "export", "fetch", "doctor", "setup", "voices", "lookup", "dictionaries", "skill", "help", "--help", "-h", "version", "--version"}
         .contains(word);
 }
 
@@ -714,6 +776,7 @@ int run(const QStringList &arguments) {
     const QStringList rest = QStringList{arguments.value(0) + " " + command} + arguments.mid(2);
     if (command == "info") return info(rest);
     if (command == "text") return text(rest);
+    if (command == "notes") return notes(rest);
     if (command == "export") return exportAudio(rest);
     if (command == "fetch") return fetchPage(rest);
     if (command == "doctor") return doctor(rest);

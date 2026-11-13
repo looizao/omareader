@@ -8,6 +8,7 @@
 #include <QTimer>
 #include <QVariantList>
 
+class Annotations;
 class Exporter;
 class FilePicker;
 class Library;
@@ -32,6 +33,8 @@ class Reader : public QObject {
     Q_PROPERTY(int anchorParagraph READ anchorParagraph NOTIFY chapterChanged)
     Q_PROPERTY(double progress READ progress NOTIFY progressChanged)
     Q_PROPERTY(int minutesLeftInChapter READ minutesLeftInChapter NOTIFY progressChanged)
+    // Whether a bookmark marks the paragraph the reading position is in.
+    Q_PROPERTY(bool bookmarked READ bookmarked NOTIFY bookmarkedChanged)
     Q_PROPERTY(int fontSize READ fontSize WRITE setFontSize NOTIFY appearanceChanged)
     Q_PROPERTY(double lineHeight READ lineHeight WRITE setLineHeight NOTIFY appearanceChanged)
     Q_PROPERTY(int contentWidth READ contentWidth WRITE setContentWidth NOTIFY appearanceChanged)
@@ -73,6 +76,7 @@ public:
     int minutesLeftInChapter() const;
     BookPtr book() const { return m_book; }
     int sentence() const { return m_sentence; }
+    bool bookmarked() const;
 
     int fontSize() const { return m_fontSize; }
     double lineHeight() const { return m_lineHeight; }
@@ -117,6 +121,16 @@ public:
     // Exports the open book as audio with the narrator's voice and speed and
     // the exporter's remembered layout, format and folder.
     void setExporter(Exporter *exporter) { m_exporter = exporter; }
+    // The open book's bookmarks, highlights and notes.
+    void setAnnotations(Annotations *annotations);
+    // Bookmarks the sentence being read, or the one at the top of the view,
+    // or removes the bookmark already in its paragraph.
+    Q_INVOKABLE void toggleBookmark();
+    // Shows a place in the book, as the bookmarks and notes list it.
+    Q_INVOKABLE void goTo(int chapter, int paragraph, int offset);
+    // A passage of the open chapter, and the same copied to the clipboard.
+    Q_INVOKABLE QString passage(int paragraph, int start, int endParagraph, int end) const;
+    Q_INVOKABLE void copyPassage(int paragraph, int start, int endParagraph, int end) const;
     Q_INVOKABLE void exportAudio();
     // Roughly how long the whole book takes to hear at this speed.
     Q_INVOKABLE int audioMinutes(double speed) const;
@@ -133,6 +147,7 @@ signals:
     void progressChanged();
     void appearanceChanged();
     void focusChanged();
+    void bookmarkedChanged();
 
 private:
     static QStringList spotlights() { return {"off", "paragraph", "sentence"}; }
@@ -148,6 +163,7 @@ private:
     Narrator *m_narrator;
     FilePicker *m_picker;
     Exporter *m_exporter = nullptr;
+    Annotations *m_annotations = nullptr;
     BookPtr m_book;
     QFutureWatcher<std::pair<std::shared_ptr<Book>, QString>> m_loader;
     QString m_loadingPath;

@@ -45,6 +45,30 @@ void ReadingHighlight::setStyles(const QVariantList &styles) {
     refresh();
 }
 
+void ReadingHighlight::setMarks(const QVariantList &marks) {
+    if (m_marks == marks)
+        return;
+    m_marks = marks;
+    emit stylesChanged();
+    refresh();
+}
+
+void ReadingHighlight::setMarkColor(const QColor &color) {
+    if (m_markColor == color)
+        return;
+    m_markColor = color;
+    emit stylesChanged();
+    refresh();
+}
+
+void ReadingHighlight::setNoteColor(const QColor &color) {
+    if (m_noteColor == color)
+        return;
+    m_noteColor = color;
+    emit stylesChanged();
+    refresh();
+}
+
 void ReadingHighlight::restyle(int start, int end) {
     QTextDocument *doc = textDocument();
     const int length = doc->characterCount() - 1;
@@ -72,6 +96,25 @@ void ReadingHighlight::restyle(int start, int end) {
             format.setFontStrikeOut(true);
         if (flags & TextStyle::Code)
             format.setFontFamilies({QStringLiteral("monospace")});
+        cursor.setPosition(from);
+        cursor.setPosition(to, QTextCursor::KeepAnchor);
+        cursor.mergeCharFormat(format);
+    }
+    // The reader's highlights belong to the page like the styles do, so
+    // the voice's highlight passes over them and leaves them as they were.
+    for (const QVariant &value : std::as_const(m_marks)) {
+        const QVariantMap mark = value.toMap();
+        const int from = qMax(start, mark.value("start").toInt());
+        const int to = qMin(end, mark.value("end").toInt());
+        if (to <= from)
+            continue;
+        QTextCharFormat format;
+        if (m_markColor.isValid() && m_markColor.alpha() > 0)
+            format.setBackground(m_markColor);
+        if (mark.value("note").toBool() && m_noteColor.isValid()) {
+            format.setUnderlineStyle(QTextCharFormat::DotLine);
+            format.setUnderlineColor(m_noteColor);
+        }
         cursor.setPosition(from);
         cursor.setPosition(to, QTextCursor::KeepAnchor);
         cursor.mergeCharFormat(format);
@@ -169,6 +212,11 @@ void ReadingHighlight::apply() {
         QTextCharFormat sentence;
         sentence.setBackground(m_sentenceColor);
         mark(m_sentenceStart, m_sentenceEnd, sentence);
+    }
+    if (m_selectionStart >= 0 && m_selectionEnd > m_selectionStart && shows(m_selectionColor)) {
+        QTextCharFormat selection;
+        selection.setBackground(m_selectionColor);
+        mark(m_selectionStart, m_selectionEnd, selection);
     }
     if (m_wordStart >= 0 && m_wordEnd > m_wordStart && (shows(m_wordColor) || shows(m_wordTextColor))) {
         QTextCharFormat word;

@@ -14,8 +14,8 @@ FocusScope {
 
     // The view keeps the spoken word in sight until the user scrolls away.
     property bool following: true
-    // Reading keys step aside while a panel has the keyboard.
-    readonly property bool keysEnabled: visible && !contents.opened && !settings.opened
+    // Reading keys step aside while a panel or the note has the keyboard.
+    readonly property bool keysEnabled: visible && !contents.opened && !settings.opened && !noteEditor.opened
     // Focus mode holds the spoken line at one height and scrolls the text
     // under it, instead of jumping when the voice nears the edge.
     readonly property bool steady: reader.focusMode && reader.steadyLine
@@ -64,6 +64,9 @@ FocusScope {
         card.close()
         contents.close()
         settings.close()
+        noteEditor.close()
+        selectionMenu.close()
+        list.clearSelection()
     }
 
     // Looks up the word at a character of a paragraph on screen, in a card
@@ -188,6 +191,8 @@ FocusScope {
         target: reader
         function onChapterChanged() {
             card.close()
+            list.clearSelection()
+            selectionMenu.close()
             Qt.callLater(() => {
                 list.positionViewAtIndex(Math.max(0, reader.anchorParagraph), ListView.Beginning)
                 if (root.following)
@@ -216,9 +221,11 @@ FocusScope {
     Shortcut { sequence: "S"; enabled: root.keysEnabled; onActivated: narrator.stop() }
     Shortcut { sequence: "Z"; enabled: root.keysEnabled; onActivated: reader.focusMode = !reader.focusMode }
     Shortcut { sequence: "D"; enabled: root.keysEnabled; onActivated: root.lookUpWord() }
-    Shortcut { sequence: "T"; enabled: root.visible && !settings.opened; onActivated: contents.opened ? contents.close() : contents.open() }
-    Shortcut { sequence: "Ctrl+,"; enabled: root.visible && !contents.opened; onActivated: settings.opened ? settings.close() : settings.open() }
-    Shortcut { sequence: "A"; enabled: root.visible && !contents.opened; onActivated: settings.opened ? settings.close() : settings.open() }
+    Shortcut { sequence: "M"; enabled: root.keysEnabled; onActivated: reader.toggleBookmark() }
+    Shortcut { sequence: "T"; enabled: root.visible && !settings.opened && !noteEditor.opened; onActivated: contents.toggle(0) }
+    Shortcut { sequence: "N"; enabled: root.visible && !settings.opened && !noteEditor.opened; onActivated: contents.toggle(1) }
+    Shortcut { sequence: "Ctrl+,"; enabled: root.visible && !contents.opened && !noteEditor.opened; onActivated: settings.opened ? settings.close() : settings.open() }
+    Shortcut { sequence: "A"; enabled: root.visible && !contents.opened && !noteEditor.opened; onActivated: settings.opened ? settings.close() : settings.open() }
     Shortcut { sequence: "E"; enabled: root.keysEnabled; onActivated: root.exportRequested() }
     Shortcut { sequences: ["Backspace", "B"]; enabled: root.keysEnabled; onActivated: { root.closePanels(); reader.closeBook() } }
 
@@ -251,7 +258,7 @@ FocusScope {
                 }
                 ToolButton {
                     text: "☰"
-                    onClicked: contents.open()
+                    onClicked: contents.toggle(0)
                     ToolTip.visible: hovered && enabled
                     ToolTip.text: qsTr("Contents (T)")
                 }
@@ -263,6 +270,21 @@ FocusScope {
                     elide: Text.ElideRight
                     color: Colors.muted
                     font.pixelSize: 13
+                }
+                // The ribbon is drawn over the button, not as its content,
+                // which Material would push off centre.
+                ToolButton {
+                    objectName: "bookmarkButton"
+                    onClicked: reader.toggleBookmark()
+                    ToolTip.visible: hovered && enabled
+                    ToolTip.text: reader.bookmarked ? qsTr("Remove the bookmark (M)") : qsTr("Bookmark this place (M)")
+                    BookmarkIcon {
+                        anchors.centerIn: parent
+                        width: 12
+                        height: 16
+                        filled: reader.bookmarked
+                        color: reader.bookmarked ? theme.accent : Colors.text
+                    }
                 }
                 ToolButton {
                     text: exporter.running ? qsTr("%1%").arg(Math.floor(exporter.progress * 100)) : "⤓"
@@ -319,6 +341,95 @@ FocusScope {
                 }
                 delegate: BookParagraph {}
                 ScrollBar.vertical: ScrollBar {}
+
+                // A selection made by dragging over the text: where the drag
+                // started and where the pointer is now, as a paragraph and a
+                // character in it, and the same put in reading order and
+                // widened to whole words, as a highlight of it would be.
+                property int anchorParagraph: -1
+                property int anchorOffset: -1
+                property int pointerParagraph: -1
+                property int pointerOffset: -1
+                readonly property bool pointerAfter: pointerParagraph > anchorParagraph
+                                                     || (pointerParagraph === anchorParagraph && pointerOffset >= anchorOffset)
+                readonly property int selectionStartParagraph: pointerAfter ? anchorParagraph : pointerParagraph
+                readonly property int selectionStart: annotations.wordEdge(selectionStartParagraph,
+                                                                           pointerAfter ? anchorOffset : pointerOffset, false)
+                readonly property int selectionEndParagraph: pointerAfter ? pointerParagraph : anchorParagraph
+                readonly property int selectionEnd: annotations.wordEdge(selectionEndParagraph,
+                                                                         pointerAfter ? pointerOffset : anchorOffset, true)
+                readonly property bool hasSelection: anchorParagraph >= 0 && pointerParagraph >= 0
+                                                     && (anchorParagraph !== pointerParagraph || anchorOffset !== pointerOffset)
+                // Whether the mouse is still held, and where it is in the list.
+                property bool selecting: false
+                property point dragPoint
+
+                signal highlightClicked(string id)
+                onHighlightClicked: id => noteEditor.edit(id)
+
+                function clearSelection() {
+                    selecting = false
+                    anchorParagraph = anchorOffset = pointerParagraph = pointerOffset = -1
+                }
+                function beginSelection(paragraph, offset) {
+                    selectionMenu.close()
+                    clearSelection()
+                    anchorParagraph = paragraph
+                    anchorOffset = offset
+                }
+                function dragSelection(x, y) {
+                    selecting = true
+                    dragPoint = Qt.point(x, y)
+                    extendSelection()
+                }
+                // Moves the selection's end to the character under the pointer;
+                // past the text it takes the chapter's start or end.
+                function extendSelection() {
+                    if (anchorParagraph < 0 || count === 0)
+                        return
+                    const y = Math.max(0, Math.min(height - 1, dragPoint.y))
+                    const index = indexAt(width / 2, contentY + y)
+                    if (index < 0) {
+                        const first = itemAtIndex(0)
+                        if (first && contentY + y < first.y) {
+                            pointerParagraph = 0
+                            pointerOffset = 0
+                        } else {
+                            pointerParagraph = count - 1
+                            pointerOffset = reader.paragraphs[count - 1].text.length
+                        }
+                        return
+                    }
+                    const item = itemAtIndex(index)
+                    if (!item)
+                        return
+                    const p = item.mapFromItem(list, dragPoint.x, y)
+                    pointerParagraph = index
+                    pointerOffset = item.positionAt(p.x, p.y)
+                }
+                function finishSelection() {
+                    if (!selecting)
+                        return
+                    selecting = false
+                    if (hasSelection)
+                        selectionMenu.show(mapToItem(root, dragPoint.x, dragPoint.y))
+                    else
+                        clearSelection()
+                }
+
+                // Dragging past the top or bottom scrolls on, so a selection
+                // can run longer than the window.
+                Timer {
+                    interval: 30
+                    repeat: true
+                    running: list.selecting && (list.dragPoint.y < 24 || list.dragPoint.y > list.height - 24)
+                    onTriggered: {
+                        const maxY = list.originY + Math.max(0, list.contentHeight - list.height)
+                        const step = list.dragPoint.y < 24 ? -16 : 16
+                        list.contentY = Math.max(list.originY, Math.min(maxY, list.contentY + step))
+                        list.extendSelection()
+                    }
+                }
 
                 onMovementStarted: if (narrator.active) root.following = false
                 onContentYChanged: {
@@ -407,6 +518,61 @@ FocusScope {
             enabled: !root.controlsHidden
             Behavior on opacity { NumberAnimation { duration: 300 } }
         }
+    }
+
+    // What to do with a selection, beside where the drag ended.
+    Popup {
+        id: selectionMenu
+        objectName: "selectionMenu"
+        padding: 4
+        closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
+        Material.roundedScale: theme.radius
+        background: Rectangle {
+            color: Colors.raised
+            radius: Math.min(8, theme.radius)
+            border.color: Colors.line
+        }
+
+        // Kept while the menu acts on it; otherwise closing lets it go.
+        property bool acting: false
+
+        function show(point) {
+            x = Math.max(8, Math.min(root.width - width - 8, point.x - width / 2))
+            y = point.y + height + 24 < root.height ? point.y + 16 : point.y - height - 16
+            open()
+        }
+        function act(action) {
+            acting = true
+            close()
+            acting = false
+            const sp = list.selectionStartParagraph, s = list.selectionStart
+            const ep = list.selectionEndParagraph, e = list.selectionEnd
+            list.clearSelection()
+            if (action === "highlight") {
+                annotations.addHighlight(sp, s, ep, e)
+            } else if (action === "note") {
+                const id = annotations.addHighlight(sp, s, ep, e)
+                if (id !== "")
+                    noteEditor.edit(id)
+            } else if (action === "copy") {
+                reader.copyPassage(sp, s, ep, e)
+            } else if (action === "read") {
+                reader.readFrom(sp, s)
+            }
+        }
+        onAboutToHide: if (!acting) list.clearSelection()
+
+        contentItem: Row {
+            spacing: 0
+            Button { objectName: "highlightSelection"; flat: true; text: qsTr("Highlight"); onClicked: selectionMenu.act("highlight") }
+            Button { objectName: "noteSelection"; flat: true; text: qsTr("Add a note"); onClicked: selectionMenu.act("note") }
+            Button { flat: true; text: qsTr("Copy"); onClicked: selectionMenu.act("copy") }
+            Button { flat: true; text: qsTr("Read aloud"); onClicked: selectionMenu.act("read") }
+        }
+    }
+
+    NoteEditor {
+        id: noteEditor
     }
 
     ContentsPanel {

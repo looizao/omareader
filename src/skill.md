@@ -1,6 +1,6 @@
 ---
 name: omareader
-description: Read ebooks (EPUB, PDF, FB2, DOCX, ODT, Markdown, HTML, TXT, and Kindle formats through Calibre) as plain text from the command line with omareader, check its offline read-aloud setup (Kokoro, and optionally Qwen3-TTS), and look words up or translate them in offline dictionaries. Use when asked to extract a book's text or chapters, inspect a book's metadata, export a book as an MP3 or M4B audiobook, look up or translate a word, or troubleshoot omareader's voice.
+description: Read ebooks (EPUB, PDF, FB2, DOCX, ODT, Markdown, HTML, TXT, and Kindle formats through Calibre) as plain text from the command line with omareader, check its offline read-aloud setup (Kokoro, and optionally Qwen3-TTS), and look words up or translate them in offline dictionaries. Use when asked to extract a book's text or chapters, inspect a book's metadata, list the bookmarks, highlights and notes made in a book, export a book as an MP3 or M4B audiobook, look up or translate a word, or troubleshoot omareader's voice.
 ---
 
 # omareader
@@ -13,6 +13,7 @@ as it's spoken. Its commands need no display.
 | --- | --- |
 | `omareader info <book> [--json]` | Title, author, format, chapters with paragraph, sentence and word counts |
 | `omareader text <book> [--chapter N] [--json]` | The book's text as omareader reads it, one paragraph per line, chapters numbered from 1 |
+| `omareader notes <book> [--json]` | The bookmarks, highlights and notes made in the book in the window, in reading order with their chapters, including those synced from other computers. Reads only |
 | `omareader export <book> [--split] [--format mp3\|m4b] [--engine kokoro\|qwen] [--voice ID] [--language L] [--speed X] [--tune key=value]... [--output DIR] [--chapters N-M] [--json]` | Reads the book aloud into one audio file with chapter markers, or with `--split` a folder named after the book with one file per chapter; prints the path. Uses the window's engine and voice settings unless overridden. Takes a while: every sentence is synthesised. Needs ffmpeg |
 | `omareader fetch <url> [--json]` | A web page's article as the window would add it: title, author, the address it ended up at, then the text as Markdown. Uses the network for that one page; adds nothing to the library |
 | `omareader voices [--engine kokoro\|qwen] [--json]` | The engine's voices, languages and tuning keys with their ranges and current values, for `export` |
@@ -28,7 +29,7 @@ With `--json` the result is a single JSON object on stdout.
 
 The text is what the narrator speaks: formatting, images, and footnote markers
 are dropped, and headings come out as their own paragraphs. omareader never
-modifies books; its library lives in `~/.local/share/omareader/library.json`,
+modifies books; its library lives in `~/.local/share/omareader/omareader/library.json`,
 and text pasted into it, or web pages added to it, in
-`~/.local/share/omareader/texts/*.json`, which `info` and `text` read like any
+`~/.local/share/omareader/omareader/texts/*.json`, which `info` and `text` read like any
 book; `info` shows a web page's address as its source.

@@ -1,12 +1,15 @@
 #include "reader.h"
 
+#include "annotations.h"
 #include "bookloader.h"
 #include "exporter.h"
 #include "filepicker.h"
 #include "library.h"
 #include "narrator.h"
 
+#include <QClipboard>
 #include <QDir>
+#include <QGuiApplication>
 #include <QFileInfo>
 #include <QSettings>
 #include <QUrl>
@@ -54,6 +57,7 @@ Reader::Reader(Library *library, Narrator *narrator, FilePicker *picker, QObject
     }
     if (m_narrator)
         connect(m_narrator, &Narrator::positionChanged, this, &Reader::followNarrator);
+    connect(this, &Reader::progressChanged, this, &Reader::bookmarkedChanged);
 }
 
 Reader::~Reader() {
@@ -142,6 +146,10 @@ void Reader::open(const QString &pathOrUrl) {
     m_loader.setFuture(QtConcurrent::run([path] {
         QString error;
         auto book = BookLoader::load(path, &error);
+        // Hashing a large book takes a moment, so it's done here rather
+        // than when the window shows it.
+        if (book)
+            book->fingerprint = Annotations::fingerprint(path);
         return std::make_pair(book, error);
     }));
 }
@@ -189,6 +197,8 @@ void Reader::openBook(BookPtr book) {
                                  : qMax(0, m_book->sentenceAt(chapter, paragraph));
         }
     }
+    if (m_annotations)
+        m_annotations->setBook(m_book);
     emit bookChanged();
     setChapter(chapter, paragraph);
     emit progressChanged();
@@ -201,6 +211,8 @@ void Reader::closeBook() {
         m_narrator->setBook(nullptr);
     }
     m_book.reset();
+    if (m_annotations)
+        m_annotations->setBook(nullptr);
     m_paragraphs.clear();
     m_chapter = 0;
     m_anchorParagraph = 0;
@@ -221,6 +233,8 @@ void Reader::setChapter(int chapter, int anchorParagraph) {
             styles.append(QVariantMap{{"start", style.start}, {"length", style.length}, {"flags", style.flags}});
         m_paragraphs.append(QVariantMap{{"text", p.text}, {"level", p.level}, {"styles", styles}});
     }
+    if (m_annotations)
+        m_annotations->setChapter(chapter);
     emit chapterChanged();
 }
 
@@ -234,6 +248,62 @@ void Reader::goToChapter(int chapter) {
     setChapter(chapter, 0);
     emit progressChanged();
     m_saveTimer.start();
+}
+
+void Reader::goTo(int chapter, int paragraph, int offset) {
+    if (!m_book || chapter < 0 || chapter >= m_book->chapters.size())
+        return;
+    paragraph = qBound(0, paragraph, qMax(0, int(m_book->chapters.at(chapter).paragraphs.size()) - 1));
+    // The place asked for, not where the voice is.
+    if (m_narrator && m_narrator->active())
+        m_narrator->stop();
+    m_sentence = qMax(0, m_book->sentenceAt(chapter, paragraph, offset));
+    setChapter(chapter, paragraph);
+    emit progressChanged();
+    m_saveTimer.start();
+}
+
+void Reader::setAnnotations(Annotations *annotations) {
+    m_annotations = annotations;
+    if (m_annotations)
+        connect(m_annotations, &Annotations::changed, this, &Reader::bookmarkedChanged);
+}
+
+bool Reader::bookmarked() const {
+    if (!m_book || !m_annotations || m_sentence >= m_book->sentenceCount())
+        return false;
+    const Sentence &s = m_book->sentences.at(m_sentence);
+    return m_annotations->hasBookmark(s.chapter, s.paragraph);
+}
+
+void Reader::toggleBookmark() {
+    if (!m_book || !m_annotations || m_book->sentenceCount() == 0)
+        return;
+    int sentence = qBound(0, m_sentence, m_book->sentenceCount() - 1);
+    // The place is the chapter in view, even before the view settles on a
+    // paragraph in it.
+    if (m_book->sentences.at(sentence).chapter != m_chapter)
+        sentence = m_book->sentenceAt(m_chapter, m_anchorParagraph);
+    if (sentence < 0)
+        return;
+    const Sentence &s = m_book->sentences.at(sentence);
+    m_annotations->toggleBookmark(s.chapter, s.paragraph, s.start);
+}
+
+QString Reader::passage(int paragraph, int start, int endParagraph, int end) const {
+    if (!m_book)
+        return {};
+    if (endParagraph < paragraph || (endParagraph == paragraph && end < start)) {
+        std::swap(paragraph, endParagraph);
+        std::swap(start, end);
+    }
+    return Annotations::passage(*m_book, m_chapter, paragraph, start, endParagraph, end);
+}
+
+void Reader::copyPassage(int paragraph, int start, int endParagraph, int end) const {
+    const QString text = passage(paragraph, start, endParagraph, end);
+    if (!text.isEmpty())
+        QGuiApplication::clipboard()->setText(text);
 }
 
 void Reader::nextChapter() { goToChapter(m_chapter + 1); }

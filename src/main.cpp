@@ -9,6 +9,7 @@
 #include <QUrl>
 #include <QtQml>
 
+#include "annotations.h"
 #include "cli.h"
 #include "dictionary.h"
 #include "exporter.h"
@@ -58,6 +59,9 @@ int main(int argc, char *argv[]) {
     Exporter exporter;
     exporter.setPicker(&picker);
     reader.setExporter(&exporter);
+    Annotations annotations;
+    annotations.setPicker(&picker);
+    reader.setAnnotations(&annotations);
     TitleAgent titleAgent;
     WebImport webImport;
     WordLookup lookup;
@@ -74,6 +78,7 @@ int main(int argc, char *argv[]) {
     engine.rootContext()->setContextProperty("narrator", &narrator);
     engine.rootContext()->setContextProperty("reader", &reader);
     engine.rootContext()->setContextProperty("exporter", &exporter);
+    engine.rootContext()->setContextProperty("annotations", &annotations);
     engine.rootContext()->setContextProperty("titleAgent", &titleAgent);
     engine.rootContext()->setContextProperty("webImport", &webImport);
     engine.rootContext()->setContextProperty("lookup", &lookup);

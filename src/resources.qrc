@@ -10,6 +10,8 @@
         <file alias="ReadingGlass.qml">ReadingGlass.qml</file>
         <file alias="NarrationBar.qml">NarrationBar.qml</file>
         <file alias="ContentsPanel.qml">ContentsPanel.qml</file>
+        <file alias="NoteEditor.qml">NoteEditor.qml</file>
+        <file alias="BookmarkIcon.qml">BookmarkIcon.qml</file>
         <file alias="SettingsPanel.qml">SettingsPanel.qml</file>
         <file alias="HelpOverlay.qml">HelpOverlay.qml</file>
         <file alias="MediaIcon.qml">MediaIcon.qml</file>

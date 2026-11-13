@@ -91,15 +91,15 @@ void Exporter::setFolder(const QString &folder) {
 void Exporter::setPicker(FilePicker *picker) {
     m_picker = picker;
     if (m_picker)
-        connect(m_picker, &FilePicker::folderSelected, this, [this](const QUrl &url) {
-            if (url.isLocalFile())
+        connect(m_picker, &FilePicker::folderSelected, this, [this](const QUrl &url, const QString &purpose) {
+            if (purpose == QLatin1String("export") && url.isLocalFile())
                 setFolder(url.toLocalFile());
         });
 }
 
 void Exporter::chooseFolder() {
     if (m_picker)
-        m_picker->chooseFolder(m_folder);
+        m_picker->chooseFolder(m_folder, QStringLiteral("export"));
 }
 
 void Exporter::showResult() {

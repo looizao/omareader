@@ -20,6 +20,16 @@ class ReadingHighlight : public QObject {
     // The paragraph's styles, as Reader lists them: {start, length, flags}
     // with TextStyle's flags.
     Q_PROPERTY(QVariantList styles READ styles WRITE setStyles NOTIFY stylesChanged)
+    // The reader's own highlights over the paragraph, as Annotations lists
+    // them: {start, end, note}. They take markColor behind the text, and
+    // those with a note are underlined in noteColor.
+    Q_PROPERTY(QVariantList marks READ marks WRITE setMarks NOTIFY stylesChanged)
+    Q_PROPERTY(QColor markColor READ markColor WRITE setMarkColor NOTIFY stylesChanged)
+    Q_PROPERTY(QColor noteColor READ noteColor WRITE setNoteColor NOTIFY stylesChanged)
+    // The part of a selection being made that falls in this paragraph.
+    Q_PROPERTY(int selectionStart MEMBER m_selectionStart WRITE setSelectionStart NOTIFY rangeChanged)
+    Q_PROPERTY(int selectionEnd MEMBER m_selectionEnd WRITE setSelectionEnd NOTIFY rangeChanged)
+    Q_PROPERTY(QColor selectionColor MEMBER m_selectionColor WRITE setSelectionColor NOTIFY rangeChanged)
     Q_PROPERTY(int sentenceStart MEMBER m_sentenceStart WRITE setSentenceStart NOTIFY rangeChanged)
     Q_PROPERTY(int sentenceEnd MEMBER m_sentenceEnd WRITE setSentenceEnd NOTIFY rangeChanged)
     Q_PROPERTY(int wordStart MEMBER m_wordStart WRITE setWordStart NOTIFY rangeChanged)
@@ -48,6 +58,15 @@ public:
     void setDocument(QQuickTextDocument *document);
     QVariantList styles() const { return m_styles; }
     void setStyles(const QVariantList &styles);
+    QVariantList marks() const { return m_marks; }
+    void setMarks(const QVariantList &marks);
+    QColor markColor() const { return m_markColor; }
+    void setMarkColor(const QColor &color);
+    QColor noteColor() const { return m_noteColor; }
+    void setNoteColor(const QColor &color);
+    void setSelectionStart(int v) { set(m_selectionStart, v); }
+    void setSelectionEnd(int v) { set(m_selectionEnd, v); }
+    void setSelectionColor(const QColor &c) { set(m_selectionColor, c); }
     void setSentenceStart(int v) { set(m_sentenceStart, v); }
     void setSentenceEnd(int v) { set(m_sentenceEnd, v); }
     void setWordStart(int v) { set(m_wordStart, v); }
@@ -104,6 +123,10 @@ private:
 
     QPointer<QQuickTextDocument> m_document;
     QVariantList m_styles;
+    QVariantList m_marks;
+    QColor m_markColor, m_noteColor;
+    int m_selectionStart = -1, m_selectionEnd = -1;
+    QColor m_selectionColor;
     int m_sentenceStart = -1, m_sentenceEnd = -1, m_wordStart = -1, m_wordEnd = -1;
     QColor m_sentenceColor, m_wordColor, m_wordTextColor;
     int m_readEnd = -1;
