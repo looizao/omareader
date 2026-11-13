@@ -5,6 +5,11 @@
 #include <QTextBlockFormat>
 #include <QTextCharFormat>
 #include <QTextCursor>
+#include <QFontMetricsF>
+#include <QRawFont>
+#include <QtMath>
+#include <QTextBlock>
+#include <QTextLayout>
 #include <QTextDocument>
 
 ReadingHighlight::ReadingHighlight(QObject *parent) : QObject(parent) {}
@@ -71,6 +76,25 @@ void ReadingHighlight::restyle(int start, int end) {
         cursor.setPosition(to, QTextCursor::KeepAnchor);
         cursor.mergeCharFormat(format);
     }
+    // A character the font lacks is drawn from a fallback font, often a
+    // taller one, and Qt sizes every line that shares its formatting with
+    // it by that font. Formatting it apart keeps that to its own line, and
+    // the same however the highlight colours the text around it.
+    QTextCharFormat apart;
+    apart.setProperty(QTextFormat::UserProperty, true);
+    for (const auto &[from, to] : std::as_const(m_fallback)) {
+        if (to <= start || from >= end)
+            continue;
+        cursor.setPosition(qMax(start, from));
+        cursor.setPosition(qMin(end, to), QTextCursor::KeepAnchor);
+        cursor.mergeCharFormat(apart);
+    }
+}
+
+QFont ReadingHighlight::textFont() const {
+    QTextDocument *doc = textDocument();
+    const bool set = !m_font.family().isEmpty() || m_font.pixelSize() > 0 || m_font.pointSizeF() > 0;
+    return set || !doc ? m_font : doc->defaultFont();
 }
 
 void ReadingHighlight::refresh() {
@@ -80,9 +104,25 @@ void ReadingHighlight::refresh() {
     m_applying = true;
     QTextCursor cursor(doc);
     cursor.select(QTextCursor::Document);
+    const QFontMetricsF metrics(textFont());
     QTextBlockFormat block;
-    block.setLineHeight(m_lineHeight * 100, QTextBlockFormat::ProportionalHeight);
+    // The height Qt gives a line of this font, rounded the way it rounds it,
+    // so the spacing is what a proportional line height would give.
+    const qreal natural = qCeil(metrics.ascent()) + qCeil(metrics.descent());
+    block.setLineHeight(natural * m_lineHeight, QTextBlockFormat::FixedHeight);
     cursor.mergeBlockFormat(block);
+    m_fallback.clear();
+    // The font itself, without the fallbacks QFontMetrics would count.
+    const QRawFont raw = QRawFont::fromFont(textFont());
+    const QString text = doc->toPlainText();
+    for (int i = 0; i < text.size();) {
+        const char32_t code = text.at(i).isHighSurrogate() && i + 1 < text.size()
+                                  ? QChar::surrogateToUcs4(text.at(i), text.at(i + 1)) : text.at(i).unicode();
+        const int size = code > 0xFFFF ? 2 : 1;
+        if (!QChar::isSpace(code) && QChar::isPrint(code) && raw.isValid() && !raw.supportsCharacter(code))
+            m_fallback.append({i, i + size});
+        i += size;
+    }
     restyle(0, doc->characterCount() - 1);
     m_applying = false;
     m_appliedStart = m_appliedEnd = -1;
@@ -139,6 +179,28 @@ void ReadingHighlight::apply() {
         mark(m_wordStart, m_wordEnd, word);
     }
     m_applying = false;
+}
+
+QVariantList ReadingHighlight::lines() const {
+    QVariantList found;
+    QTextDocument *doc = textDocument();
+    if (!doc)
+        return found;
+    for (QTextBlock block = doc->begin(); block.isValid(); block = block.next()) {
+        const QTextLayout *layout = block.layout();
+        if (!layout)
+            continue;
+        const qreal top = layout->position().y();
+        for (int i = 0; i < layout->lineCount(); ++i) {
+            const QTextLine line = layout->lineAt(i);
+            QVariantMap entry;
+            entry.insert("y", top + line.y());
+            entry.insert("baseline", top + line.y() + line.ascent());
+            entry.insert("start", block.position() + line.textStart());
+            found.append(entry);
+        }
+    }
+    return found;
 }
 
 // Compiled as part of this file, not on its own; see omareader.pro.

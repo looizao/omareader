@@ -176,6 +176,31 @@ int Narrator::wordEnd() const {
     return m_word >= 0 && m_word < words.size() ? words.at(m_word).start + words.at(m_word).length : -1;
 }
 
+// The next word: later in the sentence, or the first of the next sentence
+// when that is in the same paragraph.
+static const WordSpan *nextWord(const BookPtr &book, int sentence, int word) {
+    if (!book || sentence < 0 || sentence >= book->sentenceCount() || word < 0)
+        return nullptr;
+    const Sentence &current = book->sentences.at(sentence);
+    if (word + 1 < current.words.size())
+        return &current.words.at(word + 1);
+    if (sentence + 1 >= book->sentenceCount())
+        return nullptr;
+    const Sentence &following = book->sentences.at(sentence + 1);
+    if (following.chapter != current.chapter || following.paragraph != current.paragraph || following.words.isEmpty())
+        return nullptr;
+    return &following.words.first();
+}
+
+int Narrator::nextWordStart() const {
+    const WordSpan *next = active() ? nextWord(m_book, m_sentence, m_word) : nullptr;
+    return next ? next->start : -1;
+}
+int Narrator::nextWordEnd() const {
+    const WordSpan *next = active() ? nextWord(m_book, m_sentence, m_word) : nullptr;
+    return next ? next->start + next->length : -1;
+}
+
 void Narrator::setEngine(const QString &engine) {
     if (engine == m_settings.engine || !Engine::isKnown(engine))
         return;
@@ -302,8 +327,8 @@ void Narrator::setState(State state) {
     emit wordChanged();
 }
 
-void Narrator::showForTests(State state, int sentence, int word) {
-    setPosition(sentence, word);
+void Narrator::showForTests(State state, int sentence, int word, double wordSeconds) {
+    setPosition(sentence, word, wordSeconds);
     setState(state);
 }
 
@@ -314,11 +339,12 @@ void Narrator::setError(const QString &error) {
     emit errorChanged();
 }
 
-void Narrator::setPosition(int sentence, int word) {
+void Narrator::setPosition(int sentence, int word, double wordSeconds) {
     const bool sentenceChanged = sentence != m_sentence;
-    const bool wordChangedNow = sentenceChanged || word != m_word;
+    const bool wordChangedNow = sentenceChanged || word != m_word || wordSeconds != m_wordSeconds;
     m_sentence = sentence;
     m_word = word;
+    m_wordSeconds = wordSeconds;
     if (sentenceChanged)
         emit positionChanged();
     if (wordChangedNow)
@@ -498,7 +524,15 @@ void Narrator::tick() {
         else
             break;
     }
-    setPosition(entry.sentence, word);
+    // Until the next word starts, or the next sentence for the last word,
+    // pause included.
+    double wordSeconds = 0;
+    if (word >= 0) {
+        const double next = word + 1 < entry.timings.size() ? entry.timings.at(word + 1).start
+                                                             : double(entry.frames) / Synthesizer::SampleRate;
+        wordSeconds = qMax(0.0, next - entry.timings.at(word).start);
+    }
+    setPosition(entry.sentence, word, wordSeconds);
     updateHold();
 }
 

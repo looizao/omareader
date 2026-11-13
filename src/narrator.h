@@ -38,6 +38,13 @@ class Narrator : public QObject {
     Q_PROPERTY(int sentenceEnd READ sentenceEnd NOTIFY positionChanged)
     Q_PROPERTY(int wordStart READ wordStart NOTIFY wordChanged)
     Q_PROPERTY(int wordEnd READ wordEnd NOTIFY wordChanged)
+    // The word after the spoken one, when it is in the same paragraph (-1
+    // otherwise), and how long the voice takes from the start of the spoken
+    // word to the start of that one (0 when unknown), so the reading glass
+    // can move at the pace of the voice.
+    Q_PROPERTY(int nextWordStart READ nextWordStart NOTIFY wordChanged)
+    Q_PROPERTY(int nextWordEnd READ nextWordEnd NOTIFY wordChanged)
+    Q_PROPERTY(double wordSeconds READ wordSeconds NOTIFY wordChanged)
     Q_PROPERTY(QString engine READ engine WRITE setEngine NOTIFY engineChanged)
     Q_PROPERTY(QVariantList engines READ engines NOTIFY setupChanged)
     Q_PROPERTY(QString voice READ voice WRITE setVoice NOTIFY voiceChanged)
@@ -77,6 +84,9 @@ public:
     int sentenceEnd() const;
     int wordStart() const;
     int wordEnd() const;
+    int nextWordStart() const;
+    int nextWordEnd() const;
+    double wordSeconds() const { return active() ? m_wordSeconds : 0; }
     QString engine() const { return m_settings.engine; }
     QVariantList engines() const;
     QString voice() const { return m_settings.voice; }
@@ -113,7 +123,7 @@ public:
     Q_INVOKABLE void stopPreview();
     // For tests: puts the narration at a word in a state, with no audio, so
     // the window can be checked on machines without an audio device.
-    void showForTests(State state, int sentence, int word);
+    void showForTests(State state, int sentence, int word, double wordSeconds = 0);
 
     // How many sentences the engine gets per run, and how far ahead of the
     // listener synthesis may go before it is held.
@@ -150,7 +160,7 @@ private:
 
     void setState(State state);
     void setError(const QString &error);
-    void setPosition(int sentence, int word);
+    void setPosition(int sentence, int word, double wordSeconds = 0);
     void startRun(int from);
     void onSentenceReady(int id, const SpokenSentence &sentence);
     void onSentenceFailed(int id);
@@ -183,6 +193,7 @@ private:
 
     int m_sentence = -1;
     int m_word = -1;
+    double m_wordSeconds = 0;
     int m_runEnd = 0;
     int m_nextToAppend = 0;
     QHash<int, Ready> m_ready;

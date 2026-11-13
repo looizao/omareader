@@ -7,19 +7,27 @@ import Omareader
 //
 // The paragraph's lines are treated as one track laid end to end, so at the
 // end of a line the pane slides off it while the same share slides in at the
-// start of the next, instead of jumping down. It follows the word on a
-// critically damped spring, which evens out the uneven pace of speech.
+// start of the next, instead of jumping down. It moves from each word to the
+// next over the time the voice takes between them, so it keeps the pace of
+// speech, and a light spring rounds off the changes of pace between words.
 Item {
     id: glass
     objectName: "readingGlass"
 
     // The paragraph's text, which the glass sits on; it takes its size and place.
     required property TextEdit body
+    // Its highlight, which knows where each line's letters are drawn.
+    required property ReadingHighlight layout
     property var styles: []
     property real lineHeight: 1
-    // The word being spoken, as positions in body's text.
+    // The word being spoken and the one after it, as positions in body's
+    // text, and how long the voice takes from one to the other.
     property int wordStart: -1
     property int wordEnd: -1
+    property int nextWordStart: -1
+    property int nextWordEnd: -1
+    property real wordSeconds: 0
+    property bool playing: false
 
     readonly property real gap: 16
     readonly property real padX: Math.round(body.font.pixelSize * 0.5)
@@ -29,24 +37,31 @@ Item {
     // About three ordinary words wide; only a longer word stretches it.
     readonly property real baseWidth: Math.ceil(sample.advanceWidth) + 2 * padX
     readonly property real stride: body.width + 2 * gap
+    readonly property real paneHeight: Math.ceil(metrics.height) + 2 * padY
 
-    // The track's layout: the first line's top, how far apart lines are and
-    // how tall a line's letters are.
-    property real firstTop: 0
-    property real pitch: 1
-    property real letterHeight: 0
+    // Each line of the paragraph as laid out: {y, baseline, start}. Read
+    // from the layout, not worked out from the first line, since a line can
+    // be taller than the rest (a symbol from a fallback font, say).
+    property var lines: []
 
-    // Where the pane is on the track (its centre) and how wide, and where
-    // the spoken word wants it.
+    // Where the pane is on the track (its centre) and how wide, where the
+    // voice wants it, and how fast it is moving.
     property real u: 0
     property real paneWidth: baseWidth
-    property real targetU: 0
-    property real targetWidth: baseWidth
     property real speedU: 0
     property real speedWidth: 0
     property bool placed: false
-    readonly property bool settled: placed && Math.abs(targetU - u) < 0.5 && Math.abs(targetWidth - paneWidth) < 0.5
-                                    && Math.abs(speedU) < 1 && Math.abs(speedWidth) < 1
+    // The spoken word's and the next word's places on the track, and how far
+    // the voice has come from one to the other.
+    property real fromU: 0
+    property real toU: 0
+    property real fromWidth: baseWidth
+    property real toWidth: baseWidth
+    property real elapsed: 0
+    readonly property real progress: wordSeconds > 0 ? Math.min(1, elapsed / wordSeconds) : 0
+    readonly property real targetU: fromU + (toU - fromU) * progress
+    readonly property real targetWidth: fromWidth + (toWidth - fromWidth) * progress
+    readonly property bool settled: placed && !moving()
 
     x: body.x
     y: body.y
@@ -58,27 +73,54 @@ Item {
         font: glass.body.font
         text: "three plain words"
     }
+    FontMetrics {
+        id: metrics
+        font: glass.body.font
+    }
 
-    function lineTop(k) {
-        return firstTop + k * pitch
+    // The pane over line k sits on the line's baseline, as tall as the
+    // body font's letters.
+    function paneTop(k) {
+        const line = lines[k]
+        return line ? line.baseline - metrics.ascent - padY : 0
+    }
+
+    function measure() {
+        lines = body.length > 0 && body.width > 0 ? layout.lines() : []
+        placed = false
+        aim()
+    }
+
+    function lineOf(position) {
+        let k = 0
+        while (k + 1 < lines.length && lines[k + 1].start <= position)
+            ++k
+        return k
+    }
+
+    // A word's centre on the track, and the width the pane takes over it.
+    function place(start, end) {
+        const a = body.positionToRectangle(start)
+        const b = body.positionToRectangle(Math.max(start, end))
+        const right = Math.abs(b.y - a.y) < 1 ? b.x : body.width
+        return {
+            u: lineOf(start) * stride + gap + (a.x + right) / 2,
+            width: Math.max(baseWidth, right - a.x + 2 * padX + body.font.pixelSize * 0.5)
+        }
     }
 
     function aim() {
-        if (wordStart < 0 || body.width <= 0) {
+        if (wordStart < 0 || lines.length === 0) {
             placed = false
             return
         }
-        const first = body.positionToRectangle(0)
-        const last = body.positionToRectangle(body.length)
-        firstTop = first.y
-        letterHeight = first.height
-        pitch = body.lineCount > 1 ? (last.y - first.y) / (body.lineCount - 1) : first.height
-        const start = body.positionToRectangle(wordStart)
-        const end = body.positionToRectangle(Math.max(wordStart, wordEnd))
-        const right = Math.abs(end.y - start.y) < 1 ? end.x : body.width
-        const k = Math.max(0, Math.round((start.y - first.y) / pitch))
-        targetU = k * stride + gap + (start.x + right) / 2
-        targetWidth = Math.max(baseWidth, right - start.x + 2 * padX + body.font.pixelSize * 0.5)
+        const word = place(wordStart, wordEnd)
+        const next = nextWordStart >= 0 ? place(nextWordStart, nextWordEnd) : word
+        fromU = word.u
+        fromWidth = word.width
+        toU = next.u
+        toWidth = next.width
+        elapsed = 0
         // A first word, or one more than a line away (a skip, a click), is
         // a new place to start from, not somewhere to glide to.
         if (!placed || Math.abs(targetU - u) > stride * 1.5) {
@@ -89,23 +131,43 @@ Item {
         }
     }
 
+    function moving() {
+        return (playing && progress < 1) || Math.abs(targetU - u) >= 0.5 || Math.abs(targetWidth - paneWidth) >= 0.5
+               || Math.abs(speedU) >= 1 || Math.abs(speedWidth) >= 1
+    }
+
     onWordStartChanged: aim()
-    onWordEndChanged: aim()
-    onWidthChanged: { placed = false; aim() }
+    onNextWordStartChanged: aim()
+    onWordSecondsChanged: aim()
     onBaseWidthChanged: aim()
+    onWidthChanged: Qt.callLater(measure)
     Connections {
         target: glass.body
-        function onLineCountChanged() { glass.placed = false; glass.aim() }
-        function onContentHeightChanged() { glass.placed = false; glass.aim() }
+        function onContentHeightChanged() { Qt.callLater(glass.measure) }
+        function onLineCountChanged() { Qt.callLater(glass.measure) }
     }
-    Component.onCompleted: aim()
+    Component.onCompleted: measure()
 
-    FrameAnimation {
-        running: glass.visible && glass.placed && !glass.settled
+    // A timer rather than a FrameAnimation: while a FrameAnimation runs, the
+    // window redraws on every refresh of the display (144 times a second or
+    // more), whatever the animation changes. The pane moves a pixel or two
+    // per step at the pace of speech, so 60 steps a second look as smooth
+    // and the window only redraws when a step moves it.
+    Timer {
+        property real last: 0
+        interval: 16
+        repeat: true
+        running: glass.visible && glass.placed && (glass.playing || !glass.settled)
+        onRunningChanged: last = Date.now()
         onTriggered: {
-            const dt = Math.min(0.05, frameTime)
-            // Stiffness: higher follows the voice more tightly, lower is calmer.
-            const w0 = 7.5
+            const now = Date.now()
+            const dt = Math.min(0.05, Math.max(0, (now - last) / 1000))
+            last = now
+            if (glass.playing)
+                glass.elapsed += dt
+            // A light spring: enough to round off a change of pace, not
+            // enough to fall far behind the voice.
+            const w0 = 14
             glass.speedU += (w0 * w0 * (glass.targetU - glass.u) - 2 * w0 * glass.speedU) * dt
             glass.u += glass.speedU * dt
             glass.speedWidth += (w0 * w0 * (glass.targetWidth - glass.paneWidth) - 2 * w0 * glass.speedWidth) * dt
@@ -131,15 +193,15 @@ Item {
             // The pane's left edge in this strip, and how much of it is on this line.
             readonly property real paneX: glass.u - glass.paneWidth / 2 - line * glass.stride
             readonly property real shown: Math.max(0, Math.min(paneX + glass.paneWidth, glass.stride) - Math.max(paneX, 0))
-            readonly property real paneHeight: glass.letterHeight + 2 * glass.padY
+            readonly property real paneY: glass.paneTop(line)
 
-            visible: glass.placed && line >= 0 && line < glass.body.lineCount && shown >= 1
+            visible: glass.placed && line >= 0 && line < glass.lines.length && shown >= 1
             // It fades as it leaves a line, and grows clearer as it arrives.
             opacity: Math.min(1, 1.5 * shown / glass.paneWidth)
             x: -glass.gap
-            y: glass.lineTop(line) - glass.padY - glass.margin
+            y: paneY - glass.margin
             width: glass.stride
-            height: paneHeight + 2 * glass.margin
+            height: glass.paneHeight + 2 * glass.margin
             clip: true
 
             // A soft shadow lifts the pane off the page.
@@ -150,7 +212,7 @@ Item {
                     x: strip.paneX - modelData.grow
                     y: glass.margin - modelData.grow + modelData.drop
                     width: glass.paneWidth + 2 * modelData.grow
-                    height: strip.paneHeight + 2 * modelData.grow
+                    height: glass.paneHeight + 2 * modelData.grow
                     radius: 9 + modelData.grow
                     color: Qt.rgba(0, 0, 0, modelData.alpha)
                 }
@@ -161,7 +223,7 @@ Item {
                 x: strip.paneX
                 y: glass.margin
                 width: glass.paneWidth
-                height: strip.paneHeight
+                height: glass.paneHeight
                 radius: 9
                 clip: true
                 // Opaque, so only the enlarged words show through it, not
@@ -175,10 +237,8 @@ Item {
                 // enlarged about the pane's centre.
                 TextEdit {
                     id: copy
-                    readonly property real originX: strip.paneX - glass.gap
-                    readonly property real originY: glass.lineTop(strip.line) - glass.padY
-                    x: -originX
-                    y: -originY
+                    x: -(strip.paneX - glass.gap)
+                    y: -strip.paneY
                     width: glass.body.width
                     text: glass.body.text
                     textFormat: TextEdit.PlainText
@@ -190,7 +250,7 @@ Item {
                     enabled: false
                     transform: Scale {
                         origin.x: strip.paneX - glass.gap + glass.paneWidth / 2
-                        origin.y: glass.lineTop(strip.line) + glass.letterHeight / 2
+                        origin.y: strip.paneY + glass.paneHeight / 2
                         xScale: glass.magnify
                         yScale: glass.magnify
                     }
@@ -199,6 +259,7 @@ Item {
                         document: copy.textDocument
                         styles: glass.styles
                         lineHeight: glass.lineHeight
+                        font: glass.body.font
                     }
                 }
 

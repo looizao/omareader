@@ -2623,6 +2623,19 @@ private slots:
                  "the pane never passed between the two words");
         QCOMPARE(panes().first().width(), width);
 
+        // While the voice plays, it moves on at the pace of speech, from the
+        // spoken word toward the next over the time between them, before the
+        // next word has even started.
+        speak(4);
+        const qreal still = panes().first().center().x();
+        app.narrator.showForTests(Narrator::Playing, 0, 4, 2.0);
+        QTest::qWait(1000);
+        const qreal halfway = panes().first().center().x();
+        QVERIFY2(halfway > still + 10 && halfway < to - 5,
+                 qPrintable(QString("from %1 toward %2, at %3 after half the word").arg(still).arg(to).arg(halfway)));
+        QTRY_VERIFY_WITH_TIMEOUT(qAbs(panes().first().center().x() - to) < 2, 3000);
+        app.narrator.showForTests(Narrator::Paused, 0, 4);
+
         // Only a word too long for it stretches it.
         int word = 0;
         for (; word < 60; ++word) {
@@ -2660,6 +2673,73 @@ private slots:
         app.reader.setHighlight("both");
         QTRY_VERIFY(app.items("readingGlass").isEmpty());
         app.narrator.stop();
+        app.reader.closeBook();
+        QSettings().remove("reader");
+    }
+
+    void glassWindowSitsOnTheLineItCovers() {
+        QSettings().remove("reader");
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        QVERIFY(app.show());
+        // The paragraph opens with a mark drawn from a taller fallback font,
+        // as checklists in some books do, so its first line is taller than
+        // the others.
+        const QString text = QString::fromUtf8(
+            "✓ Executive functions operate together but can cause impairments separately. Other scientists and I "
+            "have divided executive functioning into seven separate abilities to understand them better. But we "
+            "humans don’t experience them as separate, nor do we use them one at a time as adults. The executive "
+            "functions operate like the sections of a symphony orchestra, playing simultaneously to produce seamlessly "
+            "beautiful music. When ADHD enters the picture, so do deficits in executive functions.");
+        QVERIFY(app.reader.addText("Lines", text));
+        QTRY_COMPARE(app.items("bookParagraph").size(), 1);
+        QTest::mouseMove(app.window, QPoint(550, 700));
+        auto glass = [&]() { return app.items("readingGlass").value(0); };
+
+        QSet<int> tops;
+        QList<qreal> firstLines;
+        for (int sentence = 0; sentence < 5; ++sentence) {
+            app.narrator.showForTests(Narrator::Paused, sentence, 2);
+            QTRY_VERIFY(glass() && glass()->property("settled").toBool());
+            // The page's lines keep their places as the voice moves on: the
+            // highlight changes colours, never where a line is.
+            QList<qreal> lines;
+            for (const QVariant &line : glass()->property("lines").toList())
+                lines << line.toMap().value("y").toReal();
+            QVERIFY(lines.size() >= 5);
+            if (sentence == 0)
+                firstLines = lines;
+            auto join = [](const QList<qreal> &values) {
+                QStringList out;
+                for (qreal v : values)
+                    out << QString::number(v);
+                return out.join(",");
+            };
+            QVERIFY2(lines == firstLines, qPrintable(QString("sentence %1: lines at %2, were at %3").arg(sentence).arg(join(lines)).arg(join(firstLines))));
+            const QList<QQuickItem *> panes = app.items("readingGlassPane");
+            QCOMPARE(panes.size(), 1);
+            const QImage shot = app.grab(QString("glass-line-%1").arg(sentence));
+            const QRect pane = app.area(shot, panes.first());
+            tops << pane.top();
+            // A pane about as tall as a line of letters, not the taller first line.
+            QVERIFY2(pane.height() < app.reader.fontSize() * 2.2 * shot.devicePixelRatio(),
+                     qPrintable(QString("sentence %1: the pane is %2 px tall").arg(sentence).arg(pane.height())));
+            // The words in it sit inside it, not cut off by its top or bottom edge.
+            int textTop = -1, textBottom = -1;
+            for (int y = pane.top(); y <= pane.bottom(); ++y)
+                for (int x = pane.left() + 12; x <= pane.right() - 12; ++x)
+                    if (qGray(shot.pixel(x, y)) > 200) {
+                        if (textTop < 0)
+                            textTop = y;
+                        textBottom = y;
+                        break;
+                    }
+            QVERIFY2(textTop >= 0, qPrintable(QString("sentence %1: no words in the pane").arg(sentence)));
+            QVERIFY2(textTop - pane.top() >= 2 && pane.bottom() - textBottom >= 2,
+                     qPrintable(QString("sentence %1: pane %2 to %3, words %4 to %5").arg(sentence)
+                                    .arg(pane.top()).arg(pane.bottom()).arg(textTop).arg(textBottom)));
+        }
+        QVERIFY(tops.size() >= 3);
         app.reader.closeBook();
         QSettings().remove("reader");
     }

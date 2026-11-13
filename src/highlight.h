@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QColor>
+#include <QFont>
 #include <QObject>
 #include <QPointer>
 #include <QQuickTextDocument>
@@ -32,8 +33,13 @@ class ReadingHighlight : public QObject {
     Q_PROPERTY(int readEnd MEMBER m_readEnd WRITE setReadEnd NOTIFY rangeChanged)
     Q_PROPERTY(QColor readColor MEMBER m_readColor WRITE setReadColor NOTIFY rangeChanged)
     Q_PROPERTY(QColor quietColor MEMBER m_quietColor WRITE setQuietColor NOTIFY rangeChanged)
-    // TextEdit has no lineHeight of its own; this sets it on the document.
+    // TextEdit has no lineHeight of its own; this sets it on the document,
+    // as a multiple of the font's line spacing. Every line gets that same
+    // height, so a symbol drawn from a taller fallback font, or a colour
+    // laid over part of the text, can't push the lines apart.
     Q_PROPERTY(double lineHeight MEMBER m_lineHeight WRITE setLineHeight NOTIFY rangeChanged)
+    // The text's font, which the line height is measured from.
+    Q_PROPERTY(QFont font MEMBER m_font WRITE setFont NOTIFY rangeChanged)
 
 public:
     explicit ReadingHighlight(QObject *parent = nullptr);
@@ -60,7 +66,21 @@ public:
         refresh();
     }
 
+    void setFont(const QFont &font) {
+        if (font == m_font)
+            return;
+        m_font = font;
+        emit rangeChanged();
+        refresh();
+    }
+
     Q_INVOKABLE void refresh();
+    // Each line of the text as it is laid out: {y, baseline, start}, its
+    // top, its baseline and the position of its first character, so the
+    // reading glass can sit on the letters. The text item's own cursor
+    // rectangles don't say where a line's letters are drawn when the line
+    // height is stretched.
+    Q_INVOKABLE QVariantList lines() const;
 
 signals:
     void documentChanged();
@@ -80,6 +100,7 @@ private:
     // to end, clearing whatever was there.
     void restyle(int start, int end);
     QTextDocument *textDocument() const;
+    QFont textFont() const;
 
     QPointer<QQuickTextDocument> m_document;
     QVariantList m_styles;
@@ -88,6 +109,9 @@ private:
     int m_readEnd = -1;
     QColor m_readColor, m_quietColor;
     double m_lineHeight = 1.0;
+    QFont m_font;
+    // Where the characters the font lacks are, as [start, end) ranges.
+    QList<std::pair<int, int>> m_fallback;
     int m_appliedStart = -1, m_appliedEnd = -1;
     bool m_applying = false;
     QMetaObject::Connection m_contents;

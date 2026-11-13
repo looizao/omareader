@@ -18,8 +18,10 @@ Item {
     readonly property bool fading: focusing && reader.fadeRead
     readonly property bool spotlit: focusing && reader.spotlight !== "off"
     readonly property bool glassy: reader.highlight === "glass"
-    // The text, under a name the glass can reach (its own is body too).
+    // The text and its highlight, under names the glass can reach (its own
+    // are body and highlight too).
     readonly property TextEdit page: body
+    readonly property ReadingHighlight pageLayout: highlight
     // How much of the text still shows: read text fades further than the
     // text still to come, so the eye is drawn forward.
     readonly property real readOpacity: 0.22
@@ -62,9 +64,11 @@ Item {
     }
 
     ReadingHighlight {
+        id: highlight
         document: body.textDocument
         styles: root.modelData.styles || []
         lineHeight: reader.lineHeight
+        font: body.font
         sentenceStart: root.reading ? narrator.sentenceStart : -1
         sentenceEnd: root.reading ? narrator.sentenceEnd : -1
         wordStart: root.reading ? narrator.wordStart : -1
@@ -94,10 +98,15 @@ Item {
         active: root.reading && root.glassy && narrator.wordStart >= 0
         sourceComponent: ReadingGlass {
             body: root.page
+            layout: root.pageLayout
             styles: root.modelData.styles || []
             lineHeight: reader.lineHeight
             wordStart: narrator.wordStart
             wordEnd: narrator.wordEnd
+            nextWordStart: narrator.nextWordStart
+            nextWordEnd: narrator.nextWordEnd
+            wordSeconds: narrator.wordSeconds
+            playing: narrator.state === Narrator.Playing
         }
     }
 
