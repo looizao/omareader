@@ -24,6 +24,7 @@ HEADERS += \
     src/book.h \
     src/bookloader.h \
     src/cli.h \
+    src/dictionary.h \
     src/exporter.h \
     src/filepicker.h \
     src/highlight.h \
@@ -48,6 +49,7 @@ SOURCES += \
     src/book.cpp \
     src/bookloader.cpp \
     src/cli.cpp \
+    src/dictionary.cpp \
     src/exporter.cpp \
     src/highlight.cpp \
     src/kokoro.cpp \
@@ -70,3 +72,6 @@ SOURCES += \
 # headers again for a few lines of code.
 
 RESOURCES += src/resources.qrc
+
+# zlib inflates compressed dictionaries (dictzip and gzip).
+LIBS += -lz

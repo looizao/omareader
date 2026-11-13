@@ -163,6 +163,33 @@ Choose which of these focus mode turns on under Focus in the settings (A).
 The Page settings also choose what the highlight marks (the word, the
 sentence or both) and how strongly, with or without focus mode.
 
+## Looking words up
+
+Right-click a word to look it up, or press D for the word the voice is
+reading (or, with the voice stopped, the one under the mouse). A card opens
+beside the word with what each of your dictionaries says about it, and the
+voice pauses until you close it (Esc, D, or a click elsewhere). A
+bilingual dictionary translates the word, which helps when you read a book
+in a language you are learning. When a dictionary has no article for the
+word as written, omareader tries its base form, so "running" finds "run",
+"houses" "house" and "animais" "animal"; the card shows which form it found.
+
+The dictionaries are offline, read straight from their files: nothing is
+sent anywhere, and no dictionary server runs. Install one of
+[FreeDict](https://freedict.org)'s 300-odd bilingual dictionaries with
+
+```sh
+omareader dictionaries --available        # every language pair, with sizes
+omareader setup --dictionary eng-por      # English to Portuguese (en-pt works too)
+```
+
+which downloads it into `~/.local/share/omareader/dictionaries`, pinned to a
+release and checked against its SHA-512. omareader also reads any
+dictionary you already have in StarDict format (as sdcv, GoldenDict and
+KOReader use, in `~/.stardict/dic` or `/usr/share/stardict/dic`) or dictd
+format (as the `dict-*` packages install in `/usr/share/dictd`, such as
+WordNet or GCIDE for English definitions).
+
 ## Exporting audio
 
 Press E (or the ⤓ button) to turn the whole book into audio for your phone, a
@@ -187,6 +214,8 @@ replaced. Exports need `ffmpeg`.
 | --- | --- |
 | Space | Read aloud, pause, resume |
 | Click a word | Read aloud from there |
+| Right-click a word | Look it up in your dictionaries |
+| D | Look up the word being read, or the one under the mouse |
 | `,` / `.` | Previous / next sentence |
 | `[` / `]` | Slower / faster |
 | S | Stop reading aloud |
@@ -216,6 +245,9 @@ exits 0 or 1 with errors on stderr, and `--json` prints one JSON object.
 omareader info book.epub --json          # metadata and chapters
 omareader text book.epub --chapter 3     # the text as omareader reads it
 omareader fetch https://example.com/post # a web page's article, without adding it
+omareader lookup running                 # what the installed dictionaries say
+omareader dictionaries --available       # dictionaries setup can install
+omareader setup --dictionary eng-por     # install one (uses the network)
 omareader export book.epub --split       # audio, one MP3 per chapter
 omareader export book.epub --format m4b  # one M4B audiobook with chapters
 omareader export book.epub --engine qwen --voice ryan --tune temperature=0.7
@@ -251,6 +283,11 @@ omareader skill install                  # agent skill for ~/.claude/skills
   page; `src/article.cpp` parses it without running anything, scores its
   blocks as Mozilla's Readability does to find the article, and writes it
   out as the Markdown pasted text is kept in.
+- `src/dictionary.cpp` reads StarDict and dictd dictionaries itself,
+  inflating only the chunk of a dictzip file an article sits in, and turns
+  their HTML into plain lines, so a dictionary can never load an image or
+  open a link. It tries a word's base forms when the word as written is
+  missing.
 - `src/highlight.cpp` colours that word inside the paragraph, and in focus
   mode fades the text around it, without changing its layout.
 - `src/exporter.cpp` synthesises the book for exports and pipes the

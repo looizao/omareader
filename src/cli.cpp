@@ -1,6 +1,7 @@
 #include "cli.h"
 
 #include "bookloader.h"
+#include "dictionary.h"
 #include "exporter.h"
 #include "kokoro.h"
 #include "library.h"
@@ -415,20 +416,35 @@ int runSetupScript(const QString &resource, const QStringList &scriptArguments) 
 }
 
 int setup(const QStringList &arguments) {
-    Command command("setup", "Install a voice engine and its models (the one step that uses the network).");
+    Command command("setup", "Install a voice engine and its models, or a dictionary (the steps that use the "
+                             "network).");
     command.parser.addOption({"engine", "kokoro (the default) or qwen", "engine", "kokoro"});
     command.parser.addOption({"model", "Qwen3-TTS only: 0.6b (the default) or 1.7b, which needs about 7 GB of GPU "
                                        "memory",
                               "size", "0.6b"});
+    command.parser.addOption({"dictionary", "Install one of FreeDict's dictionaries instead, such as eng-por for "
+                                            "English to Portuguese (see omareader dictionaries --available)",
+                              "name"});
     command.parser.addOption({"dry-run", "Show what would be done without changing anything"});
     if (!command.parse(arguments))
         return command.parser.isSet("help") ? 0 : 1;
-    const QString engine = command.parser.value("engine").toLower();
-    if (!Engine::isKnown(engine))
-        return fail("The engine is kokoro or qwen.");
     QStringList scriptArguments;
     if (command.parser.isSet("dry-run"))
         scriptArguments << "--dry-run";
+    if (command.parser.isSet("dictionary")) {
+        if (command.parser.isSet("engine") || command.parser.isSet("model"))
+            return fail("--dictionary installs a dictionary, not a voice engine; run them separately.");
+        const QString name = command.parser.value("dictionary");
+        const CatalogDictionary dictionary = DictionaryCatalog::find(name);
+        if (dictionary.name.isEmpty())
+            return fail(QString("FreeDict has no dictionary %1. omareader dictionaries --available lists them.")
+                            .arg(name));
+        return runSetupScript(":/setup-dictionary.sh",
+                              scriptArguments << dictionary.name << dictionary.url << dictionary.sha512);
+    }
+    const QString engine = command.parser.value("engine").toLower();
+    if (!Engine::isKnown(engine))
+        return fail("The engine is kokoro or qwen.");
     if (engine == Engine::Kokoro) {
         if (command.parser.isSet("model"))
             return fail("--model only applies to --engine qwen.");
@@ -497,6 +513,100 @@ int voices(const QStringList &arguments) {
               << Qt::endl
               << "  " << QString(18, ' ') << " " << p.description << Qt::endl;
     }
+    return 0;
+}
+
+QString noDictionaries() {
+    return "No dictionaries are installed. Install one with omareader setup --dictionary, such as eng-por for "
+           "English to Portuguese; omareader dictionaries --available lists them all.";
+}
+
+int lookupWord(const QStringList &arguments) {
+    Command command("lookup", "Look a word up in the installed dictionaries, offline.");
+    command.parser.addPositionalArgument("word", "The word, or a phrase such as \"a lot of\"");
+    command.json();
+    if (!command.parse(arguments))
+        return command.parser.isSet("help") ? 0 : 1;
+    const QString word = command.parser.positionalArguments().join(' ').trimmed();
+    if (word.isEmpty())
+        return fail("Use: omareader lookup <word> [--json]");
+    DictionaryShelf shelf(DictionaryShelf::defaultDirectories());
+    const DictionaryShelf::Result result = shelf.lookup(word);
+    if (result.dictionaries == 0)
+        return fail(noDictionaries());
+    if (command.parser.isSet("json")) {
+        QJsonArray entries;
+        for (const DictionaryEntry &entry : result.entries)
+            entries.append(QJsonObject{{"dictionary", entry.dictionary}, {"headword", entry.headword},
+                                       {"text", entry.text}});
+        printJson({{"word", word}, {"dictionaries", result.dictionaries}, {"entries", entries}});
+        return result.entries.isEmpty() ? 1 : 0;
+    }
+    if (result.entries.isEmpty())
+        return fail(QString("None of the %1 dictionaries has %2.").arg(result.dictionaries).arg(word));
+    for (qsizetype i = 0; i < result.entries.size(); ++i) {
+        const DictionaryEntry &entry = result.entries.at(i);
+        if (i > 0)
+            out() << Qt::endl;
+        out() << entry.headword << " (" << entry.dictionary << ")" << Qt::endl;
+        for (const QString &line : entry.text.split('\n'))
+            out() << "  " << line << Qt::endl;
+    }
+    return 0;
+}
+
+int dictionaries(const QStringList &arguments) {
+    Command command("dictionaries", "List the installed dictionaries, or those omareader setup --dictionary can "
+                                    "install.");
+    command.parser.addOption({"available", "List FreeDict's dictionaries that setup can install"});
+    command.json();
+    if (!command.parse(arguments))
+        return command.parser.isSet("help") ? 0 : 1;
+    const bool json = command.parser.isSet("json");
+    if (command.parser.isSet("available")) {
+        const QString installed = DictionaryShelf::installDirectory();
+        QJsonArray list;
+        for (const CatalogDictionary &d : DictionaryCatalog::all()) {
+            const bool here = QFileInfo::exists(installed + "/" + d.name + "/.sha512");
+            if (json) {
+                list.append(QJsonObject{{"name", d.name}, {"from", DictionaryCatalog::languageName(d.from())},
+                                        {"to", DictionaryCatalog::languageName(d.to())}, {"version", d.version},
+                                        {"headwords", d.headwords}, {"bytes", d.bytes}, {"installed", here}});
+                continue;
+            }
+            out() << d.name << "  " << d.title().leftJustified(36) << " "
+                  << QString("%1 words").arg(d.headwords).rightJustified(13) << "  "
+                  << QString("%1 MB").arg(double(d.bytes) / 1e6, 0, 'f', 1).rightJustified(8)
+                  << (here ? "  (installed)" : "") << Qt::endl;
+        }
+        if (json)
+            printJson({{"dictionaries", list}});
+        else
+            out() << Qt::endl << "Install one with: omareader setup --dictionary <name>" << Qt::endl;
+        return 0;
+    }
+    DictionaryShelf shelf(DictionaryShelf::defaultDirectories());
+    const auto installed = shelf.dictionaries();
+    if (json) {
+        QJsonArray list;
+        for (const auto &d : installed)
+            list.append(QJsonObject{{"name", d->name()},
+                                    {"format", d->format() == Dictionary::StarDict ? "stardict" : "dictd"},
+                                    {"headwords", d->wordCount()},
+                                    {"path", d->path()}});
+        printJson({{"dictionaries", list}, {"searched", QJsonArray::fromStringList(shelf.directories())}});
+        return 0;
+    }
+    if (installed.isEmpty()) {
+        out() << noDictionaries() << Qt::endl
+              << "omareader also reads StarDict and dictd dictionaries from: " << shelf.directories().join(", ")
+              << Qt::endl;
+        return 0;
+    }
+    for (const auto &d : installed)
+        out() << d->name() << Qt::endl
+              << "  " << (d->format() == Dictionary::StarDict ? "StarDict" : "dictd") << ", " << d->wordCount()
+              << " headwords, " << d->path() << Qt::endl;
     return 0;
 }
 
@@ -585,14 +695,17 @@ QString usage() {
            "  export <book> [--split]         Read a book aloud into MP3 or M4B files\n"
            "  fetch <url> [--json]            Print the article a web page adds (uses the network)\n"
            "  doctor [--engine E] [--json]    Check that read-aloud is ready, with hardware advice\n"
+           "  lookup <word> [--json]          Look a word up in the installed dictionaries\n"
+           "  dictionaries [--available]      List the installed dictionaries, or those setup can add\n"
            "  setup [--engine kokoro|qwen]    Install a voice engine and its models (uses the network)\n"
+           "  setup --dictionary eng-por      Install a FreeDict dictionary (uses the network)\n"
            "  voices [--engine E] [--json]    List an engine's voices, languages and tuning\n"
            "  skill [install]                 Print the skill for coding agents, or install it\n"
            "  version                         Print the version\n";
 }
 
 bool isCommand(const QString &word) {
-    return QStringList{"info", "text", "export", "fetch", "doctor", "setup", "voices", "skill", "help", "--help", "-h", "version", "--version"}
+    return QStringList{"info", "text", "export", "fetch", "doctor", "setup", "voices", "lookup", "dictionaries", "skill", "help", "--help", "-h", "version", "--version"}
         .contains(word);
 }
 
@@ -606,6 +719,8 @@ int run(const QStringList &arguments) {
     if (command == "doctor") return doctor(rest);
     if (command == "setup") return setup(rest);
     if (command == "voices") return voices(rest);
+    if (command == "lookup") return lookupWord(rest);
+    if (command == "dictionaries") return dictionaries(rest);
     if (command == "skill") return skill(rest);
     if (command == "version" || command == "--version") {
         out() << "omareader " << QCoreApplication::applicationVersion() << Qt::endl;

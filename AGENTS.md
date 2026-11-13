@@ -70,7 +70,9 @@ release once per push, not once per commit.
   everything.
 - The app touches the network only when the user asks. Kokoros downloads a
   missing model on its own, so synthesis only starts once both model files
-  exist (`KokoroSetup`). `omareader setup` downloads the engine. Adding a
+  exist (`KokoroSetup`). `omareader setup` downloads the engine, and
+  `omareader setup --dictionary` a dictionary; looking a word up reads
+  installed dictionaries and never fetches anything. Adding a
   web page (`WebImport`) fetches that one page when the user presses Fetch,
   loads nothing it links to, runs none of its scripts and keeps no cookies;
   its text is then kept and never fetched again. The title

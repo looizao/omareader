@@ -300,5 +300,10 @@
   "Dim all but the sentence": "Escurecer tudo menos a frase",
   "Fade what was read": "Apagar o que já foi lido",
   "Hold the spoken line steady": "Manter a linha lida no mesmo lugar",
-  "Hide the controls while the voice plays": "Esconder os controles enquanto a voz lê"
+  "Hide the controls while the voice plays": "Esconder os controles enquanto a voz lê",
+  "Right-click a word": "Clicar com o botão direito numa palavra",
+  "Look it up in your dictionaries": "Procurá-la nos seus dicionários",
+  "Look up the word being read, or the one under the mouse": "Procurar a palavra sendo lida, ou a que está sob o mouse",
+  "No dictionaries yet. To look words up and translate them offline, install one in a terminal:": "Nenhum dicionário ainda. Para procurar e traduzir palavras offline, instale um num terminal:",
+  "None of your dictionaries has this word.": "Nenhum dos seus dicionários tem esta palavra."
 }

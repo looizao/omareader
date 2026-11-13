@@ -11,6 +11,8 @@ Rectangle {
     readonly property var shortcuts: [
         ["Space", qsTr("Read aloud, pause, resume")],
         [qsTr("Click a word"), qsTr("Read aloud from there")],
+        [qsTr("Right-click a word"), qsTr("Look it up in your dictionaries")],
+        ["D", qsTr("Look up the word being read, or the one under the mouse")],
         [", / .", qsTr("Previous / next sentence")],
         ["[ / ]", qsTr("Slower / faster")],
         ["S", qsTr("Stop reading aloud")],

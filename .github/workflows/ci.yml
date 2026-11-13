@@ -42,7 +42,7 @@ jobs:
       # ShellCheck comes with the runner; on Arch it would bring the whole
       # Haskell runtime along.
       - name: Lint shell scripts
-        run: shellcheck bin/* src/setup-kokoros.sh src/setup-qwen.sh .github/ci-image/run
+        run: shellcheck bin/* src/setup-kokoros.sh src/setup-qwen.sh src/setup-dictionary.sh .github/ci-image/run
 
   # The Arch jobs run on the runner and step into the image for their
   # commands (.github/ci-image/run), so the checkout, the compiler cache

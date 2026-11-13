@@ -3,8 +3,8 @@ import Omareader
 
 // One paragraph of the chapter. The sentence being read and the word being
 // spoken are marked in place, by a glass window over the word or by colour;
-// clicking a word reads aloud from there. In focus mode the paragraphs
-// around the voice dim, and what was read fades.
+// clicking a word reads aloud from there, and right-clicking it looks it up.
+// In focus mode the paragraphs around the voice dim, and what was read fades.
 Item {
     id: root
     objectName: "bookParagraph"
@@ -40,6 +40,11 @@ Item {
     function rectFor(position) {
         const r = body.positionToRectangle(Math.max(0, position))
         return Qt.rect(body.x + r.x, body.y + r.y, r.width, r.height)
+    }
+
+    // The character at a point in this item's coordinates.
+    function positionAt(x, y) {
+        return body.positionAt(x - body.x, y - body.y)
     }
 
     TextEdit {
@@ -113,6 +118,13 @@ Item {
     MouseArea {
         anchors.fill: body
         cursorShape: Qt.PointingHandCursor
-        onClicked: mouse => reader.readFrom(root.index, body.positionAt(mouse.x, mouse.y))
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        onClicked: mouse => {
+            const position = body.positionAt(mouse.x, mouse.y)
+            if (mouse.button === Qt.RightButton && root.ListView.view)
+                root.ListView.view.lookUpRequested(root, position)
+            else
+                reader.readFrom(root.index, position)
+        }
     }
 }

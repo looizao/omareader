@@ -7,7 +7,7 @@ pkgdesc='Offline ebook reader that reads books aloud with Kokoro and highlights 
 arch=('x86_64' 'aarch64')
 url='https://github.com/looizao/omareader'
 license=('MIT')
-depends=('qt6-base' 'qt6-declarative' 'qt6-multimedia' 'qt6-wayland' 'xdg-desktop-portal' 'poppler' 'ffmpeg')
+depends=('qt6-base' 'qt6-declarative' 'qt6-multimedia' 'qt6-wayland' 'xdg-desktop-portal' 'poppler' 'ffmpeg' 'zlib')
 makedepends=('gcc' 'make')
 # Link-time optimisation compiles everything again at every link, which a
 # compiler cache can't skip, and this app has nothing to gain from it.

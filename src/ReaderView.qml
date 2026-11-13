@@ -41,6 +41,7 @@ FocusScope {
     // Only a real movement counts: Qt Quick also sends hover events when the
     // text scrolls under a still mouse.
     HoverHandler {
+        id: pointer
         property point last
         onPointChanged: {
             const p = point.scenePosition
@@ -60,8 +61,55 @@ FocusScope {
     }
 
     function closePanels() {
+        card.close()
         contents.close()
         settings.close()
+    }
+
+    // Looks up the word at a character of a paragraph on screen, in a card
+    // beside it. The voice pauses while the card is open and goes on when
+    // it closes.
+    function lookUpAt(paragraph, position) {
+        const word = lookup.wordAt(paragraph.modelData.text, position)
+        if (word.text === undefined)
+            return
+        const start = paragraph.rectFor(word.start)
+        const end = paragraph.rectFor(word.start + word.length)
+        const at = paragraph.mapToItem(page, start.x, start.y)
+        card.wordRect = Qt.rect(at.x, at.y, end.y === start.y ? Math.max(4, end.x - start.x) : 16, start.height)
+        if (narrator.state === Narrator.Playing || narrator.state === Narrator.Preparing) {
+            narrator.pause()
+            card.resumeOnClose = true
+        }
+        resume.stop()
+        scroll.stop()
+        card.openedAt = list.contentY
+        lookup.lookUp(word.text)
+        card.open()
+    }
+
+    // D: the word being read, or else the word under the mouse.
+    function lookUpWord() {
+        if (card.opened) {
+            card.close()
+            return
+        }
+        if (narrator.active && narrator.chapter === reader.chapter && narrator.paragraph >= 0
+                && narrator.wordStart >= 0) {
+            const spoken = list.itemAtIndex(narrator.paragraph)
+            if (spoken) {
+                root.lookUpAt(spoken, narrator.wordStart)
+                return
+            }
+        }
+        if (!pointer.hovered)
+            return
+        const p = list.mapFromItem(null, pointer.last.x, pointer.last.y)
+        const item = list.itemAtIndex(list.indexAt(p.x + list.contentX, p.y + list.contentY))
+        if (!item)
+            return
+        const local = item.mapFromItem(null, pointer.last.x, pointer.last.y)
+        root.lookUpAt(item, item.positionAt(local.x, local.y))
     }
 
     function scrollBy(amount) {
@@ -110,6 +158,9 @@ FocusScope {
                 root.reveal()
         }
         function onStateChanged() {
+            // Pausing or playing by hand while the card is open settles it.
+            if (card.opened && narrator.state !== Narrator.Paused)
+                card.resumeOnClose = false
             if (narrator.state === Narrator.Preparing)
                 root.following = true
             if (narrator.state === Narrator.Playing)
@@ -128,7 +179,15 @@ FocusScope {
 
     Connections {
         target: reader
+        function onBookChanged() {
+            card.close()
+        }
+    }
+
+    Connections {
+        target: reader
         function onChapterChanged() {
+            card.close()
             Qt.callLater(() => {
                 list.positionViewAtIndex(Math.max(0, reader.anchorParagraph), ListView.Beginning)
                 if (root.following)
@@ -156,6 +215,7 @@ FocusScope {
     Shortcut { sequence: "F"; enabled: root.keysEnabled; onActivated: root.follow() }
     Shortcut { sequence: "S"; enabled: root.keysEnabled; onActivated: narrator.stop() }
     Shortcut { sequence: "Z"; enabled: root.keysEnabled; onActivated: reader.focusMode = !reader.focusMode }
+    Shortcut { sequence: "D"; enabled: root.keysEnabled; onActivated: root.lookUpWord() }
     Shortcut { sequence: "T"; enabled: root.visible && !settings.opened; onActivated: contents.opened ? contents.close() : contents.open() }
     Shortcut { sequence: "Ctrl+,"; enabled: root.visible && !contents.opened; onActivated: settings.opened ? settings.close() : settings.open() }
     Shortcut { sequence: "A"; enabled: root.visible && !contents.opened; onActivated: settings.opened ? settings.close() : settings.open() }
@@ -230,12 +290,16 @@ FocusScope {
         }
 
         Item {
+            id: page
             Layout.fillWidth: true
             Layout.fillHeight: true
 
             ListView {
                 id: list
                 objectName: "chapterList"
+                // A paragraph asks for the word at a character to be looked up.
+                signal lookUpRequested(Item paragraph, int position)
+                onLookUpRequested: (paragraph, position) => root.lookUpAt(paragraph, position)
                 anchors.fill: parent
                 clip: true
                 model: reader.paragraphs
@@ -257,7 +321,12 @@ FocusScope {
                 ScrollBar.vertical: ScrollBar {}
 
                 onMovementStarted: if (narrator.active) root.following = false
-                onContentYChanged: visibleTimer.restart()
+                onContentYChanged: {
+                    visibleTimer.restart()
+                    // The card belongs beside its word, so scrolling closes it.
+                    if (card.opened && Math.abs(list.contentY - card.openedAt) > 2)
+                        card.close()
+                }
 
                 NumberAnimation {
                     id: scroll
@@ -276,6 +345,47 @@ FocusScope {
                     const index = list.indexAt(list.width / 2, list.contentY + 40)
                     if (index >= 0)
                         reader.setVisibleParagraph(index)
+                }
+            }
+
+            // The word being looked up, outlined while its card is open.
+            Rectangle {
+                objectName: "lookedUpWord"
+                visible: card.opened
+                x: card.wordRect.x - 3
+                y: card.wordRect.y - 1
+                width: card.wordRect.width + 6
+                height: card.wordRect.height + 2
+                radius: 4
+                color: Qt.alpha(theme.accent, 0.16)
+                border.color: theme.accent
+                border.width: 1.5
+            }
+
+            WordCard {
+                id: card
+                parent: page
+                // Where the list was when the card opened, and whether the
+                // voice was paused for it.
+                property real openedAt: 0
+                property bool resumeOnClose: false
+                onClosed: {
+                    lookup.clear()
+                    // A right-click on another word closes the card on the
+                    // press and opens it again on the release; wait for that
+                    // before the voice goes on.
+                    if (resumeOnClose)
+                        resume.restart()
+                }
+            }
+
+            Timer {
+                id: resume
+                interval: 250
+                onTriggered: {
+                    card.resumeOnClose = false
+                    if (narrator.state === Narrator.Paused)
+                        narrator.resume()
                 }
             }
 

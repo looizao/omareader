@@ -31,11 +31,13 @@
 #include <QTemporaryDir>
 #include <QtEndian>
 #include <QtTest>
+#include <zlib.h>
 
 #include "article.h"
 #include "audioplayer.h"
 #include "book.h"
 #include "bookloader.h"
+#include "dictionary.h"
 #include "exporter.h"
 #include "filepicker.h"
 #include "fixtures.h"
@@ -59,7 +61,8 @@
 class AppWindow {
 public:
     AppWindow(const QString &dir)
-        : library(dir + "/library.json", dir + "/covers"), reader(&library, &narrator, nullptr) {
+        : library(dir + "/library.json", dir + "/covers"), reader(&library, &narrator, nullptr),
+          lookup(QStringList{dir + "/dictionaries"}) {
         reader.setExporter(&exporter);
         qmlRegisterType<ReadingHighlight>("Omareader", 1, 0, "ReadingHighlight");
         qmlRegisterUncreatableType<Narrator>("Omareader", 1, 0, "Narrator", "Use the narrator context property.");
@@ -74,6 +77,7 @@ public:
         context->setContextProperty("exporter", &exporter);
         context->setContextProperty("titleAgent", &titleAgent);
         context->setContextProperty("webImport", &webImport);
+        context->setContextProperty("lookup", &lookup);
     }
 
     bool show(QSize size = {1100, 720}) {
@@ -126,6 +130,7 @@ public:
     Exporter exporter;
     TitleAgent titleAgent;
     WebImport webImport;
+    WordLookup lookup;
     QQmlApplicationEngine engine;
     QQuickWindow *window = nullptr;
 };
@@ -2398,6 +2403,277 @@ private slots:
         QSettings().remove("reader");
     }
 
+    // Dictionaries.
+
+    void starDictLooksWordsUpIgnoringCase() {
+        QTemporaryDir dir;
+        // Compressed as FreeDict ships them, in chunks small enough that an
+        // article spans several.
+        writeStarDict(dir.filePath("eng-por"), "English-Portuguese",
+                      {{"house", "<div>/<font color=\"gray\">haus</font>/<br><ol><li><div>casa</div></li>"
+                                 "<li><div>lar</div></li></ol></div>"},
+                       {"House", "<div>a family line</div>"},
+                       {"run", "<ol><li><ol><li>correr</li><li>executar</li></ol></li><li>corrida</li></ol>"},
+                       {"são", "<div>sound &amp; healthy</div>"}},
+                      "sametypesequence=h\n", true, {{"ran", 2}});
+        const auto dictionary = Dictionary::open(dir.filePath("eng-por/eng-por.ifo"));
+        QVERIFY(dictionary);
+        QCOMPARE(dictionary->name(), QString("English-Portuguese"));
+        QCOMPARE(dictionary->format(), Dictionary::StarDict);
+        QCOMPARE(dictionary->wordCount(), 4);
+
+        const QList<DictionaryEntry> house = dictionary->lookup("HOUSE");
+        QCOMPARE(house.size(), 2);
+        QCOMPARE(house.at(0).headword, QString("house"));
+        QCOMPARE(house.at(0).text, QString("/haus/\n1. casa\n2. lar"));
+        QCOMPARE(house.at(0).dictionary, QString("English-Portuguese"));
+        QCOMPARE(house.at(1).text, QString("a family line"));
+        QCOMPARE(dictionary->lookup("house", 1).size(), 1);
+
+        // A synonym leads to its entry; a group of senses keeps to one line.
+        const QList<DictionaryEntry> ran = dictionary->lookup("ran");
+        QCOMPARE(ran.size(), 1);
+        QCOMPARE(ran.at(0).headword, QString("run"));
+        QCOMPARE(ran.at(0).text, QString("1. correr; executar\n2. corrida"));
+
+        // Case folds beyond ASCII too.
+        QCOMPARE(dictionary->lookup("SÃO").value(0).text, QString("sound & healthy"));
+        QVERIFY(dictionary->lookup("missing").isEmpty());
+        QVERIFY(dictionary->lookup("").isEmpty());
+    }
+
+    void starDictReadsEachTypedField() {
+        QTemporaryDir dir;
+        // Without a sametypesequence each field carries its type: here a
+        // phonetic, a text and a sound, which is skipped.
+        QByteArray article = QByteArray("t") + "kat" + '\0' + "m" + "cat\na small feline" + '\0' + "W";
+        article += QByteArray::fromHex("00000003") + "RIF";
+        writeStarDict(dir.filePath("plain"), "Plain", {{"cat", article}}, "", false);
+        const auto dictionary = Dictionary::open(dir.filePath("plain/plain.ifo"));
+        QVERIFY(dictionary);
+        // The text's first line only repeated the headword.
+        QCOMPARE(dictionary->lookup("Cat").value(0).text, QString("/kat/\na small feline"));
+
+        // Anything that isn't a StarDict .ifo is no dictionary.
+        write(dir.filePath("other.ifo"), "not a dictionary\n");
+        QVERIFY(!Dictionary::open(dir.filePath("other.ifo")));
+        QVERIFY(!Dictionary::open(dir.filePath("plain/plain.dict")));
+    }
+
+    void dictdDictionaryReadsItsIndexAndName() {
+        QTemporaryDir dir;
+        const QByteArray name = "00-database-short\n     Test WordNet\n";
+        const QByteArray dog = "dog\n     n 1: a member of the genus {Canis}\n          that barks\n";
+        const QByteArray house = "house /haus/\ncasa, lar\n";
+        const QByteArray dict = name + dog + house;
+        auto number = [](qsizetype value) {
+            static const QByteArray digits = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            QByteArray out;
+            do {
+                out.prepend(digits.at(value % 64));
+                value /= 64;
+            } while (value > 0);
+            return out;
+        };
+        const QByteArray index = "00-database-short\t" + number(0) + "\t" + number(name.size()) + "\n" + "dog\t"
+                                 + number(name.size()) + "\t" + number(dog.size()) + "\n" + "house\t"
+                                 + number(name.size() + dog.size()) + "\t" + number(house.size()) + "\n";
+        // Once plain, once gzipped whole (no dictzip chunk table).
+        for (const bool zipped : {false, true}) {
+            const QString base = dir.filePath(zipped ? "zipped/wn" : "plain/wn");
+            QDir().mkpath(QFileInfo(base).path());
+            write(base + ".index", index);
+            write(base + (zipped ? ".dict.dz" : ".dict"), zipped ? gzipped(dict) : dict);
+            const auto dictionary = Dictionary::open(base + ".index");
+            QVERIFY(dictionary);
+            QCOMPARE(dictionary->name(), QString("Test WordNet"));
+            QCOMPARE(dictionary->format(), Dictionary::Dictd);
+            // The headword line goes, the indent goes, the braces go.
+            QCOMPARE(dictionary->lookup("Dog").value(0).text, QString("n 1: a member of the genus Canis\n     that barks"));
+            // The pronunciation on the headword's line stays.
+            QCOMPARE(dictionary->lookup("house").value(0).text, QString("/haus/\ncasa, lar"));
+        }
+        // A dictd index without its data is no dictionary.
+        write(dir.filePath("lonely.index"), index);
+        QVERIFY(!Dictionary::open(dir.filePath("lonely.index")));
+    }
+
+    void dictionaryMarkupBecomesPlainText() {
+        QCOMPARE(Dictionary::plainText("<b>bold</b> and <i>it</i>&nbsp;&lt;tag&gt; &#233;&#xE9; &bogus; a&b", true),
+                 QString("bold and it <tag> éé &bogus; a&b"));
+        QCOMPARE(Dictionary::plainText("<ul><li>one</li><li>two<ol><li>deep</li></ol></li></ul>", true),
+                 QString("• one\n• two\n   1. deep"));
+        QCOMPARE(Dictionary::plainText("line<br>next<p>para</p><script>alert(1)</script><style>p{}</style>end", true),
+                 QString("line\nnext\npara\nend"));
+        QCOMPARE(Dictionary::plainText("<div>\n  <a href=\"#a\">Haus</a>\n  <a href=\"#b\">frei Haus</a>\n</div>", true),
+                 QString("Haus · frei Haus"));
+        // HTML's spacing collapses; other markup keeps its lines.
+        QCOMPARE(Dictionary::plainText("a\n\n   b", true), QString("a b"));
+        QCOMPARE(Dictionary::plainText("<k>word</k>\n<tr>wɜːd</tr>\na <ex>unit</ex>", false), QString("word\nwɜːd\na unit"));
+        QCOMPARE(Dictionary::plainText("<!-- note -->x <unclosed", true), QString("x <unclosed"));
+    }
+
+    void dictionaryFormsTryTheBaseWord() {
+        auto has = [](const QString &word, const QString &form) { return Dictionary::forms(word).contains(form); };
+        QCOMPARE(Dictionary::forms("Running").first(), QString("Running"));
+        QVERIFY(has("Running", "run"));
+        QVERIFY(has("houses", "house"));
+        QVERIFY(has("stories", "story"));
+        QVERIFY(has("wolves", "wolf"));
+        QVERIFY(has("stopped", "stop"));
+        QVERIFY(has("used", "use"));
+        QVERIFY(has("making", "make"));
+        QVERIFY(has("bigger", "big"));
+        QVERIFY(has("happily", "happy"));
+        QVERIFY(has("children", "child"));
+        QVERIFY(has("women", "woman"));
+        QVERIFY(has("Alice’s", "alice"));
+        QVERIFY(has("animais", "animal"));
+        QVERIFY(has("canções", "canção"));
+        QVERIFY(has("homens", "homem"));
+        QVERIFY(has("bonitas", "bonito"));
+        QVERIFY(has("chevaux", "cheval"));
+        // The page's punctuation goes; the word itself comes first.
+        QCOMPARE(Dictionary::forms("“Well,").first(), QString("Well"));
+        QVERIFY(Dictionary::forms("…").isEmpty());
+        // Short words are left alone.
+        QCOMPARE(Dictionary::forms("is"), QStringList{"is"});
+    }
+
+    void dictionaryShelfAsksEachDictionaryForAFormItHas() {
+        QTemporaryDir dir;
+        const QString mine = dir.filePath("mine"), stardict = dir.filePath("stardict");
+        writeStarDict(mine + "/eng-por", "English-Portuguese", {{"run", "<div>correr</div>"}}, "sametypesequence=h\n", true);
+        writeStarDict(stardict + "/nested/en", "English", {{"running", "the act of running"}, {"run", "to go fast"}},
+                      "sametypesequence=m\n", false);
+        write(stardict + "/broken.ifo", "garbage");
+        DictionaryShelf shelf({mine, stardict, dir.filePath("missing")});
+        QCOMPARE(shelf.dictionaries().size(), 2);
+
+        // Each dictionary answers with the first form it has.
+        DictionaryShelf::Result result = shelf.lookup("Running");
+        QCOMPARE(result.word, QString("Running"));
+        QCOMPARE(result.dictionaries, 2);
+        QCOMPARE(result.entries.size(), 2);
+        QCOMPARE(result.entries.at(0).dictionary, QString("English-Portuguese"));
+        QCOMPARE(result.entries.at(0).headword, QString("run"));
+        QCOMPARE(result.entries.at(1).headword, QString("running"));
+
+        // A dictionary added later turns up at the next lookup, and one
+        // taken away goes.
+        writeStarDict(mine + "/eng-spa", "English-Spanish", {{"run", "<div>correr</div>"}}, "sametypesequence=h\n", false);
+        QCOMPARE(shelf.lookup("run").entries.size(), 3);
+        QVERIFY(QDir(stardict + "/nested").removeRecursively());
+        result = shelf.lookup("run");
+        QCOMPARE(result.dictionaries, 2);
+        QCOMPARE(result.entries.size(), 2);
+
+        // omareader's own folder comes first, under the data home.
+        QCOMPARE(DictionaryShelf::defaultDirectories().first(), DictionaryShelf::installDirectory());
+        QVERIFY(DictionaryShelf::installDirectory().startsWith(qEnvironmentVariable("XDG_DATA_HOME")));
+    }
+
+    void wordLookupFindsTheWordAndLooksItUpInTheBackground() {
+        QCOMPARE(WordLookup::wordAt("The house, stood.", 5).value("text").toString(), QString("house"));
+        QCOMPARE(WordLookup::wordAt("The house, stood.", 4).value("start").toInt(), 4);
+        // Just past a word's last letter still counts as the word.
+        QCOMPARE(WordLookup::wordAt("The house, stood.", 9).value("text").toString(), QString("house"));
+        QCOMPARE(WordLookup::wordAt("The house, stood.", 9).value("length").toInt(), 5);
+        QCOMPARE(WordLookup::wordAt("don't", 2).value("text").toString(), QString("don't"));
+        QVERIFY(WordLookup::wordAt("a  —  b", 3).isEmpty());
+
+        QTemporaryDir dir;
+        writeStarDict(dir.filePath("eng-por"), "English-Portuguese", {{"house", "<div>casa</div>"}},
+                      "sametypesequence=h\n", true);
+        WordLookup lookup({dir.path()});
+        QSignalSpy changed(&lookup, &WordLookup::changed);
+        lookup.lookUp(" Houses ");
+        QCOMPARE(lookup.word(), QString("Houses"));
+        QVERIFY(lookup.busy());
+        QTRY_VERIFY(!lookup.busy());
+        QCOMPARE(lookup.dictionaryCount(), 1);
+        QCOMPARE(lookup.entries().size(), 1);
+        const QVariantMap entry = lookup.entries().first().toMap();
+        QCOMPARE(entry.value("headword").toString(), QString("house"));
+        QCOMPARE(entry.value("text").toString(), QString("casa"));
+        QVERIFY(entry.value("firstOfDictionary").toBool());
+        QVERIFY(changed.size() >= 2);
+        lookup.clear();
+        QVERIFY(lookup.word().isEmpty() && lookup.entries().isEmpty());
+    }
+
+    void dictionaryCatalogPinsFreeDictReleases() {
+        const QList<CatalogDictionary> all = DictionaryCatalog::all();
+        QVERIFY(all.size() > 300);
+        static const QRegularExpression sha512("^[0-9a-f]{128}$");
+        for (const CatalogDictionary &d : all) {
+            QVERIFY2(sha512.match(d.sha512).hasMatch(), qPrintable(d.name));
+            QVERIFY2(d.url.startsWith("https://download.freedict.org/dictionaries/" + d.name + "/"), qPrintable(d.url));
+            QVERIFY2(d.url.endsWith(".stardict.tar.xz") && d.bytes > 0, qPrintable(d.name));
+        }
+        QCOMPARE(DictionaryCatalog::find("eng-por").name, QString("eng-por"));
+        QCOMPARE(DictionaryCatalog::find("EN-pt").name, QString("eng-por"));
+        QCOMPARE(DictionaryCatalog::find("de-en").title(), QString("German → English"));
+        QVERIFY(DictionaryCatalog::find("eng-xxx").name.isEmpty());
+        QVERIFY(DictionaryCatalog::find("eng").name.isEmpty());
+        QCOMPARE(DictionaryCatalog::languageCode("pt-BR"), QString("por"));
+        QCOMPARE(DictionaryCatalog::languageCode("zh_CN"), QString("zho"));
+        // The window suggests a dictionary into its own language.
+        QCOMPARE(WordLookup::setupCommand("pt-BR"), QString("omareader setup --dictionary eng-por"));
+        QCOMPARE(WordLookup::setupCommand("es"), QString("omareader setup --dictionary eng-spa"));
+        QCOMPARE(WordLookup::setupCommand("en"), QString("omareader dictionaries --available"));
+    }
+
+    void setupInstallsAVerifiedDictionary() {
+        for (const char *tool : {"curl", "tar", "xz", "sha512sum"})
+            if (QStandardPaths::findExecutable(tool).isEmpty())
+                QSKIP(qPrintable(QString("%1 is not installed").arg(tool)));
+        QTemporaryDir dir;
+        // A release as FreeDict packs one: a folder named after the dictionary.
+        writeStarDict(dir.filePath("release/eng-tst"), "Test", {{"word", "<div>palavra</div>"}}, "sametypesequence=h\n", true);
+        const QString tarball = dir.filePath("eng-tst.tar.xz");
+        QCOMPARE(QProcess::execute("tar", {"-cJf", tarball, "-C", dir.filePath("release"), "eng-tst"}), 0);
+        QFile packed(tarball);
+        QVERIFY(packed.open(QIODevice::ReadOnly));
+        const QString sum = QCryptographicHash::hash(packed.readAll(), QCryptographicHash::Sha512).toHex();
+        const QString data = dir.filePath("data");
+        auto setup = [&](const QStringList &arguments, QString *output) {
+            QProcess process;
+            QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+            env.insert("XDG_DATA_HOME", data);
+            process.setProcessEnvironment(env);
+            process.setProcessChannelMode(QProcess::MergedChannels);
+            process.start("sh", QStringList{QString(OMAREADER_SOURCE) + "/src/setup-dictionary.sh"} + arguments);
+            process.waitForFinished(60000);
+            *output = QString::fromUtf8(process.readAll());
+            return process.exitCode();
+        };
+        const QString url = QUrl::fromLocalFile(tarball).toString();
+        const QString installed = data + "/omareader/dictionaries/eng-tst";
+        QString output;
+
+        // A dry run changes nothing.
+        QCOMPARE(setup({"--dry-run", "eng-tst", url, sum}, &output), 0);
+        QVERIFY2(output.contains("would download"), qPrintable(output));
+        QVERIFY(!QFileInfo::exists(installed));
+
+        // A download that doesn't match its checksum installs nothing.
+        QCOMPARE(setup({"eng-tst", url, QString(128, 'a')}, &output), 1);
+        QVERIFY2(output.contains("did not match"), qPrintable(output));
+        QVERIFY(!QFileInfo::exists(installed));
+
+        QCOMPARE(setup({"eng-tst", url, sum}, &output), 0);
+        QVERIFY2(QFileInfo::exists(installed + "/eng-tst.ifo"), qPrintable(output));
+        QCOMPARE(DictionaryShelf(QStringList{data + "/omareader/dictionaries"}).lookup("word").entries.value(0).text,
+                 QString("palavra"));
+        // Nothing is left behind beside it, and a second run leaves it be.
+        QCOMPARE(QDir(data + "/omareader").entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot),
+                 QStringList{"dictionaries"});
+        QCOMPARE(setup({"eng-tst", url, sum}, &output), 0);
+        QVERIFY2(output.contains("already in place"), qPrintable(output));
+        QCOMPARE(setup({"../evil", url, sum}, &output), 1);
+    }
+
     // The real window, offscreen.
 
     void libraryRemoveButtonDrawsItsCrossCentred() {
@@ -3090,6 +3366,100 @@ private slots:
         QCOMPARE(app.library.count(), 1);
     }
 
+    void wordCardShowsWhatTheDictionariesSay() {
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        QVERIFY(app.show());
+        QVERIFY(app.reader.addText("Hill", "The houses stood on the hill above the river, and the road ran past them."));
+        QTRY_COMPARE(app.items("bookParagraph").size(), 1);
+        QQuickItem *paragraph = app.items("bookParagraph").first();
+        QObject *card = app.window->findChild<QObject *>("wordCard");
+        QVERIFY(card);
+        // Where a character of the paragraph is on screen.
+        auto at = [&](int position) {
+            QVariant rect;
+            QMetaObject::invokeMethod(paragraph, "rectFor", Q_RETURN_ARG(QVariant, rect), Q_ARG(QVariant, position));
+            return paragraph->mapRectToScene(rect.toRectF());
+        };
+        const QRectF houses = at(4).united(at(10));
+        const QPoint onHouses = QPoint(int(at(6).center().x()), int(at(6).center().y()));
+
+        // Without a dictionary, the card says how to install one.
+        QTest::mouseClick(app.window, Qt::RightButton, {}, onHouses);
+        QTRY_VERIFY(card->property("opened").toBool());
+        QTRY_VERIFY(!app.lookup.busy());
+        QCOMPARE(app.lookup.word(), QString("houses"));
+        QTRY_VERIFY(!app.items("wordCardCommand").isEmpty());
+        QCOMPARE(app.items("wordCardCommand").first()->property("text").toString(),
+                 QString("omareader dictionaries --available"));
+        app.grab("word-card-no-dictionary");
+        // A right-click doesn't start the voice.
+        QCOMPARE(app.narrator.state(), Narrator::Stopped);
+        QTest::keyClick(app.window, Qt::Key_Escape);
+        QTRY_VERIFY(!card->property("opened").toBool());
+
+        writeStarDict(dir.filePath("dictionaries/eng-por"), "English-Portuguese FreeDict Dictionary",
+                      {{"house", "<div>/<font color=\"gray\">haus</font>/<br><ol><li><div>casa</div></li>"
+                                 "<li><div>habitação</div></li><li><div>vivenda</div></li></ol></div>"},
+                       {"run", "<div>/rʌn/<br><ol><li>correr</li><li>corrida</li></ol></div>"}},
+                      "sametypesequence=h\n", true, {{"ran", 1}});
+        QTest::mouseClick(app.window, Qt::RightButton, {}, onHouses);
+        QTRY_VERIFY(card->property("opened").toBool());
+        QTRY_COMPARE(app.items("wordCardEntry").size(), 1);
+        QQuickItem *text = app.items("wordCardText").first();
+        QCOMPARE(text->property("text").toString(), QString("/haus/\n1. casa\n2. habitação\n3. vivenda"));
+        QVERIFY(app.items("wordCardCommand").isEmpty());
+        const QImage shot = app.grab("word-card");
+
+        // The card sits just below the word, and its text is drawn, light on dark.
+        QQuickItem *cardItem = app.items("wordCardWord").first()->parentItem()->parentItem();
+        const QRectF cardArea = cardItem->mapRectToScene(QRectF(0, 0, cardItem->width(), cardItem->height()));
+        QVERIFY2(cardArea.top() > houses.bottom() && cardArea.top() < houses.bottom() + 24,
+                 qPrintable(QString("card at %1, word ends at %2").arg(cardArea.top()).arg(houses.bottom())));
+        QVERIFY(cardArea.left() <= houses.left() && cardArea.right() >= houses.right());
+        const QRect drawn = app.area(shot, text).intersected(shot.rect());
+        QVERIFY2(brightPixels(shot, drawn) > 150, qPrintable(QString::number(brightPixels(shot, drawn))));
+        // The word itself is outlined in the accent while its card is open.
+        QQuickItem *mark = app.items("lookedUpWord").value(0);
+        QVERIFY(mark);
+        const QRectF marked = mark->mapRectToScene(QRectF(0, 0, mark->width(), mark->height()));
+        QVERIFY2(marked.contains(houses.center()) && marked.width() < houses.width() + 12,
+                 qPrintable(QString("mark %1 wide at %2, word %3 wide at %4").arg(marked.width()).arg(marked.left())
+                                .arg(houses.width()).arg(houses.left())));
+        int accent = 0;
+        const QRect markArea = app.area(shot, mark);
+        for (int y = markArea.top(); y <= markArea.bottom(); ++y)
+            for (int x = markArea.left(); x <= markArea.right(); ++x) {
+                const QColor c = shot.pixelColor(x, y);
+                accent += c.red() > 200 && c.green() > 170 && c.blue() < 80;
+            }
+        QVERIFY2(accent > 20, qPrintable(QString::number(accent)));
+        if (!qEnvironmentVariableIsEmpty("OMAREADER_SCREENSHOTS"))
+            shot.copy(app.area(shot, cardItem).united(markArea).adjusted(-8, -8, 8, 8))
+                .save(qEnvironmentVariable("OMAREADER_SCREENSHOTS") + "/word-card-crop.png");
+
+        // D closes it again.
+        QTest::keyClick(app.window, Qt::Key_D);
+        QTRY_VERIFY(!card->property("opened").toBool());
+        QTRY_VERIFY(!mark->isVisible());
+
+        // D looks up the word being read, pausing the voice, and closing the
+        // card lets it go on. "ran" is the twelfth word.
+        app.narrator.showForTests(Narrator::Playing, 0, 12);
+        QTest::keyClick(app.window, Qt::Key_D);
+        QTRY_VERIFY(card->property("opened").toBool());
+        QCOMPARE(app.lookup.word(), QString("ran"));
+        QCOMPARE(app.narrator.state(), Narrator::Paused);
+        QTRY_COMPARE(app.items("wordCardEntry").size(), 1);
+        QCOMPARE(app.items("wordCardText").first()->property("text").toString(), QString("/rʌn/\n1. correr\n2. corrida"));
+        app.grab("word-card-spoken");
+        QTest::keyClick(app.window, Qt::Key_D);
+        QTRY_VERIFY(!card->property("opened").toBool());
+        QTRY_VERIFY(app.narrator.state() != Narrator::Paused);
+        app.narrator.stop();
+        app.reader.closeBook();
+    }
+
 private:
     QTemporaryDir m_settings;
     QTemporaryDir m_home;
@@ -3098,6 +3468,94 @@ private:
         QFile file(path);
         QVERIFY(file.open(QIODevice::WriteOnly));
         file.write(contents);
+    }
+
+    // gzip of data, as gzip(1) writes it.
+    static QByteArray gzipped(const QByteArray &data) {
+        z_stream stream{};
+        deflateInit2(&stream, 9, Z_DEFLATED, 16 + MAX_WBITS, 8, Z_DEFAULT_STRATEGY);
+        QByteArray out(qsizetype(deflateBound(&stream, uLong(data.size()))) + 64, '\0');
+        stream.next_in = reinterpret_cast<Bytef *>(const_cast<char *>(data.constData()));
+        stream.avail_in = uInt(data.size());
+        stream.next_out = reinterpret_cast<Bytef *>(out.data());
+        stream.avail_out = uInt(out.size());
+        deflate(&stream, Z_FINISH);
+        out.resize(out.size() - stream.avail_out);
+        deflateEnd(&stream);
+        return out;
+    }
+
+    // data as dictzip writes it: gzip with a table of chunks in its extra
+    // field, each compressed to inflate on its own.
+    static QByteArray dictzipped(const QByteArray &data, int chunkLength) {
+        z_stream stream{};
+        deflateInit2(&stream, 9, Z_DEFLATED, -MAX_WBITS, 8, Z_DEFAULT_STRATEGY);
+        QByteArray body;
+        QList<quint16> sizes;
+        for (qsizetype at = 0; at < data.size(); at += chunkLength) {
+            const QByteArray chunk = data.mid(at, chunkLength);
+            QByteArray buffer(chunkLength * 2 + 64, '\0');
+            stream.next_in = reinterpret_cast<Bytef *>(const_cast<char *>(chunk.constData()));
+            stream.avail_in = uInt(chunk.size());
+            stream.next_out = reinterpret_cast<Bytef *>(buffer.data());
+            stream.avail_out = uInt(buffer.size());
+            deflate(&stream, at + chunkLength >= data.size() ? Z_FINISH : Z_FULL_FLUSH);
+            const qsizetype size = buffer.size() - stream.avail_out;
+            body += buffer.left(size);
+            sizes.append(quint16(size));
+        }
+        deflateEnd(&stream);
+        auto le16 = [](QByteArray &to, quint16 v) {
+            to.append(char(v & 0xff));
+            to.append(char(v >> 8));
+        };
+        QByteArray extra("RA");
+        le16(extra, quint16(6 + 2 * sizes.size()));
+        le16(extra, 1);
+        le16(extra, quint16(chunkLength));
+        le16(extra, quint16(sizes.size()));
+        for (const quint16 size : std::as_const(sizes))
+            le16(extra, size);
+        QByteArray out = QByteArray::fromHex("1f8b0804000000000203");
+        le16(out, quint16(extra.size()));
+        const quint32 crc = quint32(crc32(0, reinterpret_cast<const Bytef *>(data.constData()), uInt(data.size())));
+        const quint32 length = quint32(data.size());
+        out += extra + body;
+        out.append(reinterpret_cast<const char *>(&crc), 4);
+        out.append(reinterpret_cast<const char *>(&length), 4);
+        return out;
+    }
+
+    // A StarDict dictionary in folder, named after it: the articles in the
+    // order given, synonyms pointing at them by number, and the .idx and
+    // .dict compressed (gzip and dictzip) when asked.
+    static void writeStarDict(const QString &folder, const QString &name, const QList<QPair<QByteArray, QByteArray>> &articles,
+                              const QByteArray &ifoLines, bool compressed,
+                              const QList<QPair<QByteArray, quint32>> &synonyms = {}) {
+        QDir().mkpath(folder);
+        const QString base = folder + "/" + QFileInfo(folder).fileName();
+        QByteArray dict, idx, syn;
+        auto be32 = [](QByteArray &to, quint32 v) {
+            v = qToBigEndian(v);
+            to.append(reinterpret_cast<const char *>(&v), 4);
+        };
+        for (const auto &[word, article] : articles) {
+            idx += word + '\0';
+            be32(idx, quint32(dict.size()));
+            be32(idx, quint32(article.size()));
+            dict += article;
+        }
+        for (const auto &[word, entry] : synonyms) {
+            syn += word + '\0';
+            be32(syn, entry);
+        }
+        write(base + ".ifo", "StarDict's dict ifo file\nversion=2.4.2\nbookname=" + name.toUtf8() + "\nwordcount="
+                                 + QByteArray::number(articles.size()) + "\nidxfilesize=" + QByteArray::number(idx.size())
+                                 + "\n" + ifoLines);
+        write(base + (compressed ? ".idx.gz" : ".idx"), compressed ? gzipped(idx) : idx);
+        write(base + (compressed ? ".dict.dz" : ".dict"), compressed ? dictzipped(dict, 16) : dict);
+        if (!synonyms.isEmpty())
+            write(base + ".syn", syn);
     }
 
     // A stand-in agent CLI: a shell script with the given body.

@@ -10,6 +10,7 @@
 #include <QtQml>
 
 #include "cli.h"
+#include "dictionary.h"
 #include "exporter.h"
 #include "highlight.h"
 #include "library.h"
@@ -59,6 +60,7 @@ int main(int argc, char *argv[]) {
     reader.setExporter(&exporter);
     TitleAgent titleAgent;
     WebImport webImport;
+    WordLookup lookup;
 
     qmlRegisterType<ReadingHighlight>("Omareader", 1, 0, "ReadingHighlight");
     qmlRegisterUncreatableType<Narrator>("Omareader", 1, 0, "Narrator", "Use the narrator context property.");
@@ -74,6 +76,7 @@ int main(int argc, char *argv[]) {
     engine.rootContext()->setContextProperty("exporter", &exporter);
     engine.rootContext()->setContextProperty("titleAgent", &titleAgent);
     engine.rootContext()->setContextProperty("webImport", &webImport);
+    engine.rootContext()->setContextProperty("lookup", &lookup);
     engine.load(QUrl("qrc:/Main.qml"));
     if (engine.rootObjects().isEmpty())
         return 1;
