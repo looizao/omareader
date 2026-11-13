@@ -1,9 +1,9 @@
 import QtQuick
 import Omareader
 
-// The glass window highlight: a pane about five words wide that rests on
-// the line over the word being spoken and glides along as the voice reads,
-// showing the words under it bright and slightly enlarged.
+// The glass window highlight: a pane four or five words wide that rests on
+// the line a little ahead of the word being spoken and glides along as the
+// voice reads, showing the words under it bright and slightly enlarged.
 //
 // The paragraph's lines are treated as one track laid end to end, so at the
 // end of a line the pane slides off it while the same share slides in at the
@@ -42,9 +42,13 @@ Item {
     // half its width, and on a pane this wide more would crowd the page's
     // words just outside it.
     readonly property real magnify: 1.04
-    // About five ordinary words wide, which leaves the spoken word room to
-    // be ahead of or behind the pane's centre; only a longer word stretches it.
-    readonly property real baseWidth: Math.ceil(sample.advanceWidth) + 2 * padX
+    // About four and a half ordinary words wide, which leaves the spoken word room to
+    // be ahead of or behind where it should sit; only a longer word
+    // stretches it.
+    readonly property real baseWidth: Math.round(0.9 * (sample.advanceWidth + 2 * padX))
+    // Where in the pane the spoken word sits, as a share of its width from
+    // the left: toward the start, so most of the pane shows what comes next.
+    readonly property real spot: 0.25
     readonly property real stride: body.width + 2 * gap
     readonly property real paneHeight: Math.ceil(metrics.height) + 2 * padY
 
@@ -82,9 +86,10 @@ Item {
     property real paceAge: 0
     property real lastTarget: 0
     readonly property real paceSeconds: 3
-    // How strongly the pane leans toward the spoken word, per second of
-    // distance. Weak, so the pace stays even; the hold below does the rest.
-    readonly property real pull: 1
+    // How strongly the pane leans toward its place for the spoken word, per
+    // second of distance: enough to keep the word near its spot on average,
+    // weak enough that the pace stays even. The hold in follow() does the rest.
+    readonly property real pull: 2
     readonly property bool settled: placed && !moving()
 
     x: body.x
@@ -153,16 +158,23 @@ Item {
         if (!placed || Math.abs(targetU - u) > stride * 1.5) {
             if (!placed)
                 pace = paceAge = 0
-            u = targetU
             paneWidth = targetWidth
+            u = aimAt(targetU)
             speedU = speedWidth = 0
             lastTarget = targetU
             placed = true
         }
     }
 
+    // Where the pane's centre goes for the voice at spoken: the word at
+    // spot, as far as the pane has room for it.
+    function aimAt(spoken) {
+        const room = Math.max(0, paneWidth / 2 - targetHalf - padX)
+        return spoken + Math.max(-room, Math.min(room, (0.5 - spot) * paneWidth))
+    }
+
     function moving() {
-        return playing || Math.abs(targetU - u) >= 0.5 || Math.abs(targetWidth - paneWidth) >= 0.5
+        return playing || Math.abs(aimAt(targetU) - u) >= 0.5 || Math.abs(targetWidth - paneWidth) >= 0.5
                || Math.abs(speedU) >= 1 || Math.abs(speedWidth) >= 1
     }
 
@@ -174,25 +186,29 @@ Item {
         // The voice's travel this step, early or late words included, so
         // the average comes out right; a skip says nothing about the pace.
         if (moved >= 0 && moved < stride) {
+            // Until paceSeconds have been heard, a plain average of them,
+            // counted from a second of standing still, so that one quick
+            // first word doesn't send the pane racing ahead.
             paceAge += dt
-            // Until paceSeconds have been heard, a plain average of them.
-            pace += (moved / dt - pace) * dt / Math.min(paceSeconds, paceAge)
+            pace += (moved / dt - pace) * dt / Math.min(paceSeconds, paceAge + 1)
         }
         // Never backward: when the pane is ahead it waits for the voice.
-        u += Math.max(0, pace + pull * (spoken - u)) * dt
-        // However the pace runs, the spoken word stays inside the pane.
-        const room = Math.max(0, paneWidth / 2 - targetHalf - padX)
+        u += Math.max(0, pace + pull * (aimAt(spoken) - u)) * dt
+        // However the pace runs, the spoken word stays inside the pane, if
+        // only just: a closer hold than aimAt's leaves the pace more slack.
+        const room = Math.max(0, paneWidth / 2 - targetHalf - 2)
         u = Math.min(Math.max(u, spoken - room), spoken + room)
         speedU = 0
     }
 
-    // One step while the voice is paused: settle over the word.
+    // One step while the voice is paused: settle in place over the word.
     function settle(dt) {
         const w0 = 14
-        speedU += (w0 * w0 * (targetU - u) - 2 * w0 * speedU) * dt
+        const goal = aimAt(targetU)
+        speedU += (w0 * w0 * (goal - u) - 2 * w0 * speedU) * dt
         u += speedU * dt
-        if (Math.abs(targetU - u) < 0.5 && Math.abs(speedU) < 1) {
-            u = targetU
+        if (Math.abs(goal - u) < 0.5 && Math.abs(speedU) < 1) {
+            u = goal
             speedU = 0
         }
     }
