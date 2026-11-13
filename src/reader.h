@@ -47,7 +47,8 @@ class Reader : public QObject {
     Q_PROPERTY(bool steadyLine READ steadyLine WRITE setSteadyLine NOTIFY focusChanged)
     // Hide the bars while the voice plays, until the mouse or a key wakes them.
     Q_PROPERTY(bool hideControls READ hideControls WRITE setHideControls NOTIFY focusChanged)
-    // "both", "word" or "sentence": what the highlight marks.
+    // "glass", "both", "word" or "sentence": a glass window over the spoken
+    // word, or which of the word and sentence the colour highlight marks.
     Q_PROPERTY(QString highlight READ highlight WRITE setHighlight NOTIFY focusChanged)
     // "subtle", "normal" or "strong".
     Q_PROPERTY(QString highlightStrength READ highlightStrength WRITE setHighlightStrength NOTIFY focusChanged)
@@ -135,7 +136,7 @@ signals:
 
 private:
     static QStringList spotlights() { return {"off", "paragraph", "sentence"}; }
-    static QStringList highlights() { return {"both", "word", "sentence"}; }
+    static QStringList highlights() { return {"glass", "both", "word", "sentence"}; }
     static QStringList strengths() { return {"subtle", "normal", "strong"}; }
     // Stores a focus setting and announces it, when it changed.
     template <typename T> void setFocusSetting(T &member, const T &value, const char *key);
@@ -168,6 +169,6 @@ private:
     bool m_fadeRead = true;
     bool m_steadyLine = true;
     bool m_hideControls = true;
-    QString m_highlight = QStringLiteral("both");
+    QString m_highlight = QStringLiteral("glass");
     QString m_highlightStrength = QStringLiteral("normal");
 };

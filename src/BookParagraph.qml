@@ -2,8 +2,9 @@ import QtQuick
 import Omareader
 
 // One paragraph of the chapter. The sentence being read and the word being
-// spoken are coloured in place; clicking a word reads aloud from there. In
-// focus mode the paragraphs around the voice dim, and what was read fades.
+// spoken are marked in place, by a glass window over the word or by colour;
+// clicking a word reads aloud from there. In focus mode the paragraphs
+// around the voice dim, and what was read fades.
 Item {
     id: root
     objectName: "bookParagraph"
@@ -16,6 +17,9 @@ Item {
     readonly property bool focusing: narrating && reader.focusMode
     readonly property bool fading: focusing && reader.fadeRead
     readonly property bool spotlit: focusing && reader.spotlight !== "off"
+    readonly property bool glassy: reader.highlight === "glass"
+    // The text, under a name the glass can reach (its own is body too).
+    readonly property TextEdit page: body
     // How much of the text still shows: read text fades further than the
     // text still to come, so the eye is drawn forward.
     readonly property real readOpacity: 0.22
@@ -68,18 +72,33 @@ Item {
         readEnd: root.reading && root.fading
                  ? (narrator.wordStart >= 0 ? narrator.wordStart : narrator.sentenceStart) : -1
         readColor: Qt.alpha(body.color, root.readOpacity)
-        quietColor: root.reading && root.spotlit && reader.spotlight === "sentence"
-                    ? Qt.alpha(body.color, root.dimOpacity) : "transparent"
+        // The glass marks the sentence by light alone: the rest of the
+        // paragraph is a shade quieter than it.
+        quietColor: !root.reading ? "transparent"
+                    : root.spotlit && reader.spotlight === "sentence" ? Qt.alpha(body.color, root.dimOpacity)
+                    : root.glassy ? Qt.alpha(body.color, 0.62) : "transparent"
 
         // The highlight marks the word, the sentence or both, as strongly as
-        // the reader asked. A subtle word is coloured, not boxed.
-        readonly property bool showSentence: reader.highlight !== "word"
-        readonly property bool showWord: reader.highlight !== "sentence"
+        // the reader asked. A subtle word is coloured, not boxed. The glass
+        // draws its own window instead.
+        readonly property bool showSentence: !root.glassy && reader.highlight !== "word"
+        readonly property bool showWord: !root.glassy && reader.highlight !== "sentence"
         readonly property bool subtle: reader.highlightStrength === "subtle"
         sentenceColor: !showSentence ? "transparent"
                      : Qt.alpha(theme.accent, subtle ? 0.07 : reader.highlightStrength === "strong" ? 0.28 : 0.14)
         wordColor: showWord && !subtle ? theme.accent : "transparent"
         wordTextColor: !showWord ? "transparent" : subtle ? theme.accent : theme.accentForeground
+    }
+
+    Loader {
+        active: root.reading && root.glassy && narrator.wordStart >= 0
+        sourceComponent: ReadingGlass {
+            body: root.page
+            styles: root.modelData.styles || []
+            lineHeight: reader.lineHeight
+            wordStart: narrator.wordStart
+            wordEnd: narrator.wordEnd
+        }
     }
 
     MouseArea {

@@ -7,6 +7,7 @@
         <file alias="BookCover.qml">BookCover.qml</file>
         <file alias="ReaderView.qml">ReaderView.qml</file>
         <file alias="BookParagraph.qml">BookParagraph.qml</file>
+        <file alias="ReadingGlass.qml">ReadingGlass.qml</file>
         <file alias="NarrationBar.qml">NarrationBar.qml</file>
         <file alias="ContentsPanel.qml">ContentsPanel.qml</file>
         <file alias="SettingsPanel.qml">SettingsPanel.qml</file>

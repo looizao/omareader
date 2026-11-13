@@ -355,6 +355,7 @@ Drawer {
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
                 model: [
+                    { id: "glass", label: qsTr("Glass window") },
                     { id: "both", label: qsTr("Word and sentence") },
                     { id: "word", label: qsTr("Word only") },
                     { id: "sentence", label: qsTr("Sentence only") }
@@ -363,8 +364,10 @@ Drawer {
                 onChosen: value => reader.highlight = value
             }
 
-            Label { Layout.leftMargin: 16; Layout.topMargin: 6; text: qsTr("Highlight strength"); color: Colors.body }
+            // The glass has no strength to pick; it is one look.
+            Label { Layout.leftMargin: 16; Layout.topMargin: 6; text: qsTr("Highlight strength"); color: Colors.body; visible: reader.highlight !== "glass" }
             ChoiceBox {
+                visible: reader.highlight !== "glass"
                 Layout.fillWidth: true
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16

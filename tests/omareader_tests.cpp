@@ -2366,7 +2366,7 @@ private slots:
             QVERIFY(reader.fadeRead());
             QVERIFY(reader.steadyLine());
             QVERIFY(reader.hideControls());
-            QCOMPARE(reader.highlight(), QString("both"));
+            QCOMPARE(reader.highlight(), QString("glass"));
             QCOMPARE(reader.highlightStrength(), QString("normal"));
 
             QSignalSpy changed(&reader, &Reader::focusChanged);
@@ -2374,7 +2374,7 @@ private slots:
             reader.setHighlight("none");
             reader.setHighlightStrength("blinding");
             QCOMPARE(reader.spotlight(), QString("paragraph"));
-            QCOMPARE(reader.highlight(), QString("both"));
+            QCOMPARE(reader.highlight(), QString("glass"));
             QCOMPARE(reader.highlightStrength(), QString("normal"));
             QCOMPARE(changed.size(), 0);
 
@@ -2426,6 +2426,8 @@ private slots:
         QSettings().remove("reader");
         QTemporaryDir dir;
         AppWindow app(dir.path());
+        // The colour highlight, whose marks the counts below allow for.
+        app.reader.setHighlight("both");
         QVERIFY(app.show());
         // Three paragraphs; the middle one has two sentences.
         const QString words = " has plain words in it, enough of them to wrap across a few lines of the column.";
@@ -2485,6 +2487,7 @@ private slots:
         QSettings().remove("reader");
         QTemporaryDir dir;
         AppWindow app(dir.path());
+        app.reader.setHighlight("both");
         QVERIFY(app.show());
         QVERIFY(app.reader.addText("Styles", "One sentence with plain words in it to read aloud. And a second one after it."));
         QTRY_COMPARE(app.items("bookParagraph").size(), 1);
@@ -2545,10 +2548,128 @@ private slots:
         QSettings().remove("reader");
     }
 
+    void glassWindowGlidesOverTheSpokenWord() {
+        QSettings().remove("reader");
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        QVERIFY(app.show());
+        const QString text = "The voice reads these plain words aloud while a glass window glides along the line over "
+                             "each one of them in turn, and a long word like incomprehensibilities stretches it, and "
+                             "then the reading goes on across many more lines of the column until it comes to an end";
+        QVERIFY(app.reader.addText("Glass", text));
+        QTRY_COMPARE(app.items("bookParagraph").size(), 1);
+        QCOMPARE(app.reader.highlight(), QString("glass"));
+        QTest::mouseMove(app.window, QPoint(550, 700));
+
+        // The glass sits on the paragraph's text, so its rect is the text's.
+        auto glass = [&]() { return app.items("readingGlass").value(0); };
+        auto speak = [&](int word) {
+            app.narrator.showForTests(Narrator::Paused, 0, word);
+            QTRY_VERIFY(glass() && glass()->property("settled").toBool());
+        };
+        auto panes = [&]() {
+            QList<QRectF> rects;
+            for (QQuickItem *pane : app.items("readingGlassPane"))
+                rects << pane->mapRectToScene(QRectF(0, 0, pane->width(), pane->height()));
+            std::sort(rects.begin(), rects.end(), [](const QRectF &a, const QRectF &b) { return a.y() < b.y(); });
+            return rects;
+        };
+        auto spoken = [&]() { return text.mid(app.narrator.wordStart(), app.narrator.wordEnd() - app.narrator.wordStart()); };
+
+        // Over an ordinary word, one pane centred on it, wide enough for it and its neighbours.
+        speak(4);
+        QCOMPARE(spoken(), QString("plain"));
+        QList<QRectF> one = panes();
+        QCOMPARE(one.size(), 1);
+        const qreal width = one.first().width();
+        const QRectF text4 = glass()->mapRectToScene(QRectF(0, 0, glass()->width(), glass()->height()));
+        QVERIFY2(width > app.reader.fontSize() * 6 && width < app.reader.fontSize() * 12, qPrintable(QString::number(width)));
+
+        // The colour highlight is gone: no accent box, and the words in the
+        // pane are drawn bright.
+        QImage shot = app.grab("glass-plain");
+        QQuickItem *paragraph = app.items("bookParagraph").first();
+        const QRect area = app.area(shot, paragraph);
+        int accent = 0;
+        for (int y = area.top(); y <= area.bottom(); ++y)
+            for (int x = area.left(); x <= area.right(); ++x) {
+                const QColor c = shot.pixelColor(x, y);
+                accent += c.red() > 200 && c.green() > 170 && c.blue() < 80;
+            }
+        QVERIFY2(accent < 20, qPrintable(QString::number(accent)));
+        const qreal ratio = shot.devicePixelRatio();
+        const QRectF paneRect = one.first();
+        const QRect inPane(qRound(paneRect.x() * ratio), qRound(paneRect.y() * ratio), qRound(paneRect.width() * ratio), qRound(paneRect.height() * ratio));
+        QVERIFY2(brightPixels(shot, inPane, 200) > 60, qPrintable(QString::number(brightPixels(shot, inPane, 200))));
+        if (!qEnvironmentVariableIsEmpty("OMAREADER_SCREENSHOTS"))
+            shot.copy(inPane.adjusted(-40, -30, 40, 30)).scaled(inPane.width() * 3 + 240, inPane.height() * 3 + 180)
+                .save(qEnvironmentVariable("OMAREADER_SCREENSHOTS") + "/glass-plain-zoom.png");
+
+        // It keeps its size from word to word, and glides to the next one
+        // rather than jumping there.
+        const qreal from = one.first().center().x();
+        app.narrator.showForTests(Narrator::Paused, 0, 5);
+        QList<qreal> path;
+        QElapsedTimer clock;
+        clock.start();
+        while (clock.elapsed() < 1500 && !(glass()->property("settled").toBool() && path.size() > 1)) {
+            QTest::qWait(10);
+            if (!panes().isEmpty())
+                path << panes().first().center().x();
+        }
+        const qreal to = panes().first().center().x();
+        QVERIFY(to > from + 10);
+        QVERIFY2(std::any_of(path.begin(), path.end(), [&](qreal x) { return x > from + 3 && x < to - 3; }),
+                 "the pane never passed between the two words");
+        QCOMPARE(panes().first().width(), width);
+
+        // Only a word too long for it stretches it.
+        int word = 0;
+        for (; word < 60; ++word) {
+            app.narrator.showForTests(Narrator::Paused, 0, word);
+            if (spoken() == "incomprehensibilities")
+                break;
+        }
+        QCOMPARE(spoken(), QString("incomprehensibilities"));
+        speak(word);
+        QVERIFY2(panes().first().width() > width + 10, qPrintable(QString("%1 and %2").arg(panes().first().width()).arg(width)));
+        app.grab("glass-long-word");
+
+        // On the first word of a line, the pane is still partly on the end
+        // of the line before: it slides out of one line into the next.
+        bool straddled = false;
+        for (int w = 1; w < 50 && !straddled; ++w) {
+            app.narrator.showForTests(Narrator::Paused, 0, w);
+            if (app.narrator.wordStart() < 0)
+                break;
+            speak(w);
+            const QList<QRectF> two = panes();
+            if (two.size() != 2)
+                continue;
+            straddled = true;
+            app.grab("glass-line-break");
+            // The upper part runs past the end of its line, the lower one in
+            // from before the start of its own, a line apart.
+            QVERIFY2(two[0].right() > text4.right(), qPrintable(QString("%1 and %2").arg(two[0].right()).arg(text4.right())));
+            QVERIFY2(two[1].left() < text4.left(), qPrintable(QString("%1 and %2").arg(two[1].left()).arg(text4.left())));
+            QVERIFY(two[1].y() - two[0].y() > app.reader.fontSize());
+        }
+        QVERIFY2(straddled, "the pane never crossed a line break");
+
+        // The colour highlight is still there for those who want it.
+        app.reader.setHighlight("both");
+        QTRY_VERIFY(app.items("readingGlass").isEmpty());
+        app.narrator.stop();
+        app.reader.closeBook();
+        QSettings().remove("reader");
+    }
+
     void focusModeHoldsTheSpokenLineSteady() {
         QSettings().remove("reader");
         QTemporaryDir dir;
         AppWindow app(dir.path());
+        // The word's accent box marks where the spoken line is drawn.
+        app.reader.setHighlight("both");
         QVERIFY(app.show());
         QStringList paragraphs;
         for (int i = 0; i < 40; ++i)
@@ -2594,6 +2715,8 @@ private slots:
         QSettings().remove("reader");
         QTemporaryDir dir;
         AppWindow app(dir.path());
+        // The glass would draw into the corner where a stray tooltip is looked for.
+        app.reader.setHighlight("both");
         QVERIFY(app.show());
         QVERIFY(app.reader.addText("Quiet", "Words to read aloud while the bars step away."));
         QTRY_COMPARE(app.items("bookParagraph").size(), 1);
