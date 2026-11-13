@@ -1,7 +1,7 @@
 # Builds omareader from this checkout; bin/install runs it with makepkg -fsi.
 # Releases attach a PKGBUILD that builds from the release tarball instead.
 pkgname=omareader
-pkgver=0.6.3
+pkgver=0.6.4
 pkgrel=1
 pkgdesc='Offline ebook reader that reads books aloud with Kokoro and highlights each word'
 arch=('x86_64' 'aarch64')
