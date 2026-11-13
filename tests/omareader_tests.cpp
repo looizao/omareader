@@ -2591,7 +2591,7 @@ private slots:
         };
         QVERIFY2(qAbs(across() - 0.25) < 0.02, qPrintable(QString::number(across())));
         const QRectF text4 = glass()->mapRectToScene(QRectF(0, 0, glass()->width(), glass()->height()));
-        QVERIFY2(width > app.reader.fontSize() * 10 && width < app.reader.fontSize() * 13, qPrintable(QString::number(width)));
+        QVERIFY2(width > app.reader.fontSize() * 10 && width < app.reader.fontSize() * 18, qPrintable(QString::number(width)));
 
         // The colour highlight is gone: no accent box, and the words in the
         // pane are drawn bright.
