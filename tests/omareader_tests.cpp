@@ -3165,22 +3165,32 @@ private slots:
         QVERIFY(app.show());
         app.window->setProperty("helpVisible", true);
         QTRY_VERIFY(!app.items("helpOverlay").isEmpty());
-        const QImage shot = app.grab("help");
-        // Every row, the last included, is inside the window with room to spare.
-        int rows = 0;
-        std::function<void(QQuickItem *)> walk = [&](QQuickItem *item) {
-            if (item->isVisible() && QByteArray(item->metaObject()->className()).contains("Label")) {
-                ++rows;
-                const QRectF r = item->mapRectToScene(QRectF(0, 0, item->width(), item->height()));
-                QVERIFY2(r.top() >= 16 && r.bottom() <= app.window->height() - 16,
-                         qPrintable(item->property("text").toString() + " is off the window"));
-            }
-            for (QQuickItem *child : item->childItems())
-                walk(child);
+        QQuickItem *overlay = app.items("helpOverlay").first();
+        // Every row, the last included, is inside the window with room to
+        // spare, and no two overlap.
+        auto check = [&](const QString &name) {
+            app.grab(name);
+            QList<QRectF> labels;
+            std::function<void(QQuickItem *)> walk = [&](QQuickItem *item) {
+                if (item->isVisible() && QByteArray(item->metaObject()->className()).contains("Label")) {
+                    const QRectF r = item->mapRectToScene(QRectF(0, 0, item->width(), item->height()));
+                    QVERIFY2(r.top() >= 16 && r.bottom() <= app.window->height() - 16 && r.left() >= 16
+                                 && r.right() <= app.window->width() - 16,
+                             qPrintable(item->property("text").toString() + " is off the window"));
+                    for (const QRectF &other : std::as_const(labels))
+                        QVERIFY2(!other.intersects(r), qPrintable(item->property("text").toString() + " overlaps another row"));
+                    labels.append(r);
+                }
+                for (QQuickItem *child : item->childItems())
+                    walk(child);
+            };
+            walk(overlay);
+            QVERIFY(labels.size() > 50);
         };
-        walk(app.items("helpOverlay").first());
-        QVERIFY(rows > 40);
-        Q_UNUSED(shot);
+        check("help");
+        // A narrower window that is tall enough still shows them all, in one list.
+        app.window->resize(900, 1100);
+        check("help-narrow");
     }
 
     void everyNotesStringHasAPortugueseTranslation() {

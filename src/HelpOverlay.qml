@@ -39,35 +39,68 @@ Rectangle {
         ["Q", qsTr("Quit")]
     ]
 
-    MouseArea { anchors.fill: parent; onClicked: overlay.closed() }
+    // Side by side when the window is wide enough, the reader's keys on the
+    // left; in a narrow window one list that scrolls if it has to.
+    readonly property bool twoColumns: width >= 980
+    readonly property int half: Math.ceil(shortcuts.length / 2)
 
-    ColumnLayout {
-        anchors.centerIn: parent
-        width: Math.min(560, parent.width - 48)
-        spacing: 16
+    Flickable {
+        id: flick
+        anchors.fill: parent
+        contentWidth: width
+        contentHeight: Math.max(height, content.implicitHeight + 48)
+        boundsBehavior: Flickable.StopAtBounds
+        ScrollBar.vertical: ScrollBar {}
 
-        Label {
-            text: qsTr("Keyboard")
-            font.pixelSize: 24
-            font.family: "serif"
-            color: Colors.text
+        MouseArea {
+            width: flick.contentWidth
+            height: flick.contentHeight
+            onClicked: overlay.closed()
         }
 
-        GridLayout {
-            Layout.fillWidth: true
-            columns: 2
-            columnSpacing: 24
-            rowSpacing: 6
-            Repeater {
-                model: overlay.shortcuts.length * 2
-                Label {
-                    required property int index
-                    readonly property var row: overlay.shortcuts[Math.floor(index / 2)]
-                    Layout.fillWidth: index % 2 === 1
-                    text: index % 2 === 0 ? row[0] : row[1]
-                    color: index % 2 === 0 ? theme.accent : Colors.body
-                    font.family: index % 2 === 0 ? "monospace" : ""
-                    wrapMode: Text.Wrap
+        ColumnLayout {
+            id: content
+            x: (flick.width - width) / 2
+            y: Math.max(24, (flick.height - implicitHeight) / 2)
+            width: Math.min(overlay.twoColumns ? 1040 : 560, flick.width - 48)
+            spacing: 16
+
+            Label {
+                text: qsTr("Keyboard")
+                font.pixelSize: 24
+                font.family: "serif"
+                color: Colors.text
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 48
+                Repeater {
+                    model: overlay.twoColumns
+                           ? [overlay.shortcuts.slice(0, overlay.half), overlay.shortcuts.slice(overlay.half)]
+                           : [overlay.shortcuts]
+                    GridLayout {
+                        id: table
+                        required property var modelData
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 1
+                        Layout.alignment: Qt.AlignTop
+                        columns: 2
+                        columnSpacing: 24
+                        rowSpacing: 6
+                        Repeater {
+                            model: table.modelData.length * 2
+                            Label {
+                                required property int index
+                                readonly property var row: table.modelData[Math.floor(index / 2)]
+                                Layout.fillWidth: index % 2 === 1
+                                text: index % 2 === 0 ? row[0] : row[1]
+                                color: index % 2 === 0 ? theme.accent : Colors.body
+                                font.family: index % 2 === 0 ? "monospace" : ""
+                                wrapMode: Text.Wrap
+                            }
+                        }
+                    }
                 }
             }
         }
