@@ -3367,20 +3367,20 @@ private slots:
         };
         auto spoken = [&]() { return text.mid(app.narrator.wordStart(), app.narrator.wordEnd() - app.narrator.wordStart()); };
 
-        // Over an ordinary word, one pane about five words wide, a little
-        // ahead of the voice: the word a quarter of the way in, and the
-        // three quarters after it showing what is about to be said.
+        // Over an ordinary word, one pane centred on it, wide enough for it
+        // and two words either side.
         speak(4);
         QCOMPARE(spoken(), QString("plain"));
         QList<QRectF> one = panes();
         QCOMPARE(one.size(), 1);
         const qreal width = one.first().width();
+        // Centred on the word: the spoken word is halfway across.
         auto across = [&]() {
             QQuickItem *g = glass();
             const qreal w = g->property("paneWidth").toReal();
             return (g->property("targetU").toReal() - (g->property("u").toReal() - w / 2)) / w;
         };
-        QVERIFY2(qAbs(across() - 0.25) < 0.02, qPrintable(QString::number(across())));
+        QVERIFY2(qAbs(across() - 0.5) < 0.02, qPrintable(QString::number(across())));
         const QRectF text4 = glass()->mapRectToScene(QRectF(0, 0, glass()->width(), glass()->height()));
         QVERIFY2(width > app.reader.fontSize() * 10 && width < app.reader.fontSize() * 18, qPrintable(QString::number(width)));
 
@@ -3524,17 +3524,11 @@ private slots:
         app.narrator.showForTests(Narrator::Paused, 0, 0);
         QVERIFY(samples.size() > 150);
 
-        // Once it has the voice's pace, after the first second and a half,
-        // the spoken word sits on average a quarter of the way in.
-        qreal across = 0;
-        int counted = 0;
+        // The spoken word is always well inside the pane, never at or past its edge.
         for (const Sample &s : samples)
-            if (s.ms > 1500) {
-                across += (s.spoken - (s.u - s.width / 2)) / s.width;
-                ++counted;
-            }
-        across /= counted;
-        QVERIFY2(qAbs(across - 0.25) < 0.06, qPrintable(QString::number(across)));
+            QVERIFY2(qAbs(s.spoken - s.u) + s.half < s.width / 2 - 4,
+                     qPrintable(QString("at %1 ms the word at %2 (half %3) and the pane at %4, %5 wide")
+                                    .arg(s.ms).arg(s.spoken).arg(s.half).arg(s.u).arg(s.width)));
 
         // After the first second, the pane moves on at an even pace while the
         // voice's own pace swings from word to word, and never goes back.
