@@ -125,8 +125,9 @@ public:
     Q_INVOKABLE void search(const QString &query);
     // Goes to a match and marks it in the text.
     Q_INVOKABLE void showMatch(int index);
-    // The match after or before the one shown; with none shown yet, the
-    // first one after or before the reading position. Both wrap around.
+    // The match after or before the one shown; with none shown yet, or once
+    // the reading has moved on from it, the first one after or before the
+    // reading position. Both wrap around.
     Q_INVOKABLE void nextMatch();
     Q_INVOKABLE void previousMatch();
     // Goes to a match and reads aloud from its sentence.
@@ -188,12 +189,18 @@ private:
         int chapter = 0;
         int paragraph = 0;
         int start = 0;
-        int length = 0;
+        int end = 0;
+    };
+    struct Folded {
+        QString text;
+        QList<int> offsets;
     };
     // Forgets the search, as a different book or none at all does.
     void clearSearch();
     // The first match at or after the reading position.
     int matchAtPosition() const;
+    // Whether the reading position is still where the match shown left it.
+    bool atShownMatch() const;
     static QStringList spotlights() { return {"off", "paragraph", "sentence"}; }
     static QStringList highlights() { return {"glass", "both", "word", "sentence"}; }
     static QStringList strengths() { return {"subtle", "normal", "strong"}; }
@@ -226,7 +233,7 @@ private:
     bool m_matchShown = false;
     // The open book's paragraphs folded for searching, by chapter, made on
     // the first search.
-    QList<QStringList> m_folded;
+    QList<QList<Folded>> m_folded;
 
     int m_fontSize = 20;
     double m_lineHeight = 1.5;

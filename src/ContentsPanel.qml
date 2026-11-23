@@ -87,6 +87,7 @@ Drawer {
         Label {
             Layout.fillWidth: true
             text: reader.author !== "" ? qsTr("%1 by %2").arg(reader.title).arg(reader.author) : reader.title
+            textFormat: Text.PlainText
             color: Colors.muted
             wrapMode: Text.Wrap
             font.pixelSize: 12
@@ -135,6 +136,7 @@ Drawer {
                         Label {
                             Layout.fillWidth: true
                             text: item.modelData
+                            textFormat: Text.PlainText
                             elide: Text.ElideRight
                             color: item.index === reader.chapter ? Colors.text : Colors.body
                         }
@@ -219,6 +221,7 @@ Drawer {
                                     text: note.modelData.placed
                                           ? note.modelData.chapterTitle
                                           : qsTr("%1 · not found in this copy of the book").arg(note.modelData.chapterTitle)
+                                    textFormat: Text.PlainText
                                     elide: Text.ElideRight
                                     color: Colors.muted
                                     font.pixelSize: 11
@@ -395,7 +398,9 @@ Drawer {
                             spacing: 4
                             Label {
                                 Layout.fillWidth: true
+                                // A title is the book's text, never markup.
                                 text: result.modelData.chapterTitle
+                                textFormat: Text.PlainText
                                 elide: Text.ElideRight
                                 color: result.index === reader.searchIndex ? theme.accent : Colors.muted
                                 font.pixelSize: 11

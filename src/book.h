@@ -84,8 +84,11 @@ QList<QPair<int, int>> sentenceRanges(const QString &text, int maxLength = 320);
 QList<WordSpan> words(const QString &text, int start, int end);
 QString normalizeWord(const QString &word);
 // The text as a search compares it: lower case, accents dropped, curly
-// quotes, dashes and odd spaces made plain. Each character stays one
-// character, so an offset in the folded text is the same offset in the
-// original.
-QString fold(const QString &text);
+// quotes, dashes and odd spaces made plain. offsets gets, for each character
+// of the folded text, where the character it came from starts in text.
+QString fold(const QString &text, QList<int> *offsets = nullptr);
+// Where needle, already folded, is in text, as [start, end) ranges of text
+// that don't overlap; folded and offsets are text as fold() gives them.
+QList<QPair<int, int>> find(const QString &text, const QString &folded, const QList<int> &offsets,
+                            const QString &needle);
 }

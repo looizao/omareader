@@ -344,8 +344,8 @@ omareader skill install                  # agent skill for ~/.claude/skills
   mode fades the text around it, without changing its layout. The reader's
   own highlights, the selection being dragged and a search match are drawn
   the same way. `src/reader.cpp` searches the book through `Text::fold`,
-  which lowers the case and drops accents one character for one, so a match
-  in the folded text sits at the same place in the book's.
+  which lowers the case and drops accents while keeping where each folded
+  letter came from, so a match lands on the right words in the book.
 - `src/annotations.cpp` keeps the bookmarks, highlights and notes: it finds
   each one's words in the book again, and merges the files other computers
   leave in the sync folder, the latest change to each one winning.

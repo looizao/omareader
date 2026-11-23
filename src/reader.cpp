@@ -388,18 +388,22 @@ void Reader::search(const QString &query) {
     if (!needle.isEmpty()) {
         if (m_folded.isEmpty()) {
             for (const Chapter &chapter : m_book->chapters) {
-                QStringList folded;
+                QList<Folded> folded;
                 folded.reserve(chapter.paragraphs.size());
-                for (const Paragraph &p : chapter.paragraphs)
-                    folded.append(Text::fold(p.text));
+                for (const Paragraph &p : chapter.paragraphs) {
+                    Folded f;
+                    f.text = Text::fold(p.text, &f.offsets);
+                    folded.append(f);
+                }
                 m_folded.append(folded);
             }
         }
         for (int c = 0; c < m_folded.size(); ++c)
             for (int p = 0; p < m_folded.at(c).size(); ++p) {
-                const QString &text = m_folded.at(c).at(p);
-                for (int at = text.indexOf(needle); at >= 0; at = text.indexOf(needle, at + needle.size()))
-                    m_matches.append({c, p, int(at), int(needle.size())});
+                const Folded &f = m_folded.at(c).at(p);
+                const QString &text = m_book->chapters.at(c).paragraphs.at(p).text;
+                for (const auto &[start, end] : Text::find(text, f.text, f.offsets, needle))
+                    m_matches.append({c, p, start, end});
             }
     }
     // The list shows each match with a little of the text around it, cut
@@ -413,7 +417,7 @@ void Reader::search(const QString &query) {
             const int space = text.indexOf(QLatin1Char(' '), from);
             from = space >= 0 && space < m.start ? space + 1 : from;
         }
-        const int end = m.start + m.length;
+        const int end = m.end;
         int to = qMin(int(text.size()), end + 80);
         if (to < text.size()) {
             const int space = text.lastIndexOf(QLatin1Char(' '), to);
@@ -426,7 +430,7 @@ void Reader::search(const QString &query) {
             {"end", end},
             {"chapterTitle", m_book->chapters.at(m.chapter).title},
             {"before", (from > 0 ? QStringLiteral("…") : QString()) + text.mid(from, m.start - from)},
-            {"text", text.mid(m.start, m.length)},
+            {"text", text.mid(m.start, end - m.start)},
             {"after", text.mid(end, to - end) + (to < text.size() ? QStringLiteral("…") : QString())},
         });
     }
@@ -438,7 +442,7 @@ QVariantMap Reader::match() const {
     if (!m_matchShown || m_searchIndex < 0 || m_searchIndex >= m_matches.size())
         return {};
     const Match &m = m_matches.at(m_searchIndex);
-    return {{"chapter", m.chapter}, {"paragraph", m.paragraph}, {"start", m.start}, {"end", m.start + m.length}};
+    return {{"chapter", m.chapter}, {"paragraph", m.paragraph}, {"start", m.start}, {"end", m.end}};
 }
 
 void Reader::showMatch(int index) {
@@ -466,17 +470,24 @@ int Reader::matchAtPosition() const {
     return int(m_matches.size());
 }
 
+bool Reader::atShownMatch() const {
+    if (!m_book || m_searchIndex < 0 || m_searchIndex >= m_matches.size())
+        return false;
+    const Match &m = m_matches.at(m_searchIndex);
+    return m_chapter == m.chapter && m_sentence == m_book->sentenceAt(m.chapter, m.paragraph, m.start);
+}
+
 void Reader::nextMatch() {
     if (m_matches.isEmpty())
         return;
-    const int next = m_searchIndex >= 0 ? m_searchIndex + 1 : matchAtPosition();
+    const int next = atShownMatch() ? m_searchIndex + 1 : matchAtPosition();
     showMatch(next < m_matches.size() ? next : 0);
 }
 
 void Reader::previousMatch() {
     if (m_matches.isEmpty())
         return;
-    const int previous = (m_searchIndex >= 0 ? m_searchIndex : matchAtPosition()) - 1;
+    const int previous = (atShownMatch() ? m_searchIndex : matchAtPosition()) - 1;
     showMatch(previous >= 0 ? previous : int(m_matches.size()) - 1);
 }
 

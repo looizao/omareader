@@ -15,9 +15,10 @@ FocusScope {
     // The view keeps the spoken word in sight until the user scrolls away.
     property bool following: true
     // After going to a search match the reading place is the match, not
-    // the paragraph that scrolling there leaves at the top, until the
-    // reader scrolls on.
+    // the paragraph that scrolling there leaves at the top, for as long as
+    // the match's paragraph is in view.
     property bool holdPlace: false
+    property int heldParagraph: -1
     // Reading keys step aside while a panel or the note has the keyboard.
     readonly property bool keysEnabled: visible && !contents.opened && !settings.opened && !noteEditor.opened
     // Focus mode holds the spoken line at one height and scrolls the text
@@ -223,6 +224,7 @@ FocusScope {
             if (reader.match.chapter === undefined)
                 return
             root.holdPlace = true
+            root.heldParagraph = reader.match.paragraph
             Qt.callLater(root.revealMatch)
         }
     }
@@ -332,6 +334,7 @@ FocusScope {
                     horizontalAlignment: Text.AlignHCenter
                     text: reader.chapterTitle !== "" && reader.chapterTitle !== reader.title
                           ? qsTr("%1 · %2").arg(reader.title).arg(reader.chapterTitle) : reader.title
+                    textFormat: Text.PlainText
                     elide: Text.ElideRight
                     color: Colors.muted
                     font.pixelSize: 13
@@ -522,8 +525,14 @@ FocusScope {
                 id: visibleTimer
                 interval: 400
                 onTriggered: {
-                    if (root.holdPlace)
-                        return
+                    // However the view got away from the match (a key, the
+                    // wheel, the scroll bar), the place follows it again.
+                    if (root.holdPlace) {
+                        const held = list.itemAtIndex(root.heldParagraph)
+                        if (held && held.y + held.height > list.contentY && held.y < list.contentY + list.height)
+                            return
+                        root.holdPlace = false
+                    }
                     const index = list.indexAt(list.width / 2, list.contentY + 40)
                     if (index >= 0)
                         reader.setVisibleParagraph(index)

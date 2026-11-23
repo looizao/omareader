@@ -99,34 +99,96 @@ QString normalizeWord(const QString &word) {
     return out;
 }
 
-QString fold(const QString &text) {
-    QString out = text;
-    for (QChar &c : out) {
-        if (c.isSurrogate())
-            continue;
-        // Only canonical decompositions keep one character for one: a
-        // ligature's compatibility form would be two, and the offsets would
-        // no longer line up with the text.
-        while (c.decompositionTag() == QChar::Canonical && !c.decomposition().isEmpty())
-            c = c.decomposition().at(0);
-        switch (c.unicode()) {
-        case 0x2018: case 0x2019: case 0x201B: case 0x02BC: case 0x2032:
-            c = QLatin1Char('\'');
-            break;
-        case 0x201C: case 0x201D: case 0x201F: case 0x2033:
-            c = QLatin1Char('"');
-            break;
-        case 0x2010: case 0x2011: case 0x2012: case 0x2013: case 0x2014: case 0x2212:
-            c = QLatin1Char('-');
-            break;
-        default:
-            if (c.isSpace())
-                c = QLatin1Char(' ');
-            else
-                c = c.toCaseFolded();
-        }
+// The accents a search ignores: the combining marks Latin, Greek and
+// Cyrillic letters take. Marks that are letters' vowels in other scripts
+// stay, so they still tell words apart.
+static bool ignoredMark(char32_t c) {
+    return (c >= 0x0300 && c <= 0x036F) || (c >= 0x1AB0 && c <= 0x1AFF) || (c >= 0x1DC0 && c <= 0x1DFF)
+           || (c >= 0x20D0 && c <= 0x20FF) || (c >= 0xFE20 && c <= 0xFE2F);
+}
+
+// A character taken apart as far as its canonical decomposition goes, so a
+// precomposed letter and the same letter with separate marks come out alike.
+static void decompose(char32_t c, QList<char32_t> &out) {
+    if (c < 0xC0 || QChar::decompositionTag(c) != QChar::Canonical) {
+        out.append(c);
+        return;
     }
+    const QString parts = QChar::decomposition(c);
+    if (parts.isEmpty()) {
+        out.append(c);
+        return;
+    }
+    for (const char32_t part : parts.toUcs4())
+        decompose(part, out);
+}
+
+QString fold(const QString &text, QList<int> *offsets) {
+    QString out;
+    out.reserve(text.size());
+    QList<int> map;
+    map.reserve(text.size());
+    QList<char32_t> parts;
+    for (int i = 0; i < text.size();) {
+        char32_t c = text.at(i).unicode();
+        int width = 1;
+        if (text.at(i).isHighSurrogate() && i + 1 < text.size() && text.at(i + 1).isLowSurrogate()) {
+            c = QChar::surrogateToUcs4(text.at(i), text.at(i + 1));
+            width = 2;
+        }
+        parts.clear();
+        decompose(c, parts);
+        for (char32_t part : parts) {
+            if (ignoredMark(part))
+                continue;
+            switch (part) {
+            case 0x2018: case 0x2019: case 0x201B: case 0x02BC: case 0x2032:
+                part = U'\'';
+                break;
+            case 0x201C: case 0x201D: case 0x201F: case 0x2033:
+                part = U'"';
+                break;
+            case 0x2010: case 0x2011: case 0x2012: case 0x2013: case 0x2014: case 0x2212:
+                part = U'-';
+                break;
+            default:
+                part = QChar::isSpace(part) ? U' ' : QChar::toCaseFolded(part);
+            }
+            if (QChar::requiresSurrogates(part)) {
+                out.append(QChar(QChar::highSurrogate(part)));
+                out.append(QChar(QChar::lowSurrogate(part)));
+                map.append(i);
+                map.append(i);
+            } else {
+                out.append(QChar(char16_t(part)));
+                map.append(i);
+            }
+        }
+        i += width;
+    }
+    if (offsets)
+        *offsets = map;
     return out;
+}
+
+QList<QPair<int, int>> find(const QString &text, const QString &folded, const QList<int> &offsets,
+                            const QString &needle) {
+    QList<QPair<int, int>> found;
+    if (needle.isEmpty())
+        return found;
+    const int size = int(folded.size());
+    for (int at = int(folded.indexOf(needle)); at >= 0; at = int(folded.indexOf(needle, at + 1))) {
+        const int end = at + int(needle.size());
+        // A match has to begin and end on whole characters of the text, not
+        // on a part of one, as a Korean syllable's first letter is.
+        if ((at > 0 && offsets.at(at - 1) == offsets.at(at)) || (end < size && offsets.at(end) == offsets.at(end - 1)))
+            continue;
+        if (!found.isEmpty() && offsets.at(at) < found.last().second)
+            continue;
+        // The marks a match's last letter carries belong to it.
+        found.append({offsets.at(at), end < size ? offsets.at(end) : int(text.size())});
+    }
+    return found;
 }
 
 }

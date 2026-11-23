@@ -1697,11 +1697,30 @@ private slots:
 
     void foldingForSearchKeepsEveryOffset() {
         const QString text = QString::fromUtf8("Ação “Olá” — don’t\u00a0Ünïcode ÇA");
-        const QString folded = Text::fold(text);
-        QCOMPARE(folded.size(), text.size());
+        QList<int> offsets;
+        const QString folded = Text::fold(text, &offsets);
         QCOMPARE(folded, QString("acao \"ola\" - don't unicode ca"));
+        QCOMPARE(offsets.size(), folded.size());
+        for (int i = 0; i < offsets.size(); ++i)
+            QCOMPARE(offsets.at(i), i);
+        // Accents kept as separate marks are dropped too, and the letters
+        // still point at where they are in the text.
+        const QString marked = QString::fromUtf8("re\u0301sume\u0301");
+        QCOMPARE(Text::fold(marked, &offsets), QString("resume"));
+        QCOMPARE(offsets, (QList<int>{0, 1, 3, 4, 5, 6}));
+        const QList<QPair<int, int>> found = Text::find(marked, Text::fold(marked, &offsets), offsets, "resume");
+        QCOMPARE(found, (QList<QPair<int, int>>{{0, int(marked.size())}}));
+        // Korean syllables come apart into their letters, which tell them
+        // apart, and a match can't start or end inside one.
+        const QString ga = QString::fromUtf8("가"), go = QString::fromUtf8("고"), gak = QString::fromUtf8("각");
+        QVERIFY(Text::fold(ga) != Text::fold(go));
+        QVERIFY(Text::find(go, Text::fold(go, &offsets), offsets, Text::fold(ga)).isEmpty());
+        QVERIFY(Text::find(gak, Text::fold(gak, &offsets), offsets, Text::fold(ga)).isEmpty());
+        QCOMPARE(Text::find(ga, Text::fold(ga, &offsets), offsets, Text::fold(ga)).size(), 1);
         // A ligature has no one-letter form, so it stays as it is.
         QCOMPARE(Text::fold(QString::fromUtf8("ﬁne")), QString::fromUtf8("ﬁne"));
+        // Vowel signs in other scripts are part of the word.
+        QVERIFY(Text::fold(QString::fromUtf8("कि")) != Text::fold(QString::fromUtf8("क")));
     }
 
     void searchFindsEveryMatchAndStepsThroughThem() {
@@ -1717,7 +1736,8 @@ private slots:
         book.path = path;
         book.title = "Search";
         book.format = "txt";
-        book.chapters = {{"One", {{"The café opened early. Nobody came to the CAFE that day.", 0, {}}}},
+        book.chapters = {{"One", {{"The café opened early. Nobody came to the CAFE that day.", 0, {}},
+                                  {QString::fromUtf8("Her résumé and 고 and 각."), 0, {}}}},
                          {"Two", {{"A quiet chapter.", 0, {}}, {"Later, the Café closed for good.", 0, {}}}},
                          {"Three", {{"No match here at all.", 0, {}}}}};
         book.segment();
@@ -1777,12 +1797,36 @@ private slots:
         reader.showMatch(7); // past the end: nothing happens
         QCOMPARE(reader.searchIndex(), 2);
 
+        // Once the reading has moved on, the next match is the first after
+        // where it is now, not the one after the match shown.
+        reader.showMatch(0);
+        reader.goTo(1, 1, 0);
+        reader.nextMatch();
+        QCOMPARE(reader.searchIndex(), 2);
+        reader.showMatch(0);
+        reader.goTo(2, 0, 0);
+        reader.nextMatch();
+        QCOMPARE(reader.searchIndex(), 0); // none after it, so round to the first
+        reader.goTo(2, 0, 0);
+        reader.previousMatch();
+        QCOMPARE(reader.searchIndex(), 2);
+
         // Before the reading place, with none shown yet, steps back.
         reader.search("chapter");
         QCOMPARE(reader.searchCount(), 1);
         reader.goToChapter(2);
         reader.previousMatch();
         QCOMPARE(reader.chapter(), 1);
+
+        // Accents as separate marks, and Korean syllables kept apart.
+        reader.search("resume");
+        QCOMPARE(reader.searchCount(), 1);
+        QCOMPARE(reader.searchResults().first().toMap().value("text").toString(),
+                 QString::fromUtf8("résumé"));
+        reader.search(QString::fromUtf8("가"));
+        QCOMPARE(reader.searchCount(), 0);
+        reader.search(QString::fromUtf8("고"));
+        QCOMPARE(reader.searchCount(), 1);
 
         reader.search("nowhere to be found");
         QCOMPARE(reader.searchCount(), 0);
@@ -3397,6 +3441,13 @@ private slots:
         // The view settling there leaves the reading place on the match.
         QTest::qWait(600);
         QCOMPARE(app.reader.sentence(), book.sentenceAt(1, 30, 9));
+        // Moved away without a key or a flick, as the scroll bar does, the
+        // reading place follows the view again.
+        list->setProperty("contentY", list->property("originY").toReal());
+        QTRY_VERIFY(app.reader.sentence() < book.sentenceAt(1, 5, 0));
+        app.reader.showMatch(0);
+        QTest::qWait(600);
+        QCOMPARE(app.reader.sentence(), book.sentenceAt(1, 30, 9));
 
         // F3 brings the mark back on the same match, the only one, and
         // Escape takes it away.
@@ -3421,6 +3472,46 @@ private slots:
         app.narrator.clearError();
         app.reader.closeBook();
         QSettings().remove("reader");
+    }
+
+    void searchResultsShowChapterTitlesAsText() {
+        // A heading that looks like markup must not load anything when its
+        // chapter turns up in the search results.
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost));
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        QVERIFY(app.show());
+        const QString path = dir.filePath("markup.txt");
+        write(path, "markup");
+        Book book;
+        book.path = path;
+        book.title = "Markup";
+        book.format = "txt";
+        const QString title = QString("<img src=\"http://127.0.0.1:%1/x.png\">Tower").arg(server.serverPort());
+        book.chapters = {{"Shore", {{"Nothing here.", 0, {}}}}, {title, {{"The lighthouse stands.", 0, {}}}}};
+        book.segment();
+        app.reader.openBook(std::make_shared<Book>(book));
+        QObject *panel = app.window->findChild<QObject *>("contentsPanel");
+        QVERIFY(panel);
+        QTest::keyClick(app.window, Qt::Key_Slash);
+        QTRY_VERIFY(panel->property("opened").toBool());
+        app.reader.search("lighthouse");
+        QTRY_COMPARE(app.items("searchResult").size(), 1);
+        bool shown = false;
+        std::function<void(QQuickItem *)> walk = [&](QQuickItem *item) {
+            if (item->property("text").toString() == title)
+                shown = true;
+            for (QQuickItem *child : item->childItems())
+                walk(child);
+        };
+        walk(app.items("searchResult").first());
+        QVERIFY2(shown, "the title isn't shown as it is written");
+        QTest::keyClick(app.window, Qt::Key_T); // the contents list the title too
+        // The event loop runs meanwhile, as an image request needs it to.
+        QTest::qWait(1000);
+        QVERIFY2(!server.hasPendingConnections(), "a chapter title loaded something from the network");
+        app.reader.closeBook();
     }
 
     void helpShowsEveryShortcutOnScreen() {
