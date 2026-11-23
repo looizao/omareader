@@ -476,5 +476,7 @@
   "Tesseract could not read page %1 of this PDF: %2": "O Tesseract não conseguiu ler a página %1 deste PDF: %2",
   "No text could be recognised in the pages of this scanned PDF.": "Nenhum texto foi reconhecido nas páginas deste PDF digitalizado.",
   "Recognising the text of this scanned book…": "Reconhecendo o texto deste livro digitalizado…",
-  "Page %1 of %2. This happens once: the text is kept, and stopping keeps the pages done.": "Página %1 de %2. Isto acontece uma vez só: o texto fica guardado, e parar mantém as páginas já feitas."
+  "Page %1 of %2. This happens once: the text is kept, and stopping keeps the pages done.": "Página %1 de %2. Isto acontece uma vez só: o texto fica guardado, e parar mantém as páginas já feitas.",
+  "%1 took too long.": "%1 demorou demais.",
+  "%1 failed.": "%1 falhou."
 }

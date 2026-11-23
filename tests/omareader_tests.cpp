@@ -33,6 +33,7 @@
 #include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QtEndian>
+#include <QtConcurrent>
 #include <QtTest>
 #include <zlib.h>
 
@@ -1175,6 +1176,12 @@ private slots:
             writer.newPage();
             painter.drawText(QPointF(200, 400), "The second page.");
         }
+        // Short pages of real text are read as they are, never sent for
+        // recognition: this opens with no Tesseract at all.
+        QTemporaryDir tools;
+        for (const char *tool : {"pdftotext", "pdfinfo", "pdftohtml", "pdftoppm"})
+            QVERIFY(QFile::link(QStandardPaths::findExecutable(tool), tools.filePath(tool)));
+        PathPrefix path_(tools.path(), true);
         QString error;
         const auto book = BookLoader::load(path, &error);
         QVERIFY2(book, qPrintable(error));
@@ -1183,6 +1190,7 @@ private slots:
         QCOMPARE(book->chapters.size(), 1);
         QCOMPARE(book->chapters[0].paragraphs.size(), 2);
         QCOMPARE(book->chapters[0].paragraphs[0].text, QString("A sentence printed into a PDF."));
+        QVERIFY(!book->recognised);
     }
 
     // Scanned PDFs: no text layer, so Tesseract recognises the pages.
@@ -1211,6 +1219,8 @@ private slots:
         QVERIFY(PdfOcr::looksScanned(QString(338, '\f')));
         QVERIFY(!PdfOcr::looksScanned(QString()));
         QVERIFY(!PdfOcr::looksScanned(line + "\f" + line + "\f"));
+        // Short pages of real text are text: a title, a line of verse.
+        QVERIFY(!PdfOcr::looksScanned("The second page.\fA title\fxviii\f"));
         // A scan with its cover's title recognised is still a scan.
         QString coverOnly = line + "\f";
         for (int i = 0; i < 30; ++i)
@@ -1218,6 +1228,7 @@ private slots:
         QVERIFY(PdfOcr::looksScanned(coverOnly));
         // Page numbers and a stray mark don't make a text layer.
         QVERIFY(PdfOcr::looksScanned("1\f2\f iii \f"));
+        QVERIFY(PdfOcr::looksScanned("xviii\f\f\f"));
     }
 
     void scannedPdfIsRecognisedOnceAndKept() {
@@ -1350,6 +1361,44 @@ private slots:
         QCOMPARE(first, int(kept.size()));
         QVERIFY(!QFileInfo::exists(folder));
         QCOMPARE(book->chapters.at(0).paragraphs.first().text, QString("The first page tells of a river."));
+    }
+
+    void twoOpensOfOneScanShareTheWork() {
+        if (QStandardPaths::findExecutable("pdftoppm").isEmpty())
+            QSKIP("poppler is not installed");
+        QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/ocr").removeRecursively();
+        QTemporaryDir dir;
+        const QString path = dir.filePath("shared-scan.pdf");
+        writeScannedPdf(path, {"One.", "Two.", "Three.", "Four."});
+        QTemporaryDir tools;
+        QVERIFY(!writeFakeTesseract(tools.path()).isEmpty());
+        PathPrefix path_(tools.path());
+        // Slow enough that the two overlap, as the window and a command
+        // opening the same scan do.
+        qputenv("FAKE_TESSERACT_DELAY", "1");
+        std::atomic<int> recognising(0);
+        auto open = [&] {
+            PdfOcr::Control control;
+            bool counted = false;
+            control.progress = [&](int, int) {
+                if (!counted) {
+                    counted = true;
+                    ++recognising;
+                }
+            };
+            QString error;
+            const auto book = BookLoader::load(path, &error, control);
+            return book ? book->chapters.at(0).paragraphs.first().text : "error: " + error;
+        };
+        QFuture<QString> first = QtConcurrent::run(open);
+        QFuture<QString> second = QtConcurrent::run(open);
+        const QString a = first.result(), b = second.result();
+        qunsetenv("FAKE_TESSERACT_DELAY");
+        QCOMPARE(a, QString("The first page tells of a river."));
+        QCOMPARE(b, a);
+        // Only one of them read the pages; the other took what it kept.
+        QCOMPARE(recognising.load(), 1);
+        QVERIFY(!QFileInfo::exists(PdfOcr::cacheFile(Annotations::fingerprint(path)).chopped(4) + ".pages"));
     }
 
     void recognisingAScanShowsProgressAndStops() {

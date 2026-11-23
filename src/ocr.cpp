@@ -5,6 +5,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QLocale>
+#include <QLockFile>
 #include <QMutex>
 #include <QProcess>
 #include <QSaveFile>
@@ -42,14 +43,14 @@ Run run(const QString &program, const QStringList &arguments, const std::functio
             process.kill();
             process.waitForFinished();
             if (clock.elapsed() > 5 * 60 * 1000)
-                *message = QStringLiteral("%1 took too long").arg(QFileInfo(program).fileName());
+                *message = QCoreApplication::translate("PdfOcr", "%1 took too long.").arg(QFileInfo(program).fileName());
             return stop() ? Run::Stopped : Run::Failed;
         }
     }
     if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
         *message = QString::fromUtf8(process.readAllStandardError()).trimmed().section('\n', -1);
         if (message->isEmpty())
-            *message = QStringLiteral("%1 failed").arg(QFileInfo(program).fileName());
+            *message = QCoreApplication::translate("PdfOcr", "%1 failed.").arg(QFileInfo(program).fileName());
         return Run::Failed;
     }
     if (output)
@@ -115,13 +116,16 @@ bool PdfOcr::looksScanned(const QString &output) {
         pages.removeLast();
     if (pages.isEmpty())
         return false;
+    // A page counts as text with a few words on it, so a short page of a
+    // real text layer (a title page, a poem) is read as it is. A page number
+    // or a roman numeral ("xviii") is not enough.
     int withText = 0;
     for (const QString &page : std::as_const(pages)) {
         int letters = 0;
         for (const QChar c : page)
-            if (c.isLetter() && ++letters >= 40)
+            if (c.isLetter() && ++letters >= 10)
                 break;
-        if (letters >= 40)
+        if (letters >= 10)
             ++withText;
     }
     return withText * 10 <= pages.size();
@@ -175,6 +179,27 @@ bool PdfOcr::recognise(const QString &pdf, const QString &fingerprint, int pages
     // being read, and a book is put together once all are there.
     const QString target = cacheFile(fingerprint);
     const QString folder = QFileInfo(target).path() + "/" + fingerprint + ".pages";
+    if (!QDir().mkpath(QFileInfo(target).path())) {
+        *error = tr("The recognised text couldn't be saved in %1.").arg(QFileInfo(target).path());
+        return false;
+    }
+    // The window and a command can open the same scan at once. One of them
+    // recognises it while the other waits, then reads what it kept.
+    QLockFile lock(target + ".lock");
+    lock.setStaleLockTime(0);
+    while (!lock.tryLock(200)) {
+        if (lock.error() != QLockFile::LockFailedError) {
+            *error = tr("The recognised text couldn't be saved in %1.").arg(QFileInfo(target).path());
+            return false;
+        }
+        if (control.cancel && control.cancel->load()) {
+            if (cancelled)
+                *cancelled = true;
+            return false;
+        }
+    }
+    if (cached(fingerprint, text))
+        return true;
     QTemporaryDir images;
     if (!QDir().mkpath(folder) || !images.isValid()) {
         *error = tr("The recognised text couldn't be saved in %1.").arg(QFileInfo(target).path());
