@@ -8,6 +8,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLocale>
+#include <QLockFile>
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <algorithm>
@@ -15,11 +16,14 @@
 // The file is written at most this often while a book is open, so a crash
 // loses little and a long session doesn't write it every tick.
 static constexpr qint64 SaveInterval = 2 * 60 * 1000;
+// How long a save waits for another window's to finish.
+static constexpr int LockWaitMs = 2000;
 
 ReadingStats::ReadingStats(const QString &file, QObject *parent)
     : QObject(parent),
       m_file(file.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/stats.json" : file) {
-    load();
+    m_monotonic.start();
+    read(m_file, &m_books, &m_days);
     m_tick.setInterval(TickInterval);
     connect(&m_tick, &QTimer::timeout, this, &ReadingStats::checkpoint);
     // The window in front counts as reading; behind other windows it doesn't.
@@ -35,11 +39,22 @@ ReadingStats::~ReadingStats() {
     save();
 }
 
-void ReadingStats::load() {
-    QFile file(m_file);
-    if (!file.open(QIODevice::ReadOnly))
-        return;
-    const QJsonObject root = QJsonDocument::fromJson(file.readAll()).object();
+void ReadingStats::setClock(std::function<QDateTime()> wall, std::function<qint64()> ticks) {
+    if (!ticks)
+        ticks = [wall] { return wall().toMSecsSinceEpoch(); };
+    m_wall = std::move(wall);
+    m_ticks = std::move(ticks);
+}
+
+// A file that isn't there reads as empty; one that is there but can't be
+// opened is false, so it is never saved over.
+bool ReadingStats::read(const QString &file, QHash<QString, BookTime> *books, QMap<QDate, DayTime> *days) {
+    QFile in(file);
+    if (!in.exists())
+        return true;
+    if (!in.open(QIODevice::ReadOnly))
+        return false;
+    const QJsonObject root = QJsonDocument::fromJson(in.readAll()).object();
     for (const auto &value : root.value("books").toArray()) {
         const QJsonObject o = value.toObject();
         const QString path = o.value("path").toString();
@@ -52,105 +67,170 @@ void ReadingStats::load() {
         b.days = qMax(0, o.value("days").toInt());
         b.first = QDate::fromString(o.value("first").toString(), Qt::ISODate);
         b.last = QDate::fromString(o.value("last").toString(), Qt::ISODate);
-        m_books.insert(path, b);
+        books->insert(path, b);
     }
-    const QJsonObject days = root.value("days").toObject();
-    for (auto it = days.begin(); it != days.end(); ++it) {
+    const QJsonObject dayTimes = root.value("days").toObject();
+    for (auto it = dayTimes.begin(); it != dayTimes.end(); ++it) {
         const QDate date = QDate::fromString(it.key(), Qt::ISODate);
         if (!date.isValid())
             continue;
         const QJsonObject o = it.value().toObject();
-        m_days.insert(date, {qMax<qint64>(0, o.value("reading").toInteger()),
-                             qMax<qint64>(0, o.value("listening").toInteger())});
+        days->insert(date, {qMax<qint64>(0, o.value("reading").toInteger()),
+                            qMax<qint64>(0, o.value("listening").toInteger())});
     }
+    return true;
 }
 
 bool ReadingStats::save() {
     if (!m_dirty)
         return true;
+    QDir().mkpath(QFileInfo(m_file).absolutePath());
+    // Another omareader window may have saved since this one read the file:
+    // read it again under a lock and add only what this window counted.
+    QLockFile lock(m_file + ".lock");
+    lock.setStaleLockTime(10000);
+    if (!lock.tryLock(LockWaitMs))
+        return false;
+    QHash<QString, BookTime> books;
+    QMap<QDate, DayTime> days;
+    if (!read(m_file, &books, &days))
+        return false;
+    for (const QString &path : std::as_const(m_forgotten))
+        books.remove(path);
+    for (auto it = m_pendingDays.cbegin(); it != m_pendingDays.cend(); ++it) {
+        days[it.key()].reading += it->reading;
+        days[it.key()].listening += it->listening;
+    }
+    for (auto it = m_pendingBooks.cbegin(); it != m_pendingBooks.cend(); ++it) {
+        if (!books.contains(it.key()) && it->reading + it->listening <= 0)
+            continue;
+        BookTime &b = books[it.key()];
+        if (!it->title.isEmpty())
+            b.title = it->title;
+        b.reading += it->reading;
+        b.listening += it->listening;
+        for (const QDate &date : it->dates) {
+            // A day already counted, here or by another window, counts once.
+            if (!b.last.isValid() || date > b.last) {
+                ++b.days;
+                b.last = date;
+            }
+            if (!b.first.isValid() || date < b.first)
+                b.first = date;
+        }
+    }
+
     // Times are kept in milliseconds, so the short counts of each tick add
     // up without rounding.
-    QJsonArray books;
-    for (auto it = m_books.cbegin(); it != m_books.cend(); ++it)
-        books.append(QJsonObject{{"path", it.key()},
-                                 {"title", it->title},
-                                 {"reading", it->reading},
-                                 {"listening", it->listening},
-                                 {"days", it->days},
-                                 {"first", it->first.toString(Qt::ISODate)},
-                                 {"last", it->last.toString(Qt::ISODate)}});
-    QJsonObject days;
-    for (auto it = m_days.cbegin(); it != m_days.cend(); ++it)
-        days.insert(it.key().toString(Qt::ISODate), QJsonObject{{"reading", it->reading}, {"listening", it->listening}});
-    QDir().mkpath(QFileInfo(m_file).absolutePath());
+    QJsonArray bookArray;
+    for (auto it = books.cbegin(); it != books.cend(); ++it)
+        bookArray.append(QJsonObject{{"path", it.key()},
+                                     {"title", it->title},
+                                     {"reading", it->reading},
+                                     {"listening", it->listening},
+                                     {"days", it->days},
+                                     {"first", it->first.toString(Qt::ISODate)},
+                                     {"last", it->last.toString(Qt::ISODate)}});
+    QJsonObject dayObject;
+    for (auto it = days.cbegin(); it != days.cend(); ++it)
+        dayObject.insert(it.key().toString(Qt::ISODate),
+                         QJsonObject{{"reading", it->reading}, {"listening", it->listening}});
     // Written beside the target and renamed over it, so a crash never leaves
     // half a file behind.
     QSaveFile file(m_file);
     if (!file.open(QIODevice::WriteOnly))
         return false;
-    file.write(QJsonDocument(QJsonObject{{"version", 1}, {"books", books}, {"days", days}}).toJson(QJsonDocument::Compact));
+    file.write(QJsonDocument(QJsonObject{{"version", 1}, {"books", bookArray}, {"days", dayObject}})
+                   .toJson(QJsonDocument::Compact));
     if (!file.commit())
         return false;
+    m_books = books;
+    m_days = days;
+    m_pendingBooks.clear();
+    m_pendingDays.clear();
+    m_forgotten.clear();
     m_dirty = false;
-    m_lastSave = now();
+    m_lastSave = ticks();
+    emit changed(); // with whatever other windows added
     return true;
 }
 
 void ReadingStats::add(const QDate &date, qint64 reading, qint64 listening) {
-    if (reading <= 0 && listening <= 0)
+    if (m_path.isEmpty() || (reading <= 0 && listening <= 0))
         return;
     DayTime &day = m_days[date];
     day.reading += reading;
     day.listening += listening;
-    if (!m_path.isEmpty()) {
-        BookTime &book = m_books[m_path];
-        book.reading += reading;
-        book.listening += listening;
-        if (book.last != date) {
-            ++book.days;
-            book.last = date;
-        }
-        if (!book.first.isValid())
-            book.first = date;
+    DayTime &pendingDay = m_pendingDays[date];
+    pendingDay.reading += reading;
+    pendingDay.listening += listening;
+
+    BookTime &book = m_books[m_path];
+    if (!m_title.isEmpty())
+        book.title = m_title;
+    book.reading += reading;
+    book.listening += listening;
+    if (!book.last.isValid() || date > book.last) {
+        ++book.days;
+        book.last = date;
+    }
+    if (!book.first.isValid() || date < book.first)
+        book.first = date;
+    Pending &pending = m_pendingBooks[m_path];
+    pending.title = m_title;
+    pending.reading += reading;
+    pending.listening += listening;
+    if (!pending.dates.contains(date)) {
+        pending.dates.append(date);
+        std::sort(pending.dates.begin(), pending.dates.end());
     }
     m_dirty = true;
 }
 
 void ReadingStats::checkpoint() {
-    const QDateTime t = now();
-    if (m_path.isEmpty() || !m_since.isValid() || m_since >= t) {
+    const qint64 t = ticks();
+    if (m_lastActivity > t) // only a test's clock goes back
+        m_lastActivity = t;
+    if (m_path.isEmpty() || m_since < 0 || m_since >= t) {
         m_since = t;
         return;
     }
-    // The span that counts: all of it while the voice plays, up to a few
-    // minutes after the last input while the window is in front. A machine
-    // asleep with the voice paused by it never counts for long.
-    QDateTime from = m_since, to = t;
-    if (m_listening)
-        from = qMax(from, t.addMSecs(-IdleLimit));
-    else if (m_active && m_lastActivity.isValid())
-        to = qMin(t, m_lastActivity.addMSecs(IdleLimit));
-    else
-        to = from;
+    // Read time: up to a few minutes after the last input while the window
+    // is in front and the voice is quiet. Heard time comes from the narrator.
+    const qint64 from = m_since;
+    qint64 to = from;
+    if (!m_listening && m_active && m_lastActivity >= 0)
+        to = qMin(t, m_lastActivity + IdleLimit);
     m_since = t;
     bool added = false;
-    // Split at midnight, so each day gets its own share.
-    while (from < to) {
-        const QDateTime midnight(from.date().addDays(1), QTime(0, 0));
-        const QDateTime end = midnight > from ? qMin(to, midnight) : to;
-        const qint64 ms = from.msecsTo(end);
-        add(from.date(), m_listening ? 0 : ms, m_listening ? ms : 0);
-        added = added || ms > 0;
-        from = end;
+    if (to > from) {
+        // Spans are measured on the clock that only goes forward; the wall
+        // clock says which day they belong to, split at midnight.
+        const QDateTime wall = wallNow();
+        QDateTime start = wall.addMSecs(from - t), end = wall.addMSecs(to - t);
+        while (start < end) {
+            const QDateTime midnight(start.date().addDays(1), QTime(0, 0));
+            const QDateTime stop = midnight > start ? qMin(end, midnight) : end;
+            add(start.date(), start.msecsTo(stop), 0);
+            start = stop;
+        }
+        added = true;
     }
     if (added)
         emit changed();
-    if (m_dirty && (!m_lastSave.isValid() || m_lastSave.msecsTo(t) >= SaveInterval))
+    if (m_dirty && (m_lastSave < 0 || t - m_lastSave >= SaveInterval))
         save();
 }
 
+void ReadingStats::addHeard(qint64 ms) {
+    if (m_path.isEmpty() || ms <= 0)
+        return;
+    add(wallNow().date(), 0, ms);
+    emit changed();
+}
+
 void ReadingStats::restart() {
-    m_since = now();
+    m_since = ticks();
     m_lastActivity = m_since;
     if (m_path.isEmpty())
         m_tick.stop();
@@ -162,12 +242,12 @@ void ReadingStats::setBook(const QString &path, const QString &title) {
     checkpoint();
     const bool other = path != m_path;
     m_path = path;
-    if (!path.isEmpty() && m_books.contains(path) && !title.isEmpty() && m_books[path].title != title) {
+    m_title = title;
+    // A book whose title changed keeps the new one.
+    if (!path.isEmpty() && !title.isEmpty() && m_books.contains(path) && m_books.value(path).title != title) {
         m_books[path].title = title;
+        m_pendingBooks[path].title = title;
         m_dirty = true;
-    } else if (!path.isEmpty() && !m_books.contains(path)) {
-        // Kept from the start, so the title is there once time is counted.
-        m_books[path].title = title;
     }
     restart();
     if (other) {
@@ -182,7 +262,7 @@ void ReadingStats::setListening(bool listening) {
     checkpoint();
     m_listening = listening;
     // Once the voice stops the reader is still there, reading on.
-    m_lastActivity = now();
+    m_lastActivity = ticks();
 }
 
 void ReadingStats::setActive(bool active) {
@@ -191,13 +271,13 @@ void ReadingStats::setActive(bool active) {
     checkpoint();
     m_active = active;
     if (active)
-        m_lastActivity = now();
+        m_lastActivity = ticks();
 }
 
 void ReadingStats::noteActivity() {
-    const QDateTime t = now();
+    const qint64 t = ticks();
     // After a long pause the idle time is settled first, so it never counts.
-    if (m_lastActivity.isValid() && m_lastActivity.msecsTo(t) > IdleLimit)
+    if (m_lastActivity >= 0 && t - m_lastActivity > IdleLimit)
         checkpoint();
     m_lastActivity = t;
 }
@@ -205,8 +285,9 @@ void ReadingStats::noteActivity() {
 void ReadingStats::forget(const QString &path) {
     if (path == m_path)
         checkpoint();
-    if (!m_books.remove(path))
-        return;
+    m_pendingBooks.remove(path);
+    m_forgotten.insert(path);
+    m_books.remove(path);
     m_dirty = true;
     save();
     emit changed();
@@ -226,7 +307,7 @@ QVariantMap ReadingStats::current() const {
 }
 
 QVariantMap ReadingStats::overview() const {
-    const QDate today = now().date();
+    const QDate today = wallNow().date();
     auto seconds = [](const DayTime &d) { return (d.reading + d.listening) / 1000; };
     qint64 week = 0, total = 0;
     QVariantList days;

@@ -395,7 +395,25 @@ bool Narrator::skippable(int sentence) const {
     return !m_book->sentences.at(sentence).speakable() || m_failed.contains(sentence);
 }
 
+void Narrator::countHeard(qint64 minimumMs) {
+    if (m_timeline.isEmpty())
+        return;
+    const qint64 frame = m_player.playedFrames();
+    if (frame < m_heardFrame) {
+        m_heardFrame = frame;
+        return;
+    }
+    const qint64 ms = (frame - m_heardFrame) * 1000 / Synthesizer::SampleRate;
+    if (ms <= 0 || ms < minimumMs)
+        return;
+    // The frames short of a whole millisecond wait for the next count.
+    m_heardFrame += ms * Synthesizer::SampleRate / 1000;
+    emit heard(ms);
+}
+
 void Narrator::halt() {
+    // The last of what was heard, before the player forgets it.
+    countHeard(0);
     m_ticker.stop();
     m_restartTimer.stop();
     if (m_synth)
@@ -406,6 +424,7 @@ void Narrator::halt() {
     m_timeline.clear();
     m_entry = 0;
     m_sleepFrame = 0;
+    m_heardFrame = 0;
     setState(Stopped);
 }
 
@@ -565,6 +584,8 @@ void Narrator::tick() {
         if (checkSleep(heardMs, frame))
             return;
     }
+    // Reported a second at a time, not on every tick.
+    countHeard(1000);
     while (m_entry + 1 < m_timeline.size() && frame >= m_timeline.at(m_entry + 1).startFrame)
         ++m_entry;
     const Entry &entry = m_timeline.at(m_entry);
@@ -602,6 +623,7 @@ void Narrator::tick() {
 void Narrator::pause() {
     if (m_state != Playing && m_state != Preparing)
         return;
+    countHeard(0);
     m_player.pause();
     setState(Paused);
 }

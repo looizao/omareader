@@ -140,9 +140,11 @@ void Reader::setStats(ReadingStats *stats) {
     m_stats = stats;
     if (!m_stats)
         return;
-    if (m_narrator)
+    if (m_narrator) {
         connect(m_narrator, &Narrator::stateChanged, m_stats,
                 [this] { m_stats->setListening(m_narrator->state() == Narrator::Playing); });
+        connect(m_narrator, &Narrator::heard, m_stats, &ReadingStats::addHeard);
+    }
     // A book removed from the library takes its time with it.
     if (m_library)
         connect(m_library, &Library::removed, m_stats, &ReadingStats::forget);

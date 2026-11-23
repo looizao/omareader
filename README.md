@@ -301,9 +301,12 @@ voice's current speed, and how many days you have read it on. For every book:
 today, the last seven days as bars, the days in a row you have read, the time
 in all, and, in the library, the books with the most time.
 
-Time counts while the voice plays, or while the window is in front and you
-scroll, press keys or move the mouse; a book left open and untouched stops
-counting five minutes after the last input. The numbers live in
+Heard time is the audio the voice actually played, so waiting for it to
+catch up never counts. Read time counts while the voice is quiet, the window
+is in front and you scroll, press keys or move the mouse; a book left open
+and untouched stops counting five minutes after the last input. Two
+omareader windows open at once add their time up rather than saving over
+each other. The numbers live in
 `~/.local/share/omareader/omareader/stats.json` and never leave your
 computer. Removing a book from the library forgets its time, though the days
 it was read on keep theirs.

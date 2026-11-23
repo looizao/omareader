@@ -2387,13 +2387,17 @@ private slots:
         stats.checkpoint();
         QCOMPARE(stats.book("/books/a.epub").reading, 120000);
         QCOMPARE(stats.book("/books/a.epub").listening, 0);
-        // While the voice plays, time is heard, not read, window or not.
+        // While the voice plays, its audio is the time heard, window or not,
+        // and the minutes waiting for it count for nothing.
         stats.setListening(true);
         stats.setActive(false);
-        clock = clock.addSecs(180);
+        clock = clock.addSecs(240);
+        stats.noteActivity();
         stats.checkpoint();
-        QCOMPARE(stats.book("/books/a.epub").listening, 180000);
+        QCOMPARE(stats.book("/books/a.epub").listening, 0);
         QCOMPARE(stats.book("/books/a.epub").reading, 120000);
+        stats.addHeard(180000);
+        QCOMPARE(stats.book("/books/a.epub").listening, 180000);
         stats.setListening(false);
         stats.setActive(true);
         // Another book gets its own time; the day gets both.
@@ -2437,15 +2441,67 @@ private slots:
         stats.noteActivity();
         stats.checkpoint();
         QCOMPARE(stats.book("/books/a.epub").reading, ReadingStats::IdleLimit + 60000);
-        // A night asleep with the voice on counts a few minutes at most.
+        // A night with the voice on but nothing played counts nothing.
         stats.setListening(true);
         clock = clock.addSecs(8 * 3600);
         stats.checkpoint();
-        QCOMPARE(stats.book("/books/a.epub").listening, ReadingStats::IdleLimit);
-        // A clock set back counts nothing.
-        clock = clock.addSecs(-3600);
+        QCOMPARE(stats.book("/books/a.epub").listening, 0);
+        QCOMPARE(stats.book("/books/a.epub").reading, ReadingStats::IdleLimit + 60000);
+    }
+
+    void statsMeasureSpansOnAClockThatOnlyGoesForward() {
+        QTemporaryDir dir;
+        QDateTime wall(QDate(2026, 11, 23), QTime(10, 0));
+        qint64 ticks = 0;
+        ReadingStats stats(dir.filePath("stats.json"));
+        stats.setClock([&] { return wall; }, [&] { return ticks; });
+        stats.setActive(true);
+        stats.setBook("/books/a.epub", "A");
+        ticks += 5000;
+        wall = wall.addSecs(5);
         stats.checkpoint();
-        QCOMPARE(stats.book("/books/a.epub").listening, ReadingStats::IdleLimit);
+        QCOMPARE(stats.book("/books/a.epub").reading, 5000);
+        // The wall clock is set back an hour; half an hour then passes with
+        // no input. Only the minutes after the last input count.
+        wall = wall.addSecs(-3600);
+        for (int i = 0; i < 60; ++i) {
+            ticks += 30000;
+            wall = wall.addSecs(30);
+            stats.checkpoint();
+        }
+        QCOMPARE(stats.book("/books/a.epub").reading, ReadingStats::IdleLimit);
+        // And the file was saved on the way, set back or not.
+        ReadingStats saved(dir.filePath("stats.json"));
+        QVERIFY(saved.book("/books/a.epub").reading >= 5000);
+    }
+
+    void statsFromTwoWindowsAddUp() {
+        QTemporaryDir dir;
+        const QString file = dir.filePath("stats.json");
+        QDateTime clock(QDate(2026, 11, 23), QTime(9, 0));
+        ReadingStats first(file), second(file);
+        first.setClock([&] { return clock; });
+        second.setClock([&] { return clock; });
+        first.setBook("/books/a.epub", "A");
+        second.setBook("/books/b.epub", "B");
+        first.addHeard(60000);
+        second.addHeard(60000);
+        QVERIFY(first.save());
+        QVERIFY(second.save());
+        // Both books, and both minutes on the day; the second sees the first's.
+        QCOMPARE(second.book("/books/a.epub").listening, 60000);
+        ReadingStats reread(file);
+        QCOMPARE(reread.book("/books/a.epub").listening, 60000);
+        QCOMPARE(reread.book("/books/b.epub").listening, 60000);
+        QCOMPARE(reread.day(clock.date()).listening, 120000);
+        // The same book in both on the same day counts the day once.
+        first.setBook("/books/b.epub", "B");
+        first.addHeard(30000);
+        QVERIFY(first.save());
+        ReadingStats again(file);
+        QCOMPARE(again.book("/books/b.epub").listening, 90000);
+        QCOMPARE(again.book("/books/b.epub").days, 1);
+        QVERIFY(!QFile::exists(file + ".lock"));
     }
 
     void statsSplitTimeAtMidnight() {
@@ -2453,12 +2509,12 @@ private slots:
         QDateTime clock(QDate(2026, 11, 23), QTime(23, 58));
         ReadingStats stats(dir.filePath("stats.json"));
         stats.setClock([&] { return clock; });
+        stats.setActive(true);
         stats.setBook("/books/a.epub", "A");
-        stats.setListening(true);
         clock = clock.addSecs(4 * 60);
         stats.checkpoint();
-        QCOMPARE(stats.day(QDate(2026, 11, 23)).listening, 120000);
-        QCOMPARE(stats.day(QDate(2026, 11, 24)).listening, 120000);
+        QCOMPARE(stats.day(QDate(2026, 11, 23)).reading, 120000);
+        QCOMPARE(stats.day(QDate(2026, 11, 24)).reading, 120000);
         QCOMPARE(stats.book("/books/a.epub").days, 2);
         QCOMPARE(stats.book("/books/a.epub").first, QDate(2026, 11, 23));
         QCOMPARE(stats.book("/books/a.epub").last, QDate(2026, 11, 24));
@@ -2472,14 +2528,10 @@ private slots:
             ReadingStats stats(file);
             stats.setClock([&] { return clock; });
             stats.setBook("/books/a.epub", "A");
-            stats.setListening(true);
-            clock = clock.addSecs(90);
-            stats.checkpoint();
-            stats.setListening(false);
+            stats.addHeard(90000);
             stats.setBook("/books/b.epub", "B");
-            stats.setListening(true);
-            clock = clock.addSecs(30);
-        } // closing counts the last moments and saves them
+            stats.addHeard(30000);
+        } // closing saves what wasn't saved yet
         QVERIFY(QFile::exists(file));
         QVERIFY(!QFile::exists(file + ".tmp"));
         QFile saved(file);
@@ -2568,10 +2620,13 @@ private slots:
         QCOMPARE(stats.book(book.path).reading, 60000);
         QCOMPARE(stats.current().value("reading").toLongLong(), 60);
         QCOMPARE(stats.book(book.path).title, QString("Sample"));
+        // While the voice plays, what it played is heard, and nothing is read.
         narrator.showForTests(Narrator::Playing, 0, 0);
-        clock = clock.addSecs(120);
+        clock = clock.addSecs(150);
+        emit narrator.heard(120000);
         narrator.showForTests(Narrator::Paused, 0, 0);
         QCOMPARE(stats.book(book.path).listening, 120000);
+        QCOMPARE(stats.book(book.path).reading, 60000);
         reader.closeBook();
         QVERIFY(stats.current().isEmpty());
         clock = clock.addSecs(120);
@@ -4086,11 +4141,12 @@ private slots:
         write(dir.path() + "/stats.json", R"({"version": 1, "books": [],
             "days": {"2026-11-21": {"reading": 900000, "listening": 0},
                      "2026-11-22": {"reading": 300000, "listening": 1500000}}})");
+        // Before the window, so it outlives the statistics that read it.
+        QDateTime clock(QDate(2026, 11, 23), QTime(18, 0));
         AppWindow app(dir.path());
         // Installed, as main() does, so counted strings take their English forms.
         QCoreApplication::installTranslator(&app.translator);
         const auto uninstall = qScopeGuard([&] { QCoreApplication::removeTranslator(&app.translator); });
-        QDateTime clock(QDate(2026, 11, 23), QTime(18, 0));
         app.stats.setClock([&] { return clock; });
         app.stats.setActive(true);
         QVERIFY(app.show());
@@ -4105,6 +4161,7 @@ private slots:
         app.narrator.showForTests(Narrator::Playing, 0, 0);
         for (int i = 0; i < 10; ++i) {
             clock = clock.addSecs(240);
+            emit app.narrator.heard(240000);
             app.stats.checkpoint();
         }
         app.narrator.showForTests(Narrator::Stopped, 0, 0);

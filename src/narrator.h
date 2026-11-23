@@ -215,6 +215,9 @@ signals:
     void sleepChanged();
     // The sleep timer paused the narration.
     void fellAsleep();
+    // This much more of the book's audio was played, counted from the frames
+    // the player sent out, so a wait for the voice to catch up never counts.
+    void heard(qint64 ms);
 
 private:
     struct Ready {
@@ -252,6 +255,9 @@ private:
     bool checkSleep(qint64 heardMs, qint64 frame);
     // Tells the player where the sleep timer wants the stream to stop.
     void updateSleepLimit();
+    // Announces the audio played since the last count, once there is at
+    // least minimumMs of it.
+    void countHeard(qint64 minimumMs);
 
     BookPtr m_book;
     VoiceSettings m_settings;
@@ -285,4 +291,6 @@ private:
     SleepTimer m_sleep;
     // The played frame the sleep timer last counted up to.
     qint64 m_sleepFrame = 0;
+    // The played frame the time heard was last counted up to.
+    qint64 m_heardFrame = 0;
 };
