@@ -38,6 +38,14 @@ Popup {
 
     readonly property bool empty: !lookup.busy && lookup.entries.length === 0
 
+    // The word's pronunciation is asked for, to fix how the voice says it.
+    signal pronounceRequested(string word)
+    // The respelling saved for the word, read again whenever the list changes.
+    readonly property string saidAs: {
+        pronunciations.entries
+        return lookup.word !== "" ? pronunciations.spokenFor(lookup.word) : ""
+    }
+
     contentItem: ColumnLayout {
         spacing: 8
 
@@ -147,6 +155,13 @@ Popup {
                     }
                 }
             }
+        }
+        Button {
+            objectName: "wordCardPronounce"
+            Layout.leftMargin: -8
+            flat: true
+            text: card.saidAs !== "" ? qsTr("Said as “%1” · change (P)").arg(card.saidAs) : qsTr("Fix how it's said (P)")
+            onClicked: card.pronounceRequested(lookup.word)
         }
     }
 }

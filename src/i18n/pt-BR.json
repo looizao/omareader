@@ -358,5 +358,17 @@
     "one": "%n minuto",
     "many": "%n de minutos",
     "other": "%n minutos"
-  }
+  },
+  "Pronunciation": "Pronúncia",
+  "Spell it the way it sounds, as in Her-my-oh-nee for Hermione, and the voice will say it that way wherever it is written, reading aloud and in exports.": "Escreva do jeito que se fala, como Rér-mai-ô-ni para Hermione, e a voz vai dizer assim onde quer que esteja escrito, na leitura em voz alta e nas exportações.",
+  "Written": "Escrito",
+  "Say it as": "Dizer como",
+  "Hear it": "Ouvir",
+  "Save": "Salvar",
+  "When the voice says a name or a term wrong, spell it the way it sounds. Press P on a word, or select a phrase, to start from the page.": "Quando a voz pronunciar errado um nome ou um termo, escreva do jeito que se fala. Aperte P numa palavra, ou selecione uma expressão, para começar pela página.",
+  "The voice says these as spelled on the right, reading aloud and in exports. Click one to change it.": "A voz diz estas palavras como escritas à direita, na leitura em voz alta e nas exportações. Clique numa para mudar.",
+  "Add a word": "Adicionar uma palavra",
+  "Said as “%1” · change (P)": "Dito como “%1” · mudar (P)",
+  "Fix how it's said (P)": "Corrigir a pronúncia (P)",
+  "Fix how the word being read, or the one under the mouse, is said": "Corrigir a pronúncia da palavra sendo lida, ou da que está sob o mouse"
 }

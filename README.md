@@ -156,6 +156,24 @@ number for another reading of the same text. Each engine remembers its own
 settings. Changing one while reading rebuilds the audio ahead from the
 sentence you are on.
 
+### Pronunciation
+
+When the voice gets a name, a place or a term wrong, teach it: press P on
+the word being read (or the one under the mouse), use Fix how it's said in a
+word's dictionary card, or select a phrase and choose Pronunciation. Type
+how it sounds, spelled out ("Her-my-oh-nee" for Hermione, "sequel" for SQL),
+press Hear it to try it with the current voice, and save. From then on the
+voice says it that way wherever the word is written, in every book, reading
+aloud and in exports, while the page keeps the book's spelling and the
+highlight still lights the word. Words match whole and in any case, and a
+possessive keeps its ending ("Hermione's"); a word saved in capitals, such
+as "US", matches only in capitals, so the ordinary "us" stays as it is.
+
+The voice panel (A) lists every pronunciation; click one to change or remove
+it. They are kept in `~/.local/share/omareader/omareader/pronunciations.json`,
+and `omareader pronounce` lists and edits them from a terminal. A change made
+while the voice reads is heard from the next sentences it prepares.
+
 ### Sleep timer
 
 To fall asleep listening, press C (or the moon in the bar below the text)
@@ -282,6 +300,7 @@ replaced. Exports need `ffmpeg`.
 | Click a word | Read aloud from there |
 | Right-click a word | Look it up in your dictionaries |
 | D | Look up the word being read, or the one under the mouse |
+| P | Fix how the word being read, or the one under the mouse, is said |
 | `,` / `.` | Previous / next sentence |
 | `[` / `]` | Slower / faster |
 | S | Stop reading aloud |
@@ -294,7 +313,7 @@ replaced. Exports need `ffmpeg`.
 | / or Ctrl+F | Search the book |
 | F3 / Shift+F3 | Next / previous match |
 | M | Bookmark this place, or remove its bookmark |
-| Drag over text | Highlight it, add a note, copy it or read it aloud |
+| Drag over text | Highlight it, add a note, copy it, read it aloud or fix how it's said |
 | Click a highlight | Its note |
 | N | Bookmarks, highlights and notes |
 | A | Voice and appearance |
@@ -318,6 +337,7 @@ exits 0 or 1 with errors on stderr, and `--json` prints one JSON object.
 omareader info book.epub --json          # metadata and chapters
 omareader text book.epub --chapter 3     # the text as omareader shows it
 omareader text book.pdf --spoken         # as the voice reads it, clutter left out
+omareader pronounce SQL sequel           # say SQL as "sequel"; no arguments lists them
 omareader notes book.epub --json         # its bookmarks, highlights and notes
 omareader fetch https://example.com/post # a web page's article, without adding it
 omareader lookup running                 # what the installed dictionaries say
@@ -352,6 +372,8 @@ omareader skill install                  # agent skill for ~/.claude/skills
 - `src/book.cpp` splits paragraphs into sentences and words, leaving out of
   the words the clutter `Text::clutter` finds (citation markers, links,
   cross-references), so the voice never reads it and the highlight skips it.
+- `src/pronunciation.cpp` puts the reader's respellings into the text each
+  engine is given, and maps the words heard back onto the words on the page.
 - `src/speech.cpp` matches the spoken words back onto the words on the page and
   decodes the audio; `src/narrator.cpp` plays the sentences as one stream and
   maps the playback position to the word being heard.

@@ -33,6 +33,7 @@ HEADERS += \
     src/library.h \
     src/narrator.h \
     src/portalfilepicker.h \
+    src/pronunciation.h \
     src/qwen.h \
     src/reader.h \
     src/speech.h \
@@ -58,6 +59,7 @@ SOURCES += \
     src/library.cpp \
     src/narrator.cpp \
     src/portalfilepicker.cpp \
+    src/pronunciation.cpp \
     src/qwen.cpp \
     src/reader.cpp \
     src/speech.cpp \

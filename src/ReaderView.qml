@@ -21,6 +21,7 @@ FocusScope {
     property int heldParagraph: -1
     // Reading keys step aside while a panel or the note has the keyboard.
     readonly property bool keysEnabled: visible && !contents.opened && !settings.opened && !noteEditor.opened
+                                       && !pronunciationEditor.opened
     // Focus mode holds the spoken line at one height and scrolls the text
     // under it, instead of jumping when the voice nears the edge.
     readonly property bool steady: reader.focusMode && reader.steadyLine
@@ -71,6 +72,7 @@ FocusScope {
         contents.close()
         settings.close()
         noteEditor.close()
+        pronunciationEditor.close()
         selectionMenu.close()
         list.clearSelection()
     }
@@ -97,28 +99,57 @@ FocusScope {
         card.open()
     }
 
-    // D: the word being read, or else the word under the mouse.
+    // The word being read, or else the word under the mouse, as the
+    // paragraph on screen and a character in it; null when there is neither.
+    function wordInFocus() {
+        if (narrator.active && narrator.chapter === reader.chapter && narrator.paragraph >= 0
+                && narrator.wordStart >= 0) {
+            const spoken = list.itemAtIndex(narrator.paragraph)
+            if (spoken)
+                return { paragraph: spoken, position: narrator.wordStart }
+        }
+        if (!pointer.hovered)
+            return null
+        const p = list.mapFromItem(null, pointer.last.x, pointer.last.y)
+        const item = list.itemAtIndex(list.indexAt(p.x + list.contentX, p.y + list.contentY))
+        if (!item)
+            return null
+        const local = item.mapFromItem(null, pointer.last.x, pointer.last.y)
+        return { paragraph: item, position: item.positionAt(local.x, local.y) }
+    }
+
+    // D: looks up the word being read, or else the word under the mouse.
     function lookUpWord() {
         if (card.opened) {
             card.close()
             return
         }
-        if (narrator.active && narrator.chapter === reader.chapter && narrator.paragraph >= 0
-                && narrator.wordStart >= 0) {
-            const spoken = list.itemAtIndex(narrator.paragraph)
-            if (spoken) {
-                root.lookUpAt(spoken, narrator.wordStart)
-                return
-            }
+        const target = root.wordInFocus()
+        if (target)
+            root.lookUpAt(target.paragraph, target.position)
+    }
+
+    // Opens the pronunciation of a word or phrase, pausing the voice until
+    // it closes.
+    function pronounce(text, resume) {
+        let resumeOnClose = resume === true
+        if (narrator.state === Narrator.Playing || narrator.state === Narrator.Preparing) {
+            narrator.pause()
+            resumeOnClose = true
         }
-        if (!pointer.hovered)
+        pronunciationEditor.resumeOnClose = resumeOnClose
+        pronunciationEditor.edit(text)
+    }
+
+    // P: how the word being read, or else the word under the mouse, is said.
+    function pronounceWord() {
+        if (card.opened) {
+            card.pronounceRequested(lookup.word)
             return
-        const p = list.mapFromItem(null, pointer.last.x, pointer.last.y)
-        const item = list.itemAtIndex(list.indexAt(p.x + list.contentX, p.y + list.contentY))
-        if (!item)
-            return
-        const local = item.mapFromItem(null, pointer.last.x, pointer.last.y)
-        root.lookUpAt(item, item.positionAt(local.x, local.y))
+        }
+        const target = root.wordInFocus()
+        const word = target ? lookup.wordAt(target.paragraph.modelData.text, target.position) : ({})
+        root.pronounce(word.text !== undefined ? word.text : "")
     }
 
     function scrollBy(amount) {
@@ -265,10 +296,11 @@ FocusScope {
     Shortcut { sequence: "C"; enabled: root.keysEnabled; onActivated: narrationBar.openSleepMenu() }
     Shortcut { sequence: "Z"; enabled: root.keysEnabled; onActivated: reader.focusMode = !reader.focusMode }
     Shortcut { sequence: "D"; enabled: root.keysEnabled; onActivated: root.lookUpWord() }
+    Shortcut { sequence: "P"; enabled: root.keysEnabled; onActivated: root.pronounceWord() }
     Shortcut { sequence: "M"; enabled: root.keysEnabled; onActivated: reader.toggleBookmark() }
-    Shortcut { sequence: "T"; enabled: root.visible && !settings.opened && !noteEditor.opened; onActivated: contents.toggle(0) }
-    Shortcut { sequence: "N"; enabled: root.visible && !settings.opened && !noteEditor.opened; onActivated: contents.toggle(1) }
-    Shortcut { sequences: ["/", StandardKey.Find]; enabled: root.visible && !settings.opened && !noteEditor.opened; onActivated: contents.toggle(2) }
+    Shortcut { sequence: "T"; enabled: root.visible && !settings.opened && !noteEditor.opened && !pronunciationEditor.opened; onActivated: contents.toggle(0) }
+    Shortcut { sequence: "N"; enabled: root.visible && !settings.opened && !noteEditor.opened && !pronunciationEditor.opened; onActivated: contents.toggle(1) }
+    Shortcut { sequences: ["/", StandardKey.Find]; enabled: root.visible && !settings.opened && !noteEditor.opened && !pronunciationEditor.opened; onActivated: contents.toggle(2) }
     // With nothing searched yet, they open the search instead.
     Shortcut {
         sequences: ["F3", "Ctrl+G"]
@@ -280,8 +312,8 @@ FocusScope {
         enabled: root.keysEnabled
         onActivated: reader.searchCount > 0 ? reader.previousMatch() : contents.toggle(2)
     }
-    Shortcut { sequence: "Ctrl+,"; enabled: root.visible && !contents.opened && !noteEditor.opened; onActivated: settings.opened ? settings.close() : settings.open() }
-    Shortcut { sequence: "A"; enabled: root.visible && !contents.opened && !noteEditor.opened; onActivated: settings.opened ? settings.close() : settings.open() }
+    Shortcut { sequence: "Ctrl+,"; enabled: root.visible && !contents.opened && !noteEditor.opened && !pronunciationEditor.opened; onActivated: settings.opened ? settings.close() : settings.open() }
+    Shortcut { sequence: "A"; enabled: root.visible && !contents.opened && !noteEditor.opened && !pronunciationEditor.opened; onActivated: settings.opened ? settings.close() : settings.open() }
     Shortcut { sequence: "E"; enabled: root.keysEnabled; onActivated: root.exportRequested() }
     Shortcut { sequences: ["Backspace", "B"]; enabled: root.keysEnabled; onActivated: { root.closePanels(); reader.closeBook() } }
 
@@ -561,6 +593,14 @@ FocusScope {
                 // voice was paused for it.
                 property real openedAt: 0
                 property bool resumeOnClose: false
+                // The voice stays paused for the pronunciation, and goes on
+                // when that closes instead.
+                onPronounceRequested: word => {
+                    const resume = card.resumeOnClose
+                    card.resumeOnClose = false
+                    card.close()
+                    root.pronounce(word, resume)
+                }
                 onClosed: {
                     lookup.clear()
                     // A right-click on another word closes the card on the
@@ -640,6 +680,8 @@ FocusScope {
                 reader.copyPassage(sp, s, ep, e)
             } else if (action === "read") {
                 reader.readFrom(sp, s)
+            } else if (action === "pronounce") {
+                root.pronounce(reader.passage(sp, s, ep, e))
             }
         }
         onAboutToHide: if (!acting) list.clearSelection()
@@ -650,11 +692,18 @@ FocusScope {
             Button { objectName: "noteSelection"; flat: true; text: qsTr("Add a note"); onClicked: selectionMenu.act("note") }
             Button { flat: true; text: qsTr("Copy"); onClicked: selectionMenu.act("copy") }
             Button { flat: true; text: qsTr("Read aloud"); onClicked: selectionMenu.act("read") }
+            Button { objectName: "pronounceSelection"; flat: true; text: qsTr("Pronunciation"); onClicked: selectionMenu.act("pronounce") }
         }
     }
 
     NoteEditor {
         id: noteEditor
+    }
+
+    PronunciationEditor {
+        id: pronunciationEditor
+        // Above the voice panel, which it can open from.
+        z: 2
     }
 
     ContentsPanel {
@@ -666,5 +715,6 @@ FocusScope {
         id: settings
         objectName: "settingsPanel"
         height: root.height
+        pronunciationEditor: pronunciationEditor
     }
 }

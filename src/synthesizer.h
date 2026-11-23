@@ -2,6 +2,7 @@
 
 #include "book.h"
 #include "kokoro.h"
+#include "pronunciation.h"
 #include "qwen.h"
 #include "speech.h"
 #include "voicesettings.h"
@@ -22,6 +23,9 @@ struct SynthesisOptions {
     VoiceSettings voice;
     KokoroSetup kokoro;
     QwenSetup qwen;
+    // How the reader wants names and terms said; the engine never sees it,
+    // since its callers put the respellings in the text they give it.
+    Lexicon lexicon;
     // Work nobody is waiting to hear (exports) yields to work someone is.
     bool background = false;
     // Previews jump ahead of everything else.

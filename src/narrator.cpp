@@ -120,6 +120,7 @@ SynthesisOptions Narrator::synthesisOptions() const {
     options.voice = m_settings;
     options.kokoro = m_kokoroSetup;
     options.qwen = m_qwenSetup;
+    options.lexicon = Lexicon::load();
     return options;
 }
 
@@ -458,11 +459,15 @@ void Narrator::play(int sentence) {
 void Narrator::startRun(int from) {
     const int count = m_book->sentenceCount();
     m_runEnd = qMin(count, from + RunLength);
+    // The pronunciations as they are when the run starts; a change made
+    // while it plays is heard from the next run on.
+    const SynthesisOptions options = synthesisOptions();
+    m_runLexicon = options.lexicon;
     QList<Synthesizer::Line> lines;
     for (int i = from; i < m_runEnd; ++i)
         if (m_book->sentences.at(i).speakable())
-            lines.append({i, m_book->sentenceText(i)});
-    m_synth->start(synthesisOptions(), lines);
+            lines.append({i, Pronounce::utterance(*m_book, i, m_runLexicon).text});
+    m_synth->start(options, lines);
 }
 
 void Narrator::onSentenceReady(int id, const SpokenSentence &sentence) {
@@ -472,7 +477,8 @@ void Narrator::onSentenceReady(int id, const SpokenSentence &sentence) {
     }
     Ready ready;
     ready.audio = sentence.audio;
-    ready.timings = Speech::align(m_book->sentenceWords(id), sentence.words, ready.audio.seconds());
+    ready.timings = Pronounce::timings(Pronounce::utterance(*m_book, id, m_runLexicon), m_book->sentenceWords(id),
+                                       sentence.words, ready.audio.seconds());
     m_ready.insert(id, ready);
     appendReady();
 }
@@ -716,6 +722,10 @@ void Narrator::setPreviewing(bool previewing) {
 }
 
 void Narrator::preview() {
+    previewText({});
+}
+
+void Narrator::previewText(const QString &words) {
     stopPreview();
     setError({});
     refreshSetup();
@@ -743,8 +753,10 @@ void Narrator::preview() {
     });
     SynthesisOptions options = synthesisOptions();
     options.preview = true;
-    const QString text = EngineCatalog::previewText(
-        EngineCatalog::previewLanguage(m_settings.engine, m_settings.voice, m_settings.language));
+    const QString sample = words.simplified();
+    const QString text = !sample.isEmpty() ? sample
+                                           : EngineCatalog::previewText(EngineCatalog::previewLanguage(
+                                                 m_settings.engine, m_settings.voice, m_settings.language));
     setPreviewing(true);
     m_previewSynth->start(options, {{0, text}});
 }

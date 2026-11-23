@@ -37,6 +37,7 @@ SynthesisOptions Synthesis::optionsFor(const VoiceSettings &voice) {
     options.kokoro = KokoroSetup::find(settings.value("voice/koko").toString(), settings.value("voice/models").toString());
     options.qwen = QwenSetup::find(voice.engine == Engine::Qwen ? voice.text("model") : QString(),
                                    voice.engine == Engine::Qwen ? voice.text("device") : QString());
+    options.lexicon = Lexicon::load();
     return options;
 }
 

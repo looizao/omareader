@@ -14,6 +14,7 @@ Rectangle {
         [qsTr("Click a word"), qsTr("Read aloud from there")],
         [qsTr("Right-click a word"), qsTr("Look it up in your dictionaries")],
         ["D", qsTr("Look up the word being read, or the one under the mouse")],
+        ["P", qsTr("Fix how the word being read, or the one under the mouse, is said")],
         [", / .", qsTr("Previous / next sentence")],
         ["[ / ]", qsTr("Slower / faster")],
         ["S", qsTr("Stop reading aloud")],

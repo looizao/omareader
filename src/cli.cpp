@@ -6,6 +6,7 @@
 #include "exporter.h"
 #include "kokoro.h"
 #include "library.h"
+#include "pronunciation.h"
 #include "qwen.h"
 #include "synthesizer.h"
 #include "voicesettings.h"
@@ -252,7 +253,8 @@ int text(const QStringList &arguments) {
     command.parser.addPositionalArgument("book", "The book file");
     command.parser.addOption({"chapter", "Only this chapter, counting from 1", "number"});
     command.parser.addOption({"spoken", "The text as the voice reads it: without footnotes, citation markers, "
-                                        "links and other clutter, one sentence per line"});
+                                        "links and other clutter, with your pronunciations respelled, one sentence "
+                                        "per line"});
     command.json();
     if (!command.parse(arguments))
         return command.parser.isSet("help") ? 0 : 1;
@@ -275,13 +277,14 @@ int text(const QStringList &arguments) {
     if (command.parser.isSet("spoken")) {
         const int first = book->chapterFirstSentence.at(from);
         const int last = to < book->chapters.size() ? book->chapterFirstSentence.at(to) : book->sentenceCount();
+        const Lexicon lexicon = Lexicon::load();
         QJsonArray sentences;
         int paragraph = -1, chapter = from;
         for (int s = first; s < last; ++s) {
             if (!book->sentences.at(s).speakable())
                 continue;
             const Sentence &sentence = book->sentences.at(s);
-            const QString text = book->sentenceText(s);
+            const QString text = Pronounce::utterance(*book, s, lexicon).text;
             if (command.parser.isSet("json")) {
                 sentences.append(QJsonObject{{"chapter", sentence.chapter + 1}, {"text", text}});
                 continue;
@@ -613,6 +616,49 @@ QString noDictionaries() {
            "English to Portuguese; omareader dictionaries --available lists them all.";
 }
 
+int pronounce(const QStringList &arguments) {
+    Command command("pronounce", "List, add or remove how names and terms are said when reading aloud.");
+    command.parser.addPositionalArgument("written", "The word or phrase as books write it", "[written");
+    command.parser.addPositionalArgument("spoken", "How it sounds, spelled out, such as Her-my-oh-nee", "spoken]");
+    command.parser.addOption({"remove", "Forget how this word or phrase is said", "written"});
+    command.json();
+    if (!command.parse(arguments))
+        return command.parser.isSet("help") ? 0 : 1;
+    const QStringList positional = command.parser.positionalArguments();
+    Lexicon lexicon = Lexicon::load();
+    if (command.parser.isSet("remove")) {
+        if (!positional.isEmpty())
+            return fail("Use: omareader pronounce --remove <written>");
+        const QString written = command.parser.value("remove");
+        if (!lexicon.remove(written))
+            return fail(QString("No pronunciation is saved for \"%1\".").arg(written));
+        if (!lexicon.save())
+            return fail("Could not save " + Lexicon::defaultFile());
+    } else if (positional.size() == 2) {
+        if (!lexicon.set(positional.at(0), positional.at(1)))
+            return fail("Both the written form and how it sounds need a letter or a digit, and the written form "
+                        "at most six words.");
+        if (!lexicon.save())
+            return fail("Could not save " + Lexicon::defaultFile());
+    } else if (!positional.isEmpty()) {
+        return fail("Use: omareader pronounce [<written> <spoken>] [--remove <written>] [--json]");
+    }
+
+    Pronunciations list(Lexicon::defaultFile());
+    if (command.parser.isSet("json")) {
+        QJsonArray entries;
+        for (const QVariant &entry : list.entries())
+            entries.append(QJsonObject::fromVariantMap(entry.toMap()));
+        printJson({{"file", Lexicon::defaultFile()}, {"entries", entries}});
+        return 0;
+    }
+    for (const QVariant &entry : list.entries()) {
+        const QVariantMap map = entry.toMap();
+        out() << map.value("written").toString() << "\t" << map.value("spoken").toString() << Qt::endl;
+    }
+    return 0;
+}
+
 int lookupWord(const QStringList &arguments) {
     Command command("lookup", "Look a word up in the installed dictionaries, offline.");
     command.parser.addPositionalArgument("word", "The word, or a phrase such as \"a lot of\"");
@@ -790,6 +836,7 @@ QString usage() {
            "  doctor [--engine E] [--json]    Check that read-aloud is ready, with hardware advice\n"
            "  lookup <word> [--json]          Look a word up in the installed dictionaries\n"
            "  dictionaries [--available]      List the installed dictionaries, or those setup can add\n"
+           "  pronounce [written spoken]      List or teach how names and terms are said (--remove W)\n"
            "  setup [--engine kokoro|qwen]    Install a voice engine and its models (uses the network)\n"
            "  setup --dictionary eng-por      Install a FreeDict dictionary (uses the network)\n"
            "  voices [--engine E] [--json]    List an engine's voices, languages and tuning\n"
@@ -798,7 +845,7 @@ QString usage() {
 }
 
 bool isCommand(const QString &word) {
-    return QStringList{"info", "text", "notes", "export", "fetch", "doctor", "setup", "voices", "lookup", "dictionaries", "skill", "help", "--help", "-h", "version", "--version"}
+    return QStringList{"info", "text", "notes", "export", "fetch", "doctor", "setup", "voices", "lookup", "dictionaries", "pronounce", "skill", "help", "--help", "-h", "version", "--version"}
         .contains(word);
 }
 
@@ -815,6 +862,7 @@ int run(const QStringList &arguments) {
     if (command == "voices") return voices(rest);
     if (command == "lookup") return lookupWord(rest);
     if (command == "dictionaries") return dictionaries(rest);
+    if (command == "pronounce") return pronounce(rest);
     if (command == "skill") return skill(rest);
     if (command == "version" || command == "--version") {
         out() << "omareader " << QCoreApplication::applicationVersion() << Qt::endl;

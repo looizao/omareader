@@ -3,13 +3,17 @@ import QtQuick.Controls
 import QtQuick.Controls.Material
 import QtQuick.Layouts
 
-// The engine, its voice, speed and tuning, and how the page looks.
+// The engine, its voice, speed and tuning, how names are said, and how
+// the page looks.
 Drawer {
     id: panel
     edge: Qt.RightEdge
     width: Math.min(400, parent ? parent.width * 0.85 : 400)
     Material.roundedScale: theme.radius
     background: Rectangle { color: Colors.surface }
+
+    // Where a pronunciation is added or changed.
+    property var pronunciationEditor: null
 
     onOpened: engine.forceActiveFocus()
 
@@ -296,6 +300,73 @@ Drawer {
                         onClicked: narrator.refreshSetup()
                     }
                 }
+            }
+
+            // How names and terms are said: the respellings the voice uses.
+            Label {
+                Layout.margins: 16
+                Layout.topMargin: 24
+                Layout.bottomMargin: 4
+                text: qsTr("Pronunciation")
+                font.pixelSize: 20
+                font.family: "serif"
+                color: Colors.text
+            }
+            Label {
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                text: pronunciations.count === 0
+                      ? qsTr("When the voice says a name or a term wrong, spell it the way it sounds. Press P on a word, or select a phrase, to start from the page.")
+                      : qsTr("The voice says these as spelled on the right, reading aloud and in exports. Click one to change it.")
+                wrapMode: Text.Wrap
+                font.pixelSize: 12
+                color: Colors.muted
+            }
+            Repeater {
+                model: pronunciations.entries
+                delegate: ItemDelegate {
+                    id: entry
+                    objectName: "pronunciationRow"
+                    required property var modelData
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 8
+                    Layout.rightMargin: 8
+                    implicitHeight: 40
+                    leftPadding: 8
+                    rightPadding: 8
+                    onClicked: if (panel.pronunciationEditor) panel.pronunciationEditor.edit(modelData.written)
+                    contentItem: RowLayout {
+                        spacing: 10
+                        Label {
+                            objectName: "pronunciationWrittenLabel"
+                            Layout.maximumWidth: entry.availableWidth * 0.45
+                            text: entry.modelData.written
+                            textFormat: Text.PlainText
+                            elide: Text.ElideRight
+                            color: Colors.text
+                        }
+                        Label {
+                            text: "→"
+                            color: Colors.muted
+                        }
+                        Label {
+                            objectName: "pronunciationSpokenLabel"
+                            Layout.fillWidth: true
+                            text: entry.modelData.spoken
+                            textFormat: Text.PlainText
+                            elide: Text.ElideRight
+                            color: theme.accent
+                        }
+                    }
+                }
+            }
+            Button {
+                objectName: "addPronunciation"
+                Layout.leftMargin: 8
+                flat: true
+                text: qsTr("Add a word")
+                onClicked: if (panel.pronunciationEditor) panel.pronunciationEditor.edit("")
             }
 
             Label {

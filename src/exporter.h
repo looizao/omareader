@@ -43,7 +43,7 @@ public:
     struct Options {
         // The engine, voice, speed and tuning, copied when the export starts:
         // changing the voice afterwards doesn't change an export under way.
-        SynthesisOptions synthesis{VoiceSettings::recommended(Engine::Kokoro), {}, {}};
+        SynthesisOptions synthesis{VoiceSettings::recommended(Engine::Kokoro), {}, {}, {}};
         Layout layout = SingleFile;
         Format format = Mp3;
         QString folder;    // where the file or the book's folder goes

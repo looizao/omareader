@@ -360,7 +360,7 @@ void Exporter::startTrack() {
     }
     QList<Synthesizer::Line> lines;
     for (const int sentence : std::as_const(m_tracks.at(m_track).sentences))
-        lines.append({sentence, m_book->sentenceText(sentence)});
+        lines.append({sentence, Pronounce::utterance(*m_book, sentence, m_options.synthesis.lexicon).text});
     m_synth->start(m_options.synthesis, lines);
 }
 

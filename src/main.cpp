@@ -17,6 +17,7 @@
 #include "library.h"
 #include "narrator.h"
 #include "portalfilepicker.h"
+#include "pronunciation.h"
 #include "reader.h"
 #include "theme.h"
 #include "titleagent.h"
@@ -65,6 +66,7 @@ int main(int argc, char *argv[]) {
     TitleAgent titleAgent;
     WebImport webImport;
     WordLookup lookup;
+    Pronunciations pronunciations;
 
     qmlRegisterType<ReadingHighlight>("Omareader", 1, 0, "ReadingHighlight");
     qmlRegisterUncreatableType<Narrator>("Omareader", 1, 0, "Narrator", "Use the narrator context property.");
@@ -82,6 +84,7 @@ int main(int argc, char *argv[]) {
     engine.rootContext()->setContextProperty("titleAgent", &titleAgent);
     engine.rootContext()->setContextProperty("webImport", &webImport);
     engine.rootContext()->setContextProperty("lookup", &lookup);
+    engine.rootContext()->setContextProperty("pronunciations", &pronunciations);
     engine.load(QUrl("qrc:/Main.qml"));
     if (engine.rootObjects().isEmpty())
         return 1;

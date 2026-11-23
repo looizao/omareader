@@ -177,6 +177,9 @@ public:
     // Speaks a short sample with the current engine, voice and tuning,
     // pausing the narration first.
     Q_INVOKABLE void preview();
+    // Says these words with the current voice, as a preview: how a
+    // respelling sounds before it is saved.
+    Q_INVOKABLE void previewText(const QString &text);
     Q_INVOKABLE void stopPreview();
     // Pauses the narration after this many minutes of listening (0 turns
     // the timer off), or where the chapter being heard ends.
@@ -267,6 +270,7 @@ private:
     int m_word = -1;
     double m_wordSeconds = 0;
     int m_runEnd = 0;
+    Lexicon m_runLexicon;
     int m_nextToAppend = 0;
     QHash<int, Ready> m_ready;
     QSet<int> m_failed;

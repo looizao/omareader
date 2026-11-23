@@ -28,6 +28,7 @@
         <file alias="setup-dictionary.sh">setup-dictionary.sh</file>
         <file alias="dictionaries.tsv">dictionaries.tsv</file>
         <file alias="WordCard.qml">WordCard.qml</file>
+        <file alias="PronunciationEditor.qml">PronunciationEditor.qml</file>
         <file alias="qwen-worker.py">qwen-worker.py</file>
         <file alias="i18n/en.json">i18n/en.json</file>
         <file alias="i18n/pt-BR.json">i18n/pt-BR.json</file>

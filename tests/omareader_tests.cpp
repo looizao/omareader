@@ -44,6 +44,7 @@
 #include "fixtures.h"
 #include "highlight.h"
 #include "kokoro.h"
+#include "pronunciation.h"
 #include "library.h"
 #include "narrator.h"
 #include "qwen.h"
@@ -63,7 +64,8 @@ class AppWindow {
 public:
     AppWindow(const QString &dir)
         : library(dir + "/library.json", dir + "/covers"), reader(&library, &narrator, nullptr),
-          annotations(dir + "/annotations", "this-computer"), lookup(QStringList{dir + "/dictionaries"}) {
+          annotations(dir + "/annotations", "this-computer"), lookup(QStringList{dir + "/dictionaries"}),
+          pronunciations(dir + "/pronunciations.json") {
         reader.setExporter(&exporter);
         reader.setAnnotations(&annotations);
         qmlRegisterType<ReadingHighlight>("Omareader", 1, 0, "ReadingHighlight");
@@ -81,6 +83,7 @@ public:
         context->setContextProperty("titleAgent", &titleAgent);
         context->setContextProperty("webImport", &webImport);
         context->setContextProperty("lookup", &lookup);
+        context->setContextProperty("pronunciations", &pronunciations);
     }
 
     bool show(QSize size = {1100, 720}) {
@@ -135,6 +138,7 @@ public:
     TitleAgent titleAgent;
     WebImport webImport;
     WordLookup lookup;
+    Pronunciations pronunciations;
     QQmlApplicationEngine engine;
     QQuickWindow *window = nullptr;
 };
@@ -367,6 +371,145 @@ private slots:
                  QString("Write to support@example.com for help."),
                  QString("Keep server:443 open, at a ratio of 3:1.")})
             QVERIFY2(Text::clutter(text, true).isEmpty(), qPrintable(text + " → " + clutterIn(text, true).join(" | ")));
+    }
+
+    // Pronunciations: respellings the voice says in place of the written words.
+
+    void lexiconMatchesWholeWordsAndKeepsCapitalsApart() {
+        Lexicon lexicon;
+        QVERIFY(lexicon.set("Hermione", "Her-my-oh-nee"));
+        QVERIFY(lexicon.set("US", "you ess"));
+        QVERIFY(lexicon.set("New York", "Noo York"));
+        QVERIFY(lexicon.set("New York City", "the big apple"));
+        QVERIFY(lexicon.set("Ender's", "Ender-z"));
+        auto said = [&](const QString &text) {
+            QString out = text;
+            const auto found = lexicon.find(text);
+            for (int i = int(found.size()) - 1; i >= 0; --i)
+                out.replace(found[i].start, found[i].end - found[i].start, found[i].spoken);
+            return out;
+        };
+        // Any case, whole words only, and a possessive keeps its ending.
+        QCOMPARE(said("HERMIONE and hermione's cat"), QString("Her-my-oh-nee and Her-my-oh-nee's cat"));
+        QCOMPARE(said("Hermiones and xHermione"), QString("Hermiones and xHermione"));
+        // An entry in capitals leaves the ordinary word alone.
+        QCOMPARE(said("Tell us about the US."), QString("Tell us about the you ess."));
+        // The longest entry wins, and a phrase may break across lines.
+        QCOMPARE(said("New York City, New\nYork"), QString("the big apple, Noo York"));
+        // Either apostrophe matches.
+        QCOMPARE(said("Ender’s Game"), QString("Ender-z Game"));
+        QVERIFY(lexicon.find("nothing here").isEmpty());
+        QVERIFY(Lexicon().find("Hermione").isEmpty());
+    }
+
+    void lexiconKeepsOneEntryPerWordAndSavesIt() {
+        QTemporaryDir dir;
+        const QString file = dir.filePath("sub/pronunciations.json");
+        Lexicon lexicon;
+        QVERIFY(lexicon.set("  Saoirse   Ronan ", "Sur-sha Ronan"));
+        QCOMPARE(lexicon.entries().first().written, QString("Saoirse Ronan"));
+        // The same word in another case replaces it; capitals are their own.
+        QVERIFY(lexicon.set("kubectl", "cube control"));
+        QVERIFY(lexicon.set("Kubectl", "cube cuddle"));
+        QVERIFY(lexicon.set("SQL", "sequel"));
+        QVERIFY(lexicon.set("sql", "squeal"));
+        QCOMPARE(lexicon.entries().size(), 4);
+        QCOMPARE(lexicon.entries().value(lexicon.indexOf("kubectl")).spoken, QString("cube cuddle"));
+        QCOMPARE(lexicon.entries().value(lexicon.indexOf("SQL")).spoken, QString("sequel"));
+        QCOMPARE(lexicon.entries().value(lexicon.indexOf("sql")).spoken, QString("squeal"));
+        QCOMPARE(lexicon.indexOf("KUBECTL"), -1); // in capitals, it would be an entry of its own
+        // Each side needs something to say.
+        QVERIFY(!lexicon.set("", "x"));
+        QVERIFY(!lexicon.set("word", " ... "));
+        QVERIFY(!lexicon.set("one two three four five six seven", "x"));
+        QVERIFY(lexicon.save(file));
+        Lexicon loaded = Lexicon::load(file);
+        QCOMPARE(loaded.entries().size(), 4);
+        QVERIFY(loaded.remove("sql"));
+        QVERIFY(!loaded.remove("sql"));
+        QCOMPARE(loaded.find("SQL and sql").size(), 1);
+        QVERIFY(Lexicon::load(dir.filePath("missing.json")).isEmpty());
+
+        // The window's list reads the file again before each change, so an
+        // entry added from the command line meanwhile is kept.
+        Pronunciations list(file);
+        QSignalSpy changed(&list, &Pronunciations::changed);
+        QCOMPARE(list.count(), 4);
+        Lexicon outside = Lexicon::load(file);
+        outside.set("Nguyen", "Win");
+        QVERIFY(outside.save(file));
+        QVERIFY(list.set("Hermione", "Her-my-oh-nee"));
+        QCOMPARE(list.count(), 6);
+        QCOMPARE(list.spokenFor("nguyen"), QString("Win"));
+        // Editing an entry under a new written form replaces it.
+        QVERIFY(list.set("Hermione Granger", "Her-my-oh-nee Granger", "Hermione"));
+        QCOMPARE(list.spokenFor("Hermione"), QString());
+        QCOMPARE(list.count(), 6);
+        QVERIFY(list.remove("Hermione Granger"));
+        QVERIFY(!list.set("x", ""));
+        QCOMPARE(changed.size(), 3);
+        const QVariantList entries = list.entries();
+        QCOMPARE(entries.first().toMap().value("written").toString(), QString("Kubectl"));
+        QCOMPARE(Lexicon::load(file).entries().size(), 5);
+    }
+
+    void utteranceRespellsTheTextAndKeepsThePageWords() {
+        Book book;
+        book.format = "pdf";
+        const QString text = "Hermione’s wand [12] met the US Navy in New York City today.";
+        book.chapters = {{"One", {{text, 0}, {"Nothing to respell here.", 0}}}};
+        book.segment();
+        Lexicon lexicon;
+        lexicon.set("Hermione", "Her my oh nee");
+        lexicon.set("US", "you ess");
+        lexicon.set("New York City", "Gotham");
+        const Utterance u = Pronounce::utterance(book, 0, lexicon);
+        // The citation is still left out, and the respellings are in.
+        QCOMPARE(u.text, QString("Her my oh nee’s wand met the you ess Navy in Gotham today."));
+        QCOMPARE(u.words, (QStringList{"Her", "my", "oh", "nee’s", "wand", "met", "the", "you", "ess", "Navy",
+                                       "in", "Gotham", "today"}));
+        const QStringList page = book.sentenceWords(0);
+        QCOMPARE(page, (QStringList{"Hermione’s", "wand", "met", "the", "US", "Navy", "in", "New", "York", "City", "today"}));
+        QCOMPARE(u.heard.size(), page.size());
+        QCOMPARE(u.heard.at(0), qMakePair(0, 3));  // Hermione's is heard as four words
+        QCOMPARE(u.heard.at(1), qMakePair(4, 4));
+        QCOMPARE(u.heard.at(4), qMakePair(7, 8));  // US
+        QCOMPARE(u.heard.at(7), qMakePair(11, 11)); // New York City, all three as one word
+        QCOMPARE(u.heard.at(9), qMakePair(11, 11));
+        QCOMPARE(u.heard.at(10), qMakePair(12, 12));
+        // Without a match, or a lexicon, the sentence is said as written.
+        const Utterance plain = Pronounce::utterance(book, 1, lexicon);
+        QCOMPARE(plain.text, book.sentenceText(1));
+        QCOMPARE(plain.words, book.sentenceWords(1));
+        QCOMPARE(Pronounce::utterance(book, 0, Lexicon()).text, book.sentenceText(0));
+        QVERIFY(Pronounce::utterance(book, 9, lexicon).words.isEmpty());
+    }
+
+    void pronunciationTimingsLightThePageWords() {
+        Book book;
+        book.chapters = {{"One", {{"Ask Hermione in New York now.", 0}}}};
+        book.segment();
+        Lexicon lexicon;
+        lexicon.set("Hermione", "Her-my-oh-nee");
+        lexicon.set("New York", "Gotham");
+        const Utterance u = Pronounce::utterance(book, 0, lexicon);
+        QCOMPARE(u.text, QString("Ask Her-my-oh-nee in Gotham now."));
+        // The engine reports the respelling in pieces; the page word is lit
+        // from the first to the last.
+        const QList<SpokenWord> spoken{{"Ask", 0.0, 0.3}, {"Her", 0.3, 0.5}, {"my", 0.5, 0.7}, {"oh", 0.7, 0.8},
+                                       {"nee", 0.8, 1.0}, {"in", 1.0, 1.2}, {"Gotham", 1.2, 1.8}, {"now", 1.8, 2.0}};
+        const QStringList page = book.sentenceWords(0);
+        const auto timings = Pronounce::timings(u, page, spoken, 2.0);
+        QCOMPARE(timings.size(), page.size());
+        QCOMPARE(timings[0].start, 0.0);
+        QCOMPARE(timings[1].start, 0.3);
+        QCOMPARE(timings[1].end, 1.0);
+        QCOMPARE(timings[2].start, 1.0);
+        // "New York" shares Gotham's time by length: 4 to 5.
+        QCOMPARE(timings[3].start, 1.2);
+        QVERIFY(qAbs(timings[3].end - (1.2 + 0.6 * 4 / 9)) < 1e-9);
+        QCOMPARE(timings[4].end, 1.8);
+        QCOMPARE(timings[5].start, 1.8);
     }
 
     void clutterIsShownButNotRead() {
@@ -1803,6 +1946,49 @@ private slots:
         QSettings().remove("voice");
     }
 
+    void narratorSaysTheRespellings() {
+        QSettings().remove("voice");
+        QTemporaryDir dir;
+        const QString spoken = dir.filePath("spoken.txt");
+        qputenv("FAKE_KOKO_TEXT", spoken.toUtf8());
+        Lexicon lexicon;
+        lexicon.set("Hermione", "Her-my-oh-nee");
+        QVERIFY(lexicon.save());
+        Narrator narrator;
+        narrator.setOverrides(fakeKoko(dir).binary, dir.path());
+        Book book;
+        book.chapters = {{"One", {{"Hermione waved. Then she left.", 0}}}};
+        book.segment();
+        narrator.setBook(std::make_shared<Book>(book));
+        // The export gets the pronunciations along with the voice.
+        QCOMPARE(narrator.synthesisOptions().lexicon.entries().size(), 1);
+        QFile file(spoken);
+        auto heard = [&] {
+            const QStringList lines = file.open(QIODevice::ReadOnly)
+                                          ? QString::fromUtf8(file.readAll()).trimmed().split('\n') : QStringList();
+            file.close();
+            file.remove();
+            return lines;
+        };
+        // A respelling is heard as it is, before it is saved.
+        narrator.previewText("  Her-my-oh-nee ");
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo(spoken).size() > 0, 10000);
+        narrator.stopPreview();
+        QCOMPARE(heard(), QStringList{"Her-my-oh-nee"});
+        narrator.play(0);
+        const bool playing = narrator.state() != Narrator::Stopped; // no audio output here otherwise
+        if (playing)
+            QTRY_VERIFY_WITH_TIMEOUT(QFileInfo(spoken).size() > 0, 10000);
+        narrator.stop();
+        unsetenv("FAKE_KOKO_TEXT");
+        QFile::remove(Lexicon::defaultFile());
+        narrator.setOverrides({}, {});
+        QSettings().remove("voice");
+        if (!playing)
+            QSKIP("There is no audio output to read aloud through.");
+        QCOMPARE(heard(), (QStringList{"Her-my-oh-nee waved.", "Then she left."}));
+    }
+
     void narratorHandsExportsACopyOfItsVoice() {
         QSettings().remove("voice");
         Narrator narrator;
@@ -2020,6 +2206,34 @@ private slots:
         QVERIFY(file.open(QIODevice::ReadOnly));
         QCOMPARE(QString::fromUtf8(file.readAll()).trimmed().split('\n'),
                  (QStringList{"It helps.", "Read more at today.", "The end."}));
+    }
+
+    void exportSaysTheRespellings() {
+        if (Exporter::findFfmpeg().isEmpty())
+            QSKIP("ffmpeg is not installed");
+        QTemporaryDir dir;
+        const QString spoken = dir.filePath("spoken.txt");
+        qputenv("FAKE_KOKO_TEXT", spoken.toUtf8());
+        write(dir.filePath("a.txt"), "names");
+        Book book;
+        book.path = dir.filePath("a.txt");
+        book.title = "Names";
+        book.chapters = {{"One", {{"Kubectl talks to Kubernetes.", 0}, {"The end.", 0}}}};
+        book.segment();
+        Exporter exporter;
+        QSignalSpy finished(&exporter, &Exporter::finished);
+        Exporter::Options options;
+        options.synthesis.kokoro = fakeKoko(dir);
+        options.synthesis.lexicon.set("kubectl", "cube control");
+        options.folder = dir.filePath("out");
+        QVERIFY(exporter.start(std::make_shared<Book>(book), options));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 20000);
+        unsetenv("FAKE_KOKO_TEXT");
+        QVERIFY2(finished.first().at(0).toBool(), qPrintable(finished.first().at(1).toString()));
+        QFile file(spoken);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QCOMPARE(QString::fromUtf8(file.readAll()).trimmed().split('\n'),
+                 (QStringList{"cube control talks to Kubernetes.", "The end."}));
     }
 
     void exportKeepsTheSettingsItStartedWith() {
@@ -4811,6 +5025,107 @@ private slots:
         QTest::keyClick(app.window, Qt::Key_Escape);
         QTRY_VERIFY(!dialog->property("opened").toBool());
         QCOMPARE(app.library.count(), 1);
+    }
+
+    void pronunciationIsFixedFromThePageAndListedInTheVoicePanel() {
+        QSettings().remove("reader");
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        QVERIFY(app.show());
+        QVERIFY(app.reader.addText("Names", "Hermione waved at the crowd from the steps of the old library."));
+        QTRY_COMPARE(app.items("bookParagraph").size(), 1);
+        QQuickItem *paragraph = app.items("bookParagraph").first();
+        auto at = [&](int position) {
+            QVariant rect;
+            QMetaObject::invokeMethod(paragraph, "rectFor", Q_RETURN_ARG(QVariant, rect), Q_ARG(QVariant, position));
+            const QRectF r = paragraph->mapRectToScene(rect.toRectF());
+            return QPoint(int(r.center().x()), int(r.center().y()));
+        };
+        QObject *editor = app.window->findChild<QObject *>("pronunciationEditor");
+        QVERIFY(editor);
+
+        // P on the word under the mouse opens it for that word, ready for
+        // how it sounds.
+        QTest::mouseMove(app.window, at(3));
+        QTest::qWait(100);
+        QTest::keyClick(app.window, Qt::Key_P);
+        QTRY_VERIFY(editor->property("opened").toBool());
+        QQuickItem *written = app.items("pronunciationWritten").value(0);
+        QQuickItem *spoken = app.items("pronunciationSpoken").value(0);
+        QVERIFY(written && spoken);
+        QCOMPARE(written->property("text").toString(), QString("Hermione"));
+        QTRY_VERIFY(spoken->hasActiveFocus());
+        QVERIFY(app.items("removePronunciation").isEmpty());
+        for (const char c : QByteArray("Her-my-oh-nee"))
+            QTest::keyClick(app.window, c);
+        QImage shot = app.grab("pronunciation-editor");
+        // Both fields are drawn with their text, light on dark.
+        QVERIFY2(brightPixels(shot, app.area(shot, written)) > 80, "the written form isn't drawn");
+        QVERIFY2(brightPixels(shot, app.area(shot, spoken)) > 80, "the respelling isn't drawn");
+        // Typing in it doesn't reach the reader's keys: S didn't stop, A didn't open the panel.
+        QObject *settings = app.window->findChild<QObject *>("settingsPanel");
+        QVERIFY(!settings->property("opened").toBool());
+        QTest::keyClick(app.window, Qt::Key_Return);
+        QTRY_VERIFY(!editor->property("opened").toBool());
+        QCOMPARE(app.pronunciations.spokenFor("hermione"), QString("Her-my-oh-nee"));
+        QTRY_VERIFY(!editor->property("visible").toBool());
+
+        // The voice panel lists it, the respelling in the accent.
+        QTest::keyClick(app.window, Qt::Key_A);
+        QTRY_VERIFY(settings->property("opened").toBool());
+        QTRY_COMPARE(app.items("pronunciationRow").size(), 1);
+        QQuickItem *row = app.items("pronunciationRow").first();
+        QMetaObject::invokeMethod(settings, "forceActiveFocus");
+        // Brought into view, as a reader scrolls to it.
+        QQuickItem *flick = row->parentItem() ? row->parentItem()->parentItem() : nullptr;
+        if (flick && flick->property("contentY").isValid())
+            flick->setProperty("contentY", qMax(0.0, row->y() - 100));
+        shot = app.grab("pronunciation-list");
+        QQuickItem *saidLabel = app.items("pronunciationSpokenLabel").first();
+        QQuickItem *writtenLabel = app.items("pronunciationWrittenLabel").first();
+        const QRect said = app.area(shot, saidLabel).intersected(shot.rect());
+        int accent = 0;
+        for (int y = said.top(); y <= said.bottom(); ++y)
+            for (int x = said.left(); x <= said.right(); ++x) {
+                const QColor c = shot.pixelColor(x, y);
+                accent += c.red() > 200 && c.green() > 170 && c.blue() < 80;
+            }
+        QVERIFY2(accent > 30, qPrintable(QString("%1 accent pixels in the respelling").arg(accent)));
+        QVERIFY2(brightPixels(shot, app.area(shot, writtenLabel).intersected(shot.rect())) > 30,
+                 "the written form isn't drawn in the list");
+
+        // Clicking it opens it again, now with a way to remove it.
+        const QPointF centre = row->mapToScene(QPointF(row->width() / 2, row->height() / 2));
+        QTest::mouseClick(app.window, Qt::LeftButton, {}, centre.toPoint());
+        QTRY_VERIFY(editor->property("opened").toBool());
+        QCOMPARE(app.items("pronunciationSpoken").first()->property("text").toString(), QString("Her-my-oh-nee"));
+        QTRY_COMPARE(app.items("removePronunciation").size(), 1);
+        app.grab("pronunciation-editor-existing");
+        QQuickItem *remove = app.items("removePronunciation").first();
+        QTest::mouseClick(app.window, Qt::LeftButton, {},
+                          remove->mapToScene(QPointF(remove->width() / 2, remove->height() / 2)).toPoint());
+        QTRY_VERIFY(!editor->property("opened").toBool());
+        QCOMPARE(app.pronunciations.count(), 0);
+        QTRY_COMPARE(app.items("pronunciationRow").size(), 0);
+        QTest::keyClick(app.window, Qt::Key_Escape);
+        QTRY_VERIFY(!settings->property("visible").toBool());
+
+        // The word card offers it too, for the word looked up.
+        QTest::mouseClick(app.window, Qt::RightButton, {}, at(3));
+        QObject *card = app.window->findChild<QObject *>("wordCard");
+        QTRY_VERIFY(card->property("opened").toBool());
+        QTRY_COMPARE(app.items("wordCardPronounce").size(), 1);
+        QQuickItem *fix = app.items("wordCardPronounce").first();
+        shot = app.grab("word-card-pronounce");
+        QVERIFY2(brightPixels(shot, app.area(shot, fix).intersected(shot.rect()), 120) > 30, "the button isn't drawn");
+        QTest::mouseClick(app.window, Qt::LeftButton, {},
+                          fix->mapToScene(QPointF(fix->width() / 2, fix->height() / 2)).toPoint());
+        QTRY_VERIFY(editor->property("opened").toBool());
+        QTRY_VERIFY(!card->property("opened").toBool());
+        QCOMPARE(app.items("pronunciationWritten").first()->property("text").toString().toLower(), QString("hermione"));
+        QTest::keyClick(app.window, Qt::Key_Escape);
+        QTRY_VERIFY(!editor->property("opened").toBool());
+        QCOMPARE(app.pronunciations.count(), 0);
     }
 
     void wordCardShowsWhatTheDictionariesSay() {
