@@ -128,10 +128,17 @@ KokoroRunner::KokoroRunner(QObject *parent) : QObject(parent) {
             m_errorBuffer.clear();
             return;
         }
+        const quint64 run = m_run;
         readStandardError();
-        if (!m_errorBuffer.isEmpty())
-            handleLine(QString::fromUtf8(m_errorBuffer));
-        m_errorBuffer.clear();
+        if (run != m_run)
+            return;
+        if (!m_errorBuffer.isEmpty()) {
+            const QString last = QString::fromUtf8(m_errorBuffer);
+            m_errorBuffer.clear();
+            handleLine(last);
+            if (run != m_run)
+                return;
+        }
         const bool ok = status == QProcess::NormalExit && code == 0;
         emit finished(ok, ok ? QString()
                              : tr("Kokoros stopped unexpectedly (exit code %1). %2")
@@ -160,6 +167,7 @@ QStringList KokoroRunner::arguments(const Options &options, const QString &input
 
 bool KokoroRunner::start(const Options &options, const QList<Line> &lines) {
     stop();
+    ++m_run;
     m_stopping = false;
     m_recentErrors.clear();
     m_ids.clear();
@@ -232,10 +240,15 @@ void KokoroRunner::readStandardError() {
         m_errorBuffer.clear();
         return;
     }
+    const quint64 run = m_run;
     int newline;
     while ((newline = int(m_errorBuffer.indexOf('\n'))) >= 0) {
-        handleLine(QString::fromUtf8(m_errorBuffer.left(newline)));
+        const QString line = QString::fromUtf8(m_errorBuffer.left(newline));
         m_errorBuffer.remove(0, newline + 1);
+        handleLine(line);
+        // A consumer stopped or replaced the run: the rest isn't its.
+        if (run != m_run || m_stopping)
+            return;
     }
 }
 

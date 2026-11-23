@@ -83,6 +83,23 @@ bool closes(const QString &t, int i, QChar open, QChar closer) {
     return c == closer;
 }
 
+// Whether an apostrophe that could close a single quotation at i is more
+// likely a plural possessive ("the dogs’ bowls"), because a closing mark
+// after punctuation, as speech ends, comes later before any new quotation.
+bool closesLater(const QString &t, int i, QChar open, QChar closer, Marks marks) {
+    if (closer != RightSingle && closer != '\'')
+        return false;
+    if (i == 0 || !t.at(i - 1).isLetterOrNumber())
+        return false;
+    for (int j = i + 1; j < t.size(); ++j) {
+        if (!closerFor(t, j, marks).isNull())
+            return false;
+        if (closes(t, j, open, closer) && !t.at(j - 1).isLetterOrNumber())
+            return true;
+    }
+    return false;
+}
+
 // Straight marks and single quotes are also apostrophes, inches and feet,
 // so a quotation they open is only believed once it closes.
 bool ambiguous(QChar open) { return open == '"' || open == '\'' || open == LeftSingle || open == RightDouble; }
@@ -197,7 +214,7 @@ QList<QList<Range>> find(const QList<Paragraph> &paragraphs) {
         }
         for (; i < t.size(); ++i) {
             if (open) {
-                if (closes(t, i, opener, closer)) {
+                if (closes(t, i, opener, closer) && !closesLater(t, i, opener, closer, marks)) {
                     // Both apostrophes of a '' close.
                     if (t.at(i) == '\'' && closer != '\'')
                         ++i;

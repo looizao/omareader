@@ -299,7 +299,7 @@ qint64 silentFrames(const Audio &audio, bool atEnd) {
 }
 }
 
-SpokenSentence DialogueSynthesizer::join(const QList<SpokenSentence> &pieces) {
+SpokenSentence DialogueSynthesizer::join(const QList<SpokenSentence> &pieces, bool spreadTimes) {
     SpokenSentence whole;
     whole.audio.sampleRate = SampleRate;
     double offset = 0;
@@ -316,13 +316,15 @@ SpokenSentence DialogueSynthesizer::join(const QList<SpokenSentence> &pieces) {
             from = to = 0;
         }
         whole.audio.samples += audio.samples.mid(from * qint64(sizeof(float)), (to - from) * qint64(sizeof(float)));
-        // Engines spread their word times over the whole run, silence
-        // included, so the times are spread over what is kept instead.
         const double length = double(to - from) / SampleRate;
         const double scale = frames > 0 ? double(to - from) / frames : 0;
+        const double cut = double(from) / SampleRate;
+        auto moved = [&](double time) {
+            return offset + qBound(0.0, spreadTimes ? time * scale : time - cut, length);
+        };
         for (SpokenWord word : pieces.at(i).words) {
-            word.start = offset + qBound(0.0, word.start * scale, length);
-            word.end = offset + qBound(0.0, word.end * scale, length);
+            word.start = moved(word.start);
+            word.end = moved(word.end);
             whole.words.append(word);
         }
         offset += length;
@@ -384,6 +386,9 @@ void DialogueSynthesizer::stop() {
     m_spoken.clear();
     m_failed.clear();
     m_running = false;
+    // A hold belongs to the run it was asked for; the next run starts free,
+    // as the engines' own runs do, or both voices could wait for good.
+    m_held = false;
 }
 
 void DialogueSynthesizer::setHeld(bool held) {
@@ -416,7 +421,8 @@ void DialogueSynthesizer::onReady(int voice, int piece, const SpokenSentence &se
 void DialogueSynthesizer::onFailed(int voice, int piece, const QString &message) {
     if (!m_running || !m_waiting[voice].removeOne(piece))
         return;
-    m_failed.insert(piece, message);
+    // Kokoros may give no reason ("No audio produced for line 3").
+    m_failed.insert(piece, message.isEmpty() ? tr("The voice produced no audio.") : message);
     if (deliverDone())
         balance();
 }
@@ -455,11 +461,12 @@ bool DialogueSynthesizer::deliverDone() {
     while (m_next < m_lines.size()) {
         const Pending &line = m_lines.at(m_next);
         QString failure;
-        bool waiting = false;
+        bool failed = false, waiting = false;
         for (const int piece : line.pieces) {
             if (m_failed.contains(piece)) {
-                if (failure.isEmpty())
+                if (!failed)
                     failure = m_failed.value(piece);
+                failed = true;
             } else if (!m_spoken.contains(piece)) {
                 waiting = true;
             }
@@ -471,7 +478,7 @@ bool DialogueSynthesizer::deliverDone() {
         const int id = line.id;
         const QList<int> pieces = line.pieces;
         ++m_next;
-        if (!failure.isEmpty()) {
+        if (failed) {
             for (const int piece : pieces) {
                 m_spoken.remove(piece);
                 m_failed.remove(piece);
@@ -481,7 +488,7 @@ bool DialogueSynthesizer::deliverDone() {
             QList<SpokenSentence> parts;
             for (const int piece : pieces)
                 parts.append(m_spoken.take(piece));
-            emit sentenceReady(id, join(parts));
+            emit sentenceReady(id, join(parts, m_engine == Engine::Kokoro));
         }
         if (run != m_run || !m_running)
             return false;

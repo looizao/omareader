@@ -560,6 +560,7 @@ void Narrator::play(int sentence) {
 
     m_nextToAppend = sentence;
     m_lastPauseFrames = 0;
+    m_runFailed = false;
     setState(Preparing);
     setPosition(sentence, -1);
     m_ticker.start();
@@ -646,6 +647,7 @@ void Narrator::onRunFinished(bool ok, const QString &error) {
         return;
     if (!ok) {
         setError(error);
+        m_runFailed = true;
         if (m_timeline.isEmpty())
             halt();
         return;
@@ -690,7 +692,12 @@ void Narrator::tick() {
     const Entry &entry = m_timeline.at(m_entry);
 
     if (frame >= m_player.queuedFrames() && m_entry + 1 >= m_timeline.size()) {
-        // Heard everything queued: either the book is over or the engine is behind.
+        // Heard everything queued: either the book is over, the engine is
+        // behind, or it failed and nothing more is coming.
+        if (m_runFailed) {
+            halt();
+            return;
+        }
         if (m_nextToAppend >= m_book->sentenceCount() && !(m_synth && m_synth->isRunning())) {
             halt();
             cancelSleep();

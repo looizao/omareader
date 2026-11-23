@@ -95,4 +95,8 @@ private:
     QStringList m_recentErrors;
     bool m_held = false;
     bool m_stopping = false;
+    // Counts runs, so what an old process reports after a consumer started
+    // a new one from inside one of its signals is never taken for the new
+    // run's.
+    quint64 m_run = 0;
 };

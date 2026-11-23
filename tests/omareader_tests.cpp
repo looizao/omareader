@@ -6761,6 +6761,12 @@ private slots:
         // Books quoting speech in single marks put quotes within it in double ones.
         QCOMPARE(speechIn(bodyParagraphs({"‘He said “never”, and left,’ she said.", "‘Again,’ she said."})),
                  (QStringList{"0:‘He said “never”, and left,’", "1:‘Again,’"}));
+        // A plural possessive inside the speech doesn't end it, but a quoted
+        // word with no punctuation before its closing mark still closes.
+        QCOMPARE(speechIn(bodyParagraphs({"‘The dogs’ bowls are empty,’ she said."})),
+                 QStringList{"0:‘The dogs’ bowls are empty,’"});
+        QCOMPARE(speechIn(bodyParagraphs({"He called it ‘art’ and left. ‘Fine,’ she said."})),
+                 (QStringList{"0:‘art’", "0:‘Fine,’"}));
         // An apostrophe that looks like an opening quote opens nothing.
         QCOMPARE(speechIn(bodyParagraphs({"The dogs’ bowls were ‘em all empty."})), QStringList{});
         QCOMPARE(speechIn(bodyParagraphs({"'Tis the season, he thought."})), QStringList{});
@@ -6904,7 +6910,7 @@ private slots:
             s.words = {{word, 0.5, 0.6}};
             return s;
         };
-        const SpokenSentence whole = DialogueSynthesizer::join({piece("one"), piece("two"), piece("three")});
+        const SpokenSentence whole = DialogueSynthesizer::join({piece("one"), piece("two"), piece("three")}, true);
         const double rate = Synthesizer::SampleRate;
         // The first keeps its start and the last its end; where they meet,
         // only a short pause is left.
@@ -6924,12 +6930,128 @@ private slots:
             QVERIFY(qAbs(word.end - (spans[i][0] + 0.6 / 1.1 * lengths[i])) < 1e-3);
             QVERIFY(word.end > word.start + 0.01);
         }
+        // Times taken where the words are heard, as Qwen3-TTS's aligner
+        // gives them, move back by exactly what was cut before them, so each
+        // word still starts with its sound.
+        const SpokenSentence heard = DialogueSynthesizer::join({piece("one"), piece("two"), piece("three")}, false);
+        QCOMPARE(heard.audio.frames(), whole.audio.frames());
+        const auto *audio = reinterpret_cast<const float *>(heard.audio.samples.constData());
+        for (const SpokenWord &word : heard.words) {
+            const qint64 at = std::lround(word.start * rate);
+            QVERIFY2(audio[at] > 0.4f && audio[at - 2] == 0.0f, qPrintable(word.word));
+            QVERIFY(qAbs(word.end - word.start - 0.1) < 1e-3);
+        }
+        QVERIFY(qAbs(heard.words.at(0).start - 0.5) < 1e-3);
         // The sound itself is all there.
         const auto *samples = reinterpret_cast<const float *>(whole.audio.samples.constData());
         int loud = 0;
         for (qint64 i = 0; i < whole.audio.frames(); ++i)
             loud += samples[i] > 0.4f;
         QCOMPARE(loud, 3 * Synthesizer::SampleRate / 10);
+    }
+
+    void dialogueSynthesizerFailsALineWhoseVoiceGaveNoReason() {
+        QTemporaryDir dir;
+        SynthesisOptions options;
+        options.voice = VoiceSettings::recommended(Engine::Kokoro);
+        QVERIFY(options.voice.set("dialogueVoice", "am_adam"));
+        options.kokoro = fakeKoko(dir);
+        DialogueSynthesizer synth(Engine::Kokoro);
+        QList<int> ready;
+        QList<QPair<int, QString>> failed;
+        connect(&synth, &Synthesizer::sentenceReady, this, [&](int id) { ready.append(id); });
+        connect(&synth, &Synthesizer::sentenceFailed, this,
+                [&](int id, const QString &message) { failed.append({id, message}); });
+        QSignalSpy finished(&synth, &Synthesizer::finished);
+        // Kokoros says "No audio produced for line 1" with no reason: the
+        // whole line fails, rather than playing its narration alone.
+        QVERIFY(synth.start(options, {{0, "x", {{"SILENT", true}, {"she said.", false}}}, {1, "Fine.", {}}}));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 10000);
+        QCOMPARE(ready, QList<int>{1});
+        QCOMPARE(failed.size(), 1);
+        QCOMPARE(failed.first().first, 0);
+        QVERIFY(!failed.first().second.isEmpty());
+    }
+
+    void dialogueSynthesizerStartsAfreshAfterAHold() {
+        QTemporaryDir dir;
+        SynthesisOptions options;
+        options.voice = VoiceSettings::recommended(Engine::Kokoro);
+        QVERIFY(options.voice.set("dialogueVoice", "am_adam"));
+        options.kokoro = fakeKoko(dir);
+        DialogueSynthesizer synth(Engine::Kokoro);
+        QList<int> ready;
+        connect(&synth, &Synthesizer::sentenceReady, this, [&](int id) { ready.append(id); });
+        QSignalSpy finished(&synth, &Synthesizer::finished);
+        QVERIFY(synth.start(options, {{0, "x", {{"“Hi,”", true}, {"she said.", false}}}}));
+        // The narrator holds a run with plenty buffered, then seeks: the
+        // new run must not inherit the hold, or neither voice would speak.
+        synth.setHeld(true);
+        QVERIFY(synth.isHeld());
+        QVERIFY(synth.start(options, {{5, "x", {{"“Bye,”", true}, {"he said.", false}}}, {6, "Gone.", {}}}));
+        QVERIFY(!synth.isHeld());
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 10000);
+        QVERIFY(finished.first().at(0).toBool());
+        QCOMPARE(ready, (QList<int>{5, 6}));
+    }
+
+    void runnerKeepsAnOldRunsEndToItself() {
+        // Kokoros' last report arrives with its exit, with no newline after
+        // it, and the consumer starts another run as it hears it.
+        QTemporaryDir dir;
+        KokoroSetup setup = fakeKoko(dir);
+        const QString koko = dir.filePath("koko-tail");
+        write(koko, "#!/bin/sh\n"
+                    "while [ $# -gt 0 ]; do case \"$1\" in file) input=\"$2\"; shift;; --output) pattern=\"$2\"; shift;; esac; shift; done\n"
+                    "out=$(printf '%s' \"$pattern\" | sed 's/{line}/0/'); tsv=\"${out%.wav}.tsv\"\n"
+                    "cp '" + dir.filePath("sample.wav").toUtf8() + "' \"$out\"; printf 'word\\tstart_sec\\tend_sec\\n' > \"$tsv\"\n"
+                    "case \"$(cat \"$input\")\" in *slow*) sleep 1;; esac\n"
+                    "printf 'Timestamps saved to %s' \"$tsv\" >&2\n");
+        QFile::setPermissions(koko, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+        setup.binary = koko;
+        KokoroRunner runner;
+        QList<int> ready;
+        QList<bool> finished;
+        connect(&runner, &KokoroRunner::sentenceReady, this, [&](int id) {
+            ready.append(id);
+            if (id == 1)
+                runner.start({setup, "af_heart", 1.0}, {{2, "slow"}});
+        });
+        connect(&runner, &KokoroRunner::finished, this, [&](bool ok) { finished.append(ok); });
+        QVERIFY(runner.start({setup, "af_heart", 1.0}, {{1, "first"}}));
+        // The first run's end is not taken for the second's, which ends
+        // only once its own sentence is in.
+        QTRY_COMPARE_WITH_TIMEOUT(ready, (QList<int>{1, 2}), 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 10000);
+        QTest::qWait(200);
+        QCOMPARE(finished, QList<bool>{true});
+    }
+
+    void narratorStopsWhenTheVoiceGivesUp() {
+        QSettings().remove("voice");
+        QTemporaryDir dir;
+        Narrator narrator;
+        narrator.setOverrides(fakeKoko(dir).binary, dir.path());
+        narrator.setTuning("paragraphPause", 0.2);
+        Book book;
+        book.chapters = {{"One", {{"Hello there.", 0}, {"CRASH", 0}, {"Never said.", 0}}}};
+        book.segment();
+        narrator.setBook(std::make_shared<Book>(book));
+        QSignalSpy finished(&narrator, &Narrator::finishedBook);
+        narrator.play(0);
+        const bool playing = narrator.state() != Narrator::Stopped; // no audio output here otherwise
+        // What it said plays out, then it stops with the error instead of
+        // waiting for sentences that will never come.
+        if (playing)
+            QTRY_COMPARE_WITH_TIMEOUT(narrator.state(), Narrator::Stopped, 10000);
+        const QString error = narrator.error();
+        narrator.stop();
+        narrator.setOverrides({}, {});
+        QSettings().remove("voice");
+        if (!playing)
+            QSKIP("There is no audio output to read aloud through.");
+        QVERIFY2(error.contains("Kokoros"), qPrintable(error));
+        QCOMPARE(finished.size(), 0);
     }
 
     void dialogueSynthesizerSaysWhyItCannotStart() {
@@ -7237,7 +7359,9 @@ private:
                                "while IFS= read -r line; do\n"
                                "  out=$(printf '%s' \"$pattern\" | sed \"s/{line}/$i/\")\n"
                                "  tsv=\"${out%.wav}.tsv\"\n"
-                               "  if [ \"$line\" = FAIL ]; then echo \"Error processing line $((i+1)): boom\" >&2\n"
+                               "  if [ \"$line\" = CRASH ]; then exit 3; fi\n"
+                               "  if [ \"$line\" = SILENT ]; then echo \"No audio produced for line $((i+1))\" >&2\n"
+                               "  elif [ \"$line\" = FAIL ]; then echo \"Error processing line $((i+1)): boom\" >&2\n"
                                "  else cp '") + sample.toUtf8() + QByteArray("' \"$out\"; printf 'word\\tstart_sec\\tend_sec\\nHello\\t0.000\\t0.100\\n' > \"$tsv\"\n"
                                "    echo \"Audio saved to $out\" >&2; echo \"Timestamps saved to $tsv\" >&2; fi\n"
                                "  i=$((i+1))\n"

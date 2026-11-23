@@ -299,6 +299,9 @@ private:
     int m_word = -1;
     double m_wordSeconds = 0;
     int m_runEnd = 0;
+    // The engine gave up partway: what it said plays out, then the
+    // narration stops with its error rather than waiting for the rest.
+    bool m_runFailed = false;
     Lexicon m_runLexicon;
     int m_nextToAppend = 0;
     // The silence written after the last sentence in the stream, which a

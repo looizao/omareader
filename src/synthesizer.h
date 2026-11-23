@@ -145,10 +145,13 @@ public:
     static SynthesisOptions dialogueOptions(const SynthesisOptions &narration);
     // A line's pieces as one: their audio one after another, with the
     // silence each engine run starts and ends with cut down where two meet
-    // so the voices hand over as quickly as a reader pauses at a comma, and
-    // each piece's word times spread over what is kept of it. The line's own start and
-    // end keep theirs, so the pauses between lines stay as they were.
-    static SpokenSentence join(const QList<SpokenSentence> &pieces);
+    // so the voices hand over as quickly as a reader pauses at a comma. The
+    // line's own start and end keep theirs, so the pauses between lines stay
+    // as they were. Word times follow what is kept: Qwen3-TTS's aligner
+    // times words where they are heard, so they move back by what was cut
+    // before them; Kokoro spreads its times over the whole run, silence
+    // included, so with spreadTimes they are spread over what is kept.
+    static SpokenSentence join(const QList<SpokenSentence> &pieces, bool spreadTimes = false);
     // How much silence is kept on each side where two pieces meet.
     static constexpr double KeptBefore = 0.1;
     static constexpr double KeptAfter = 0.15;
