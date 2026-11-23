@@ -1,5 +1,6 @@
 #include "bookloader.h"
 
+#include "annotations.h"
 #include "language.h"
 
 #include <QCryptographicHash>
@@ -655,7 +656,17 @@ QList<PdfOutlineItem> BookLoader::pdfOutline(const QString &pdftohtmlXml) {
                 last = int(e.capturedEnd());
             }
             decoded += title.mid(last);
-            items.append({match.captured(1).toInt(), qMax(0, depth - 1), decoded.simplified()});
+            decoded = decoded.simplified();
+            // Tools that merge scanned pages into a PDF can leave a bookmark
+            // per piece named after its file ("e230…d7.pdf", "scan01.tif")
+            // or its blank filler page ("blank432x650"); they name no
+            // chapter, and a book with only those is cut by pages instead.
+            static const QRegularExpression fileName(
+                R"(^(?:\S+\.(?:pdf|tiff?|jpe?g|png|djvu|jp2)|blank\s*\d+\s*x\s*\d+)$)",
+                QRegularExpression::CaseInsensitiveOption);
+            if (fileName.match(decoded).hasMatch())
+                continue;
+            items.append({match.captured(1).toInt(), qMax(0, depth - 1), decoded});
         }
     }
     return items;
@@ -1318,13 +1329,14 @@ bool BookLoader::loadOdt(Book &book, QString *error) {
     return true;
 }
 
-bool BookLoader::loadPdf(Book &book, QString *error) {
+bool BookLoader::loadPdf(Book &book, QString *error, const PdfOcr::Control &control, bool *cancelled) {
     const QString pdftotext = QStandardPaths::findExecutable("pdftotext");
     if (pdftotext.isEmpty()) {
         *error = tr("Opening PDF files needs pdftotext. Install it with: omarchy-pkg-add poppler");
         return false;
     }
     const QString pdfinfo = QStandardPaths::findExecutable("pdfinfo");
+    int pages = 0;
     if (!pdfinfo.isEmpty()) {
         QProcess info;
         info.start(pdfinfo, {"-enc", "UTF-8", book.path});
@@ -1334,6 +1346,8 @@ bool BookLoader::loadPdf(Book &book, QString *error) {
                     book.title = line.mid(6).simplified();
                 else if (line.startsWith("Author:"))
                     book.author = line.mid(7).split(';', Qt::SkipEmptyParts).join(", ").simplified();
+                else if (line.startsWith("Pages:"))
+                    pages = line.mid(6).trimmed().toInt();
             }
         }
     }
@@ -1346,7 +1360,18 @@ bool BookLoader::loadPdf(Book &book, QString *error) {
                                    : tr("pdftotext could not read this PDF: %1").arg(message);
         return false;
     }
-    const QString text = QString::fromUtf8(process.readAllStandardOutput());
+    QString text = QString::fromUtf8(process.readAllStandardOutput());
+
+    // A scanned book is pictures of its pages, with no text or only a
+    // page or two of it, so its text is recognised from the pictures.
+    if (PdfOcr::looksScanned(text)) {
+        if (pages <= 0)
+            pages = int(text.count('\f'));
+        book.fingerprint = Annotations::fingerprint(book.path);
+        if (!PdfOcr::recognise(book.path, book.fingerprint, pages, control, &text, error, cancelled))
+            return false;
+        book.recognised = true;
+    }
 
     // The bookmarks give the chapters. pdftohtml (also poppler) writes them
     // out; rendering only the first page keeps that quick.
@@ -1362,7 +1387,8 @@ bool BookLoader::loadPdf(Book &book, QString *error) {
     }
     book.chapters = pdfChapters(text, outline);
     if (book.chapters.isEmpty()) {
-        *error = tr("This PDF has no text layer (it is probably scanned images), so there is nothing to read aloud.");
+        *error = book.recognised ? tr("No text could be recognised in the pages of this scanned PDF.")
+                                 : tr("This PDF has no text layer (it is probably scanned images), so there is nothing to read aloud.");
         return false;
     }
     return true;
@@ -1438,7 +1464,10 @@ bool BookLoader::loadConverted(Book &book, QString *error) {
     return ok;
 }
 
-std::shared_ptr<Book> BookLoader::load(const QString &path, QString *error) {
+std::shared_ptr<Book> BookLoader::load(const QString &path, QString *error, const PdfOcr::Control &control,
+                                       bool *cancelled) {
+    if (cancelled)
+        *cancelled = false;
     QString ignored;
     if (!error)
         error = &ignored;
@@ -1471,7 +1500,7 @@ std::shared_ptr<Book> BookLoader::load(const QString &path, QString *error) {
     if (suffix == "epub") {
         ok = loadEpub(*book, error);
     } else if (suffix == "pdf") {
-        ok = loadPdf(*book, error);
+        ok = loadPdf(*book, error, control, cancelled);
     } else if (suffix == "docx") {
         ok = loadDocx(*book, error);
     } else if (suffix == "odt") {

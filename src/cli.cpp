@@ -22,6 +22,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMutex>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QSettings>
@@ -29,6 +30,7 @@
 #include <QTimer>
 #include <csignal>
 #include <cstdio>
+#include <unistd.h>
 
 namespace {
 
@@ -78,7 +80,34 @@ struct Command {
 
 std::shared_ptr<Book> loadBook(const QString &path) {
     QString error;
-    auto book = BookLoader::load(path, &error);
+    // Recognising a scanned PDF takes a while, so say how far it has got:
+    // in place on a terminal, every tenth of the way otherwise. Ctrl+C
+    // stops it, and the pages done are kept for the next run.
+    QMutex mutex;
+    int shown = -1;
+    bool lineOpen = false;
+    const bool terminal = isatty(fileno(stderr));
+    PdfOcr::Control control;
+    control.progress = [&](int done, int total) {
+        QMutexLocker lock(&mutex);
+        const int step = terminal ? done : done * 10 / qMax(1, total);
+        if (step == shown)
+            return;
+        if (shown < 0)
+            err() << "Recognising the text of this scanned PDF with Tesseract; it is kept, so this runs once."
+                  << Qt::endl;
+        shown = step;
+        const QString line = QString("Page %1 of %2").arg(done).arg(total);
+        if (terminal) {
+            err() << '\r' << line << (done == total ? "\n" : "");
+            lineOpen = done < total;
+        } else
+            err() << line << '\n';
+        err().flush();
+    };
+    auto book = BookLoader::load(path, &error, control);
+    if (lineOpen)
+        err() << Qt::endl;
     if (!book)
         fail(error);
     return book;
@@ -176,6 +205,7 @@ int info(const QStringList &arguments) {
                    {"language", book->language},
                    {"languageSource", book->languageSource},
                    {"hasCover", !book->cover.isEmpty()},
+                   {"recognised", book->recognised},
                    {"sentences", book->sentenceCount()},
                    {"words", book->wordCount()},
                    {"chapters", chapters}});
@@ -186,7 +216,8 @@ int info(const QStringList &arguments) {
         out() << book->author << Qt::endl;
     if (!book->source.isEmpty())
         out() << book->source << Qt::endl;
-    out() << book->format.toUpper() << ", " << book->wordCount() << " words" << Qt::endl;
+    out() << book->format.toUpper() << ", " << book->wordCount() << " words"
+          << (book->recognised ? ", text recognised from scanned pages (OCR)" : "") << Qt::endl;
     if (!book->language.isEmpty())
         out() << "Language: " << Language::name(book->language) << " ("
               << (book->languageSource == "metadata" ? "from the book's metadata" : "guessed from the text") << ")"

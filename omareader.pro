@@ -34,6 +34,7 @@ HEADERS += \
     src/language.h \
     src/library.h \
     src/narrator.h \
+    src/ocr.h \
     src/portalfilepicker.h \
     src/pronunciation.h \
     src/qwen.h \
@@ -63,6 +64,7 @@ SOURCES += \
     src/language.cpp \
     src/library.cpp \
     src/narrator.cpp \
+    src/ocr.cpp \
     src/portalfilepicker.cpp \
     src/pronunciation.cpp \
     src/qwen.cpp \

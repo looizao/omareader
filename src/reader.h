@@ -9,6 +9,9 @@
 #include <QVariantList>
 #include <QVariantMap>
 
+#include <atomic>
+#include <memory>
+
 class Annotations;
 class Exporter;
 class FilePicker;
@@ -24,6 +27,10 @@ class Reader : public QObject {
     Q_PROPERTY(bool hasBook READ hasBook NOTIFY bookChanged)
     Q_PROPERTY(bool loading READ loading NOTIFY loadingChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
+    // While a scanned PDF opens: how many of its pages have had their text
+    // recognised, out of how many. Both 0 for any other book.
+    Q_PROPERTY(int pagesRecognised READ pagesRecognised NOTIFY recognitionChanged)
+    Q_PROPERTY(int pagesToRecognise READ pagesToRecognise NOTIFY recognitionChanged)
     Q_PROPERTY(QString path READ path NOTIFY bookChanged)
     Q_PROPERTY(QString title READ title NOTIFY bookChanged)
     Q_PROPERTY(QString author READ author NOTIFY bookChanged)
@@ -77,6 +84,11 @@ public:
     bool hasBook() const { return m_book != nullptr; }
     bool loading() const { return m_loading; }
     QString error() const { return m_error; }
+    int pagesRecognised() const { return m_pagesRecognised; }
+    int pagesToRecognise() const { return m_pagesToRecognise; }
+    // Stops opening the book, as when recognising a scanned PDF's text
+    // takes longer than the reader wants to wait. The pages done are kept.
+    Q_INVOKABLE void cancelLoading();
     QString path() const { return m_book ? m_book->path : QString(); }
     QString title() const { return m_book ? m_book->title : QString(); }
     QString author() const { return m_book ? m_book->author : QString(); }
@@ -182,6 +194,7 @@ signals:
     void bookChanged();
     void loadingChanged();
     void errorChanged();
+    void recognitionChanged();
     void chapterChanged();
     void progressChanged();
     void appearanceChanged();
@@ -229,6 +242,10 @@ private:
     QFutureWatcher<std::pair<std::shared_ptr<Book>, QString>> m_loader;
     QString m_loadingPath;
     bool m_loading = false;
+    // Set to stop the load in progress; each load has its own.
+    std::shared_ptr<std::atomic<bool>> m_cancelLoad;
+    int m_pagesRecognised = 0;
+    int m_pagesToRecognise = 0;
     QString m_error;
     int m_chapter = 0;
     int m_anchorParagraph = 0;

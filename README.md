@@ -71,7 +71,7 @@ omareader then shows up in the app launcher (Super + Space). You can also run
 | Format | How it opens |
 | --- | --- |
 | EPUB | Parsed directly, with the table of contents and cover |
-| PDF | Text through poppler's `pdftotext`, reflowed into paragraphs |
+| PDF | Text through poppler's `pdftotext`, reflowed into paragraphs; scanned pages recognised with Tesseract, if installed |
 | FB2, DOCX, ODT | Parsed directly |
 | Markdown, HTML, plain text | Parsed directly; Project Gutenberg headers are dropped |
 | MOBI, AZW3 and other Kindle formats | Converted once through Calibre's `ebook-convert`, if installed |
@@ -89,6 +89,27 @@ out of the text, and footnotes are gathered from the foot of each page into
 smaller, quieter notes the voice skips, so a paragraph that runs over the
 page break reads as one. `omareader text --spoken` prints a book as the voice
 reads it.
+
+### Scanned PDFs
+
+A scanned book is pictures of its pages with no text in them. omareader
+recognises the text on your computer with
+[Tesseract](https://github.com/tesseract-ocr/tesseract), so nothing is sent
+anywhere. Install it with the language data for your books:
+
+```sh
+omarchy-pkg-add tesseract tesseract-data-eng   # tesseract-data-por, -spa, ...
+```
+
+It reads in the window's language and English, those of them installed. The
+first time you open a scanned book, a card shows how many pages are done;
+it takes about a minute for a 300-page book on an 8-core laptop. The text is
+then kept in `~/.local/share/omareader/omareader/ocr`, under a hash of the
+book, so it opens at once from then on, wherever you move the file. Stop
+(or Esc) keeps the pages already done, and opening the book again picks up
+after them. The PDF is only read, never changed. `omareader info` and
+`omareader text` recognise a scanned book the same way, printing the
+progress.
 
 ## Organising the library
 

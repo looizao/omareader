@@ -1,6 +1,7 @@
 #pragma once
 
 #include "book.h"
+#include "ocr.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -13,13 +14,17 @@ struct PdfOutlineItem {
 
 // Turns a file on disk into a Book. Everything runs locally: EPUB, FB2, DOCX,
 // ODT, HTML, Markdown and plain text are parsed in-process, PDF goes through
-// poppler's pdftotext, and Kindle and other formats through Calibre's
-// ebook-convert when it is installed. Safe to call from a worker thread.
+// poppler's pdftotext (and a scanned one through Tesseract, see PdfOcr),
+// and Kindle and other formats through Calibre's ebook-convert when it is
+// installed. Safe to call from a worker thread.
 class BookLoader {
     Q_DECLARE_TR_FUNCTIONS(BookLoader)
 
 public:
-    static std::shared_ptr<Book> load(const QString &path, QString *error);
+    // control reports the progress of recognising a scanned PDF and stops
+    // it; a stopped load returns null with cancelled set and no error.
+    static std::shared_ptr<Book> load(const QString &path, QString *error, const PdfOcr::Control &control = {},
+                                      bool *cancelled = nullptr);
     static QStringList nativeExtensions();
     static QStringList convertedExtensions();
 
@@ -49,7 +54,7 @@ private:
     static bool loadFb2(Book &book, const QByteArray &data, QString *error);
     static bool loadDocx(Book &book, QString *error);
     static bool loadOdt(Book &book, QString *error);
-    static bool loadPdf(Book &book, QString *error);
+    static bool loadPdf(Book &book, QString *error, const PdfOcr::Control &control, bool *cancelled);
     static bool loadPastedText(Book &book, const QByteArray &data, QString *error);
     static bool loadConverted(Book &book, QString *error);
 };

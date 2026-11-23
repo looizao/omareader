@@ -469,5 +469,12 @@
   "Dialogue voice": "Voz dos diálogos",
   "Same as narration": "A mesma da narração",
   "Reads what the characters say, in quotation marks or after a dialogue dash, in a second voice.": "Lê o que os personagens dizem, entre aspas ou depois do travessão, com uma segunda voz.",
-  "The voice skipped it.": "A voz pulou esta parte."
+  "The voice skipped it.": "A voz pulou esta parte.",
+  "This PDF is a scan: pictures of its pages, with no text in them. omareader can recognise the text on this computer with Tesseract, which isn't installed. Install it with: omarchy-pkg-add tesseract tesseract-data-eng": "Este PDF é uma digitalização: imagens das páginas, sem texto nelas. O omareader pode reconhecer o texto neste computador com o Tesseract, que não está instalado. Instale com: omarchy-pkg-add tesseract tesseract-data-eng",
+  "Tesseract has no language data to recognise this scanned PDF with. Install English with: omarchy-pkg-add tesseract-data-eng": "O Tesseract não tem dados de idioma para reconhecer este PDF digitalizado. Instale o inglês com: omarchy-pkg-add tesseract-data-eng",
+  "The recognised text couldn't be saved in %1.": "O texto reconhecido não pôde ser salvo em %1.",
+  "Tesseract could not read page %1 of this PDF: %2": "O Tesseract não conseguiu ler a página %1 deste PDF: %2",
+  "No text could be recognised in the pages of this scanned PDF.": "Nenhum texto foi reconhecido nas páginas deste PDF digitalizado.",
+  "Recognising the text of this scanned book…": "Reconhecendo o texto deste livro digitalizado…",
+  "Page %1 of %2. This happens once: the text is kept, and stopping keeps the pages done.": "Página %1 de %2. Isto acontece uma vez só: o texto fica guardado, e parar mantém as páginas já feitas."
 }

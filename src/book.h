@@ -71,6 +71,9 @@ struct Book {
     // A hash of the book's file, which its bookmarks and notes are kept
     // under; filled in when the book is opened, see Annotations.
     QString fingerprint;
+    // Whether the text was recognised from pictures of the pages (OCR), as
+    // a scanned PDF's is, rather than read from the file.
+    bool recognised = false;
     QByteArray cover;
     QList<Chapter> chapters;
 

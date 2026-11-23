@@ -45,6 +45,11 @@ Reader::Reader(Library *library, Narrator *narrator, FilePicker *picker, QObject
     connect(&m_loader, &QFutureWatcher<std::pair<std::shared_ptr<Book>, QString>>::finished, this, [this] {
         const auto [book, error] = m_loader.result();
         m_loading = false;
+        m_cancelLoad.reset();
+        if (m_pagesToRecognise) {
+            m_pagesRecognised = m_pagesToRecognise = 0;
+            emit recognitionChanged();
+        }
         emit loadingChanged();
         if (!book) {
             setError(error);
@@ -66,6 +71,9 @@ Reader::Reader(Library *library, Narrator *narrator, FilePicker *picker, QObject
 }
 
 Reader::~Reader() {
+    // Recognising a scanned book can take minutes; quitting doesn't wait.
+    if (m_cancelLoad)
+        m_cancelLoad->store(true);
     if (m_loader.isRunning())
         m_loader.waitForFinished();
     saveNow();
@@ -170,16 +178,35 @@ void Reader::open(const QString &pathOrUrl) {
     setError({});
     m_loadingPath = path;
     m_loading = true;
+    const auto cancel = std::make_shared<std::atomic<bool>>(false);
+    m_cancelLoad = cancel;
     emit loadingChanged();
-    m_loader.setFuture(QtConcurrent::run([path] {
+    PdfOcr::Control control;
+    control.cancel = cancel.get();
+    control.progress = [this, cancel](int done, int total) {
+        QMetaObject::invokeMethod(this, [this, cancel, done, total] {
+            if (m_cancelLoad != cancel || (done == m_pagesRecognised && total == m_pagesToRecognise))
+                return;
+            m_pagesRecognised = done;
+            m_pagesToRecognise = total;
+            emit recognitionChanged();
+        }, Qt::QueuedConnection);
+    };
+    m_loader.setFuture(QtConcurrent::run([path, control, cancel] {
         QString error;
-        auto book = BookLoader::load(path, &error);
+        auto book = BookLoader::load(path, &error, control);
         // Hashing a large book takes a moment, so it's done here rather
-        // than when the window shows it.
-        if (book)
+        // than when the window shows it. A scanned one was hashed already,
+        // to find its recognised text.
+        if (book && book->fingerprint.isEmpty())
             book->fingerprint = Annotations::fingerprint(path);
         return std::make_pair(book, error);
     }));
+}
+
+void Reader::cancelLoading() {
+    if (m_cancelLoad)
+        m_cancelLoad->store(true);
 }
 
 void Reader::openDialog() {

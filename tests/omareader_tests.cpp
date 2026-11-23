@@ -4,6 +4,8 @@
 #pragma GCC optimize("O0")
 
 #include <QDir>
+#include <QElapsedTimer>
+#include <QMutex>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -50,6 +52,7 @@
 #include "pronunciation.h"
 #include "library.h"
 #include "narrator.h"
+#include "ocr.h"
 #include "qwen.h"
 #include "reader.h"
 #include "speech.h"
@@ -183,6 +186,68 @@ static int redPixels(const QImage &image, const QRect &area) {
         }
     return count;
 }
+
+// A scanned book as a test can make one: each page a picture of its text,
+// with no text layer, as a scanner writes it.
+static void writeScannedPdf(const QString &path, const QStringList &pages) {
+    QPdfWriter writer(path);
+    writer.setPageSize(QPageSize(QPageSize::A5));
+    writer.setResolution(150);
+    QPainter painter(&writer);
+    const QRect page = painter.viewport();
+    for (int i = 0; i < pages.size(); ++i) {
+        if (i > 0)
+            writer.newPage();
+        QImage image(page.size(), QImage::Format_Grayscale8);
+        image.fill(Qt::white);
+        QPainter pen(&image);
+        QFont font("DejaVu Sans");
+        font.setPixelSize(28);
+        pen.setFont(font);
+        pen.setPen(Qt::black);
+        pen.drawText(image.rect().adjusted(60, 80, -60, -80), Qt::TextWordWrap, pages.at(i));
+        pen.end();
+        painter.drawImage(page, image);
+    }
+}
+
+// A stand-in for tesseract that answers at once for the first page and
+// takes FAKE_TESSERACT_DELAY seconds over every other, so a test can catch
+// recognition part way through.
+static QString writeFakeTesseract(const QString &folder) {
+    const QString path = folder + "/tesseract";
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly))
+        return {};
+    file.write(R"(#!/bin/sh
+if [ "$1" = "--list-langs" ]; then
+  printf 'List of available languages in "/fake/" (2):\neng\nosd\n'
+  exit 0
+fi
+case "$1" in
+  */page-1.pgm) echo "The first page tells of a river." ;;
+  */page-2.pgm) sleep "${FAKE_TESSERACT_DELAY:-0}"; echo "A second page climbs a mountain." ;;
+  */page-3.pgm) sleep "${FAKE_TESSERACT_DELAY:-0}"; echo "On the third the weather turns." ;;
+  *) sleep "${FAKE_TESSERACT_DELAY:-0}"; echo "Then night falls over the valley." ;;
+esac
+printf '\f'
+)");
+    file.close();
+    file.setPermissions(file.permissions() | QFileDevice::ExeOwner);
+    return path;
+}
+
+// Puts folder first on PATH until it goes out of scope.
+class PathPrefix {
+public:
+    explicit PathPrefix(const QString &folder, bool only = false) : m_saved(qgetenv("PATH")) {
+        qputenv("PATH", only ? folder.toUtf8() : (folder + ":").toUtf8() + m_saved);
+    }
+    ~PathPrefix() { qputenv("PATH", m_saved); }
+
+private:
+    QByteArray m_saved;
+};
 
 // Every book here is made up inside the test, so nothing personal or
 // copyrighted is checked in.
@@ -1118,6 +1183,231 @@ private slots:
         QCOMPARE(book->chapters.size(), 1);
         QCOMPARE(book->chapters[0].paragraphs.size(), 2);
         QCOMPARE(book->chapters[0].paragraphs[0].text, QString("A sentence printed into a PDF."));
+    }
+
+    // Scanned PDFs: no text layer, so Tesseract recognises the pages.
+
+    void pdfOutlineSkipsMergedFileNames() {
+        const auto items = BookLoader::pdfOutline(
+            "<pdf2xml><outline><item page=\"1\">e23072861823e60ffc2eb1bd4fa118177c11e7d9.pdf</item>"
+            "<item page=\"2\">blank432x650</item><item page=\"3\">SCAN_0003.TIF</item>"
+            "<item page=\"4\">Notes on file.pdf formats</item></outline></pdf2xml>");
+        QCOMPARE(items.size(), 1);
+        QCOMPARE(items[0].title, QString("Notes on file.pdf formats"));
+    }
+
+    void ocrChoosesLanguagesAndSpotsScans() {
+        const QStringList installed{"eng", "por", "chi_tra", "deu"};
+        QCOMPARE(PdfOcr::chooseLanguages(installed, "pt_BR"), QString("por+eng"));
+        QCOMPARE(PdfOcr::chooseLanguages(installed, "en_US"), QString("eng"));
+        QCOMPARE(PdfOcr::chooseLanguages(installed, "de_DE"), QString("deu+eng"));
+        QCOMPARE(PdfOcr::chooseLanguages(installed, "zh_TW"), QString("chi_tra+eng"));
+        QCOMPARE(PdfOcr::chooseLanguages(installed, "fr_FR"), QString("eng"));
+        QCOMPARE(PdfOcr::chooseLanguages({"por"}, "fr_FR"), QString("por"));
+        QCOMPARE(PdfOcr::chooseLanguages({}, "en_US"), QString());
+
+        const QString line = "A line of printed words, long enough to be a real page of text.\n";
+        // pdftotext's form feeds alone: every page a picture.
+        QVERIFY(PdfOcr::looksScanned(QString(338, '\f')));
+        QVERIFY(!PdfOcr::looksScanned(QString()));
+        QVERIFY(!PdfOcr::looksScanned(line + "\f" + line + "\f"));
+        // A scan with its cover's title recognised is still a scan.
+        QString coverOnly = line + "\f";
+        for (int i = 0; i < 30; ++i)
+            coverOnly += "\f";
+        QVERIFY(PdfOcr::looksScanned(coverOnly));
+        // Page numbers and a stray mark don't make a text layer.
+        QVERIFY(PdfOcr::looksScanned("1\f2\f iii \f"));
+    }
+
+    void scannedPdfIsRecognisedOnceAndKept() {
+        if (QStandardPaths::findExecutable("pdftoppm").isEmpty() || PdfOcr::tesseract().isEmpty()
+            || PdfOcr::installedLanguages(PdfOcr::tesseract()).isEmpty())
+            QSKIP("pdftoppm, tesseract or its language data is not installed");
+        QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/ocr").removeRecursively();
+        QTemporaryDir dir;
+        const QString path = dir.filePath("scan.pdf");
+        writeScannedPdf(path, {"The quick brown fox jumps over the lazy dog.",
+                               "Rivers run down from the mountains to the sea."});
+        QFile pdf(path);
+        QVERIFY(pdf.open(QIODevice::ReadOnly));
+        const QByteArray before = pdf.readAll();
+        pdf.close();
+
+        QList<std::pair<int, int>> reports;
+        QMutex mutex;
+        PdfOcr::Control control;
+        control.progress = [&](int done, int total) {
+            QMutexLocker lock(&mutex);
+            reports.append({done, total});
+        };
+        QString error;
+        auto book = BookLoader::load(path, &error, control);
+        QVERIFY2(book, qPrintable(error));
+        QVERIFY(book->recognised);
+        QCOMPARE(book->format, QString("pdf"));
+        QString text;
+        for (const auto &p : book->chapters.at(0).paragraphs)
+            text += p.text + "\n";
+        QVERIFY2(text.contains("quick brown fox"), qPrintable(text));
+        QVERIFY2(text.contains("mountains to the sea"), qPrintable(text));
+        QCOMPARE(reports.first(), std::pair(0, 2));
+        QVERIFY(reports.contains(std::pair(2, 2)));
+        // The PDF is only read.
+        QVERIFY(pdf.open(QIODevice::ReadOnly));
+        QCOMPARE(pdf.readAll(), before);
+        pdf.close();
+        // The text is kept under the book's hash, and the pages put away.
+        QCOMPARE(book->fingerprint, Annotations::fingerprint(path));
+        const QString kept = PdfOcr::cacheFile(book->fingerprint);
+        QVERIFY(QFileInfo::exists(kept));
+        QVERIFY(!QFileInfo::exists(kept.chopped(4) + ".pages"));
+
+        // The second time needs no Tesseract, and reports no progress.
+        QTemporaryDir tools;
+        for (const char *tool : {"pdftotext", "pdfinfo", "pdftohtml", "pdftoppm"})
+            QVERIFY(QFile::link(QStandardPaths::findExecutable(tool), tools.filePath(tool)));
+        PathPrefix path_(tools.path(), true);
+        QVERIFY(PdfOcr::tesseract().isEmpty());
+        reports.clear();
+        book = BookLoader::load(path, &error, control);
+        QVERIFY2(book, qPrintable(error));
+        QVERIFY(book->recognised);
+        QVERIFY(reports.isEmpty());
+        QCOMPARE(book->chapters.at(0).paragraphs.first().text, QString(text.section('\n', 0, 0)));
+    }
+
+    void scannedPdfWithoutTesseractSaysWhatToInstall() {
+        if (QStandardPaths::findExecutable("pdftoppm").isEmpty())
+            QSKIP("poppler is not installed");
+        QTemporaryDir dir;
+        const QString path = dir.filePath("scan.pdf");
+        writeScannedPdf(path, {"Nothing to see without a reader of pictures."});
+        QTemporaryDir tools;
+        for (const char *tool : {"pdftotext", "pdfinfo", "pdftohtml", "pdftoppm"})
+            QVERIFY(QFile::link(QStandardPaths::findExecutable(tool), tools.filePath(tool)));
+        PathPrefix path_(tools.path(), true);
+        QString error;
+        QVERIFY(!BookLoader::load(path, &error));
+        QVERIFY2(error.contains("Tesseract") && error.contains("omarchy-pkg-add tesseract tesseract-data-eng"),
+                 qPrintable(error));
+
+        // Tesseract with no language data says which to install.
+        const QString fake = tools.filePath("tesseract");
+        write(fake, "#!/bin/sh\nprintf 'List of available languages in \"/x/\" (1):\\nosd\\n'\n");
+        QFile(fake).setPermissions(QFile(fake).permissions() | QFileDevice::ExeOwner);
+        QVERIFY(!BookLoader::load(path, &error));
+        QVERIFY2(error.contains("tesseract-data-eng") && error.contains("language data"), qPrintable(error));
+    }
+
+    void stoppingRecognitionKeepsThePagesDone() {
+        if (QStandardPaths::findExecutable("pdftoppm").isEmpty())
+            QSKIP("poppler is not installed");
+        QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/ocr").removeRecursively();
+        QTemporaryDir dir;
+        const QString path = dir.filePath("long-scan.pdf");
+        QStringList pages;
+        for (int i = 0; i < 12; ++i)
+            pages << QString("Page %1 of a long scan.").arg(i + 1);
+        writeScannedPdf(path, pages);
+        QTemporaryDir tools;
+        QVERIFY(!writeFakeTesseract(tools.path()).isEmpty());
+        PathPrefix path_(tools.path());
+        qputenv("FAKE_TESSERACT_DELAY", "30");
+
+        std::atomic<bool> cancel(false);
+        PdfOcr::Control control;
+        control.cancel = &cancel;
+        control.progress = [&](int done, int) {
+            if (done >= 1)
+                cancel = true;
+        };
+        QElapsedTimer clock;
+        clock.start();
+        QString error;
+        bool cancelled = false;
+        QVERIFY(!BookLoader::load(path, &error, control, &cancelled));
+        // The pages being read are dropped at once, not waited for.
+        QVERIFY2(clock.elapsed() < 10000, qPrintable(QString::number(clock.elapsed())));
+        QVERIFY(cancelled);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        const QString folder = PdfOcr::cacheFile(Annotations::fingerprint(path)).chopped(4) + ".pages";
+        const QStringList kept = QDir(folder).entryList({"*.txt"}, QDir::Files);
+        QVERIFY2(kept.contains("00001.txt"), qPrintable(kept.join(' ')));
+        QVERIFY(kept.size() < 12);
+
+        // The next time picks up after the pages kept.
+        qputenv("FAKE_TESSERACT_DELAY", "0");
+        int first = -1;
+        control.cancel = nullptr;
+        control.progress = [&](int done, int) {
+            if (first < 0)
+                first = done;
+        };
+        const auto book = BookLoader::load(path, &error, control, &cancelled);
+        qunsetenv("FAKE_TESSERACT_DELAY");
+        QVERIFY2(book, qPrintable(error));
+        QCOMPARE(first, int(kept.size()));
+        QVERIFY(!QFileInfo::exists(folder));
+        QCOMPARE(book->chapters.at(0).paragraphs.first().text, QString("The first page tells of a river."));
+    }
+
+    void recognisingAScanShowsProgressAndStops() {
+        if (QStandardPaths::findExecutable("pdftoppm").isEmpty())
+            QSKIP("poppler is not installed");
+        QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/ocr").removeRecursively();
+        QTemporaryDir dir;
+        const QString path = dir.filePath("window-scan.pdf");
+        writeScannedPdf(path, {"One.", "Two.", "Three.", "Four."});
+        QTemporaryDir tools;
+        QVERIFY(!writeFakeTesseract(tools.path()).isEmpty());
+        PathPrefix path_(tools.path());
+        qputenv("FAKE_TESSERACT_DELAY", "30");
+
+        AppWindow app(dir.path());
+        QVERIFY(app.show());
+        app.reader.open(path);
+        QVERIFY(app.reader.loading());
+        // The first page answers at once and the rest hang: one in four.
+        QTRY_COMPARE(app.reader.pagesRecognised(), 1);
+        QCOMPARE(app.reader.pagesToRecognise(), 4);
+        QTRY_COMPARE(app.items("recognitionProgress").size(), 1);
+        QQuickItem *bar = app.items("recognitionProgress").first();
+        const QImage shot = app.grab("ocr-progress");
+        const QRect area = app.area(shot, bar);
+        // The filled part of the bar is drawn in the accent, a quarter of
+        // the way along.
+        const QColor accent(app.theme.accent());
+        int filled = -1;
+        for (int x = area.left(); x <= area.right(); ++x)
+            for (int y = area.top(); y <= area.bottom(); ++y) {
+                const QColor c = shot.pixelColor(x, y);
+                if (qAbs(c.red() - accent.red()) + qAbs(c.green() - accent.green()) + qAbs(c.blue() - accent.blue()) < 30)
+                    filled = x;
+            }
+        QVERIFY2(filled >= 0, "no progress drawn");
+        const double share = double(filled - area.left() + 1) / area.width();
+        QVERIFY2(share > 0.2 && share < 0.3, qPrintable(QString("the bar is %1 full").arg(share)));
+        // Its words say so too.
+        QVERIFY(brightPixels(shot, area.adjusted(-40, -80, 40, 120)) > 200);
+
+        // Stop leaves the window as it was, with nothing to complain about.
+        QTRY_COMPARE(app.items("stopRecognitionButton").size(), 1);
+        QQuickItem *stop = app.items("stopRecognitionButton").first();
+        QTest::mouseClick(app.window, Qt::LeftButton, {},
+                          stop->mapToScene(QPointF(stop->width() / 2, stop->height() / 2)).toPoint());
+        QTRY_VERIFY_WITH_TIMEOUT(!app.reader.loading(), 10000);
+        QVERIFY(!app.reader.hasBook());
+        QCOMPARE(app.reader.error(), QString());
+        QCOMPARE(app.reader.pagesToRecognise(), 0);
+
+        // Opening it again goes on from there and opens the book.
+        qputenv("FAKE_TESSERACT_DELAY", "0");
+        app.reader.open(path);
+        QTRY_VERIFY_WITH_TIMEOUT(app.reader.hasBook(), 20000);
+        qunsetenv("FAKE_TESSERACT_DELAY");
+        QCOMPARE(app.reader.error(), QString());
+        QVERIFY(app.items("recognitionProgress").isEmpty());
     }
 
     void loaderReportsProblems() {

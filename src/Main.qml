@@ -36,7 +36,9 @@ ApplicationWindow {
         sequence: "Escape"
         context: Qt.ApplicationShortcut
         onActivated: {
-            if (statsPanel.opened)
+            if (reader.loading)
+                reader.cancelLoading()
+            else if (statsPanel.opened)
                 statsPanel.close()
             else if (pasteDialog.opened)
                 pasteDialog.close()
@@ -112,16 +114,73 @@ ApplicationWindow {
         }
 
         Rectangle {
+            id: loadingOverlay
+            objectName: "loadingOverlay"
             anchors.fill: parent
             visible: reader.loading
-            color: Qt.alpha(Colors.background, 0.7)
-            ColumnLayout {
-                anchors.centerIn: parent
-                spacing: 16
-                BusyIndicator { running: reader.loading; Layout.alignment: Qt.AlignHCenter }
-                Label { text: qsTr("Opening book…"); color: Colors.muted; Layout.alignment: Qt.AlignHCenter }
-            }
+            color: Qt.alpha(Colors.background, loadingOverlay.recognising ? 0.85 : 0.7)
+            // A scanned PDF has its text recognised page by page first,
+            // which takes a while, so it shows how far it has got, on a card
+            // of its own so the library behind doesn't show through.
+            readonly property bool recognising: reader.pagesToRecognise > 0
             MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
+            Rectangle {
+                visible: loadingOverlay.recognising
+                // The flat Stop button carries padding of its own below.
+                x: loadingColumn.x - 32
+                y: loadingColumn.y - 28
+                width: loadingColumn.width + 64
+                height: loadingColumn.height + 40
+                radius: theme.radius
+                color: Colors.surface
+                border.color: Colors.line
+            }
+            ColumnLayout {
+                id: loadingColumn
+                anchors.centerIn: parent
+                width: Math.min(parent.width - 112, 420)
+                spacing: 16
+                BusyIndicator {
+                    visible: !loadingOverlay.recognising
+                    running: reader.loading && visible
+                    Layout.alignment: Qt.AlignHCenter
+                }
+                Label {
+                    Layout.fillWidth: true
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.Wrap
+                    text: loadingOverlay.recognising ? qsTr("Recognising the text of this scanned book…")
+                                                     : qsTr("Opening book…")
+                    color: loadingOverlay.recognising ? Colors.text : Colors.muted
+                    font.pixelSize: loadingOverlay.recognising ? 16 : font.pixelSize
+                }
+                ProgressBar {
+                    objectName: "recognitionProgress"
+                    visible: loadingOverlay.recognising
+                    Layout.fillWidth: true
+                    from: 0
+                    to: Math.max(1, reader.pagesToRecognise)
+                    value: reader.pagesRecognised
+                }
+                Label {
+                    visible: loadingOverlay.recognising
+                    Layout.fillWidth: true
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.Wrap
+                    text: qsTr("Page %1 of %2. This happens once: the text is kept, and stopping keeps the pages done.")
+                              .arg(reader.pagesRecognised).arg(reader.pagesToRecognise)
+                    color: Colors.muted
+                    font.pixelSize: 13
+                }
+                Button {
+                    objectName: "stopRecognitionButton"
+                    visible: loadingOverlay.recognising
+                    flat: true
+                    Layout.alignment: Qt.AlignHCenter
+                    text: qsTr("Stop")
+                    onClicked: reader.cancelLoading()
+                }
+            }
         }
 
         // What went wrong stays on screen until it's dismissed.
