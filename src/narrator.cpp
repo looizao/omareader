@@ -430,6 +430,12 @@ void Narrator::play(int sentence) {
     if (!m_book || m_book->sentenceCount() == 0)
         return;
     sentence = qBound(0, sentence, m_book->sentenceCount() - 1);
+    // Nothing from here on is read aloud (a last footnote, a page of links):
+    // there is nothing to play, rather than a wait for audio that never comes.
+    while (sentence < m_book->sentenceCount() && !m_book->sentences.at(sentence).speakable())
+        ++sentence;
+    if (sentence >= m_book->sentenceCount())
+        return;
     stopPreview();
     halt();
     setError({});
@@ -441,8 +447,6 @@ void Narrator::play(int sentence) {
     if (!m_player.open(Synthesizer::SampleRate))
         return; // errorOccurred already reported why
 
-    while (sentence < m_book->sentenceCount() - 1 && !m_book->sentences.at(sentence).speakable())
-        ++sentence;
     m_nextToAppend = sentence;
     setState(Preparing);
     setPosition(sentence, -1);

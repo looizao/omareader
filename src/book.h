@@ -90,12 +90,14 @@ namespace Text {
 QList<QPair<int, int>> sentenceRanges(const QString &text, int maxLength = 320);
 QList<WordSpan> words(const QString &text, int start, int end);
 // The parts of a paragraph that sound bad spoken and say nothing a listener
-// misses: footnote and citation markers ("failure.1 While", "[12]",
-// "[Bro96]"), web addresses, bracketed editorial asides ("[sic]") and
-// parenthesised cross-references ("(see Figure 2-3)", "(p. 12)"). Sorted
-// [start, end) ranges that don't overlap. Code-like brackets ("x[2]",
-// "range [0, 1]") and numbers that belong to words ("GPT4") stay.
-QList<QPair<int, int>> clutter(const QString &text);
+// misses: citation markers ("[12]", "[Bro96]"), web addresses, bracketed
+// editorial asides ("[sic]") and parenthesised cross-references ("(see
+// Figure 2-3)", "(p. 12)"), and with footnoteNumbers the bare footnote
+// numbers a PDF's text keeps ("failure.1 While"), which other formats mark
+// up and drop. Sorted [start, end) ranges that don't overlap. Code-like
+// brackets ("x[2]", "range [0, 1]") and numbers that belong to words
+// ("GPT4", "server:443") stay.
+QList<QPair<int, int>> clutter(const QString &text, bool footnoteNumbers = false);
 // The text with ranges taken out, and the spaces and punctuation left
 // around each gap tidied ("see https://x.org." becomes "see.").
 QString withoutRanges(const QString &text, const QList<QPair<int, int>> &ranges);

@@ -173,6 +173,43 @@ bool Reader::addText(const QString &title, const QString &text, const QString &s
     return true;
 }
 
+// Where a saved place's text is: at its saved place when it is still there,
+// otherwise nearest to it, in its chapter first, then the chapters around.
+// False when the entry has no text kept, or the text is gone.
+static bool findAnchor(const Book &book, const LibraryEntry &entry, int *chapter, int *paragraph, int *offset) {
+    if (entry.anchor.isEmpty() || book.chapters.isEmpty())
+        return false;
+    const int home = qBound(0, entry.chapter, int(book.chapters.size()) - 1);
+    QList<int> chapters{home};
+    for (int distance = 1; distance < book.chapters.size(); ++distance)
+        for (int c : {home - distance, home + distance})
+            if (c >= 0 && c < book.chapters.size())
+                chapters.append(c);
+    for (int c : std::as_const(chapters)) {
+        const auto &paragraphs = book.chapters.at(c).paragraphs;
+        const int near = c == entry.chapter ? qBound(0, entry.paragraph, int(paragraphs.size()) - 1) : 0;
+        int best = -1, bestAt = -1;
+        for (int p = 0; p < paragraphs.size(); ++p) {
+            const QString &text = paragraphs.at(p).text;
+            const int at = c == entry.chapter && p == entry.paragraph && entry.offset >= 0
+                                   && QStringView(text).mid(qMin(int(text.size()), entry.offset)).startsWith(entry.anchor)
+                               ? entry.offset
+                               : int(text.indexOf(entry.anchor));
+            if (at >= 0 && (best < 0 || qAbs(p - near) < qAbs(best - near))) {
+                best = p;
+                bestAt = at;
+            }
+        }
+        if (best >= 0) {
+            *chapter = c;
+            *paragraph = best;
+            *offset = bestAt;
+            return true;
+        }
+    }
+    return false;
+}
+
 void Reader::openBook(BookPtr book) {
     saveNow();
     if (m_narrator)
@@ -185,7 +222,10 @@ void Reader::openBook(BookPtr book) {
         const LibraryEntry entry = m_library->entry(m_book->path);
         m_library->opened(*m_book);
         // Resume where reading stopped, if the book still has that place.
-        if (known && entry.chapter < m_book->chapters.size()) {
+        int offset = entry.offset;
+        if (known && findAnchor(*m_book, entry, &chapter, &paragraph, &offset)) {
+            m_sentence = qMax(0, m_book->sentenceAt(chapter, paragraph, offset));
+        } else if (known && entry.chapter < m_book->chapters.size()) {
             chapter = entry.chapter;
             paragraph = qBound(0, entry.paragraph, int(m_book->chapters.at(chapter).paragraphs.size()) - 1);
             // The offset finds the exact sentence; older entries only have
@@ -518,7 +558,9 @@ void Reader::saveNow() {
     if (saved.offset >= 0 && saved.chapter == s.chapter && saved.paragraph == s.paragraph
         && m_book->sentenceAt(saved.chapter, saved.paragraph, saved.offset) == m_sentence)
         offset = saved.offset;
-    m_library->savePosition(m_book->path, s.chapter, s.paragraph, m_sentence, m_book->sentenceCount(), offset);
+    // The text there, enough of it to find the place again on its own.
+    const QString anchor = m_book->chapters.at(s.chapter).paragraphs.at(s.paragraph).text.mid(offset, 60);
+    m_library->savePosition(m_book->path, s.chapter, s.paragraph, m_sentence, m_book->sentenceCount(), offset, anchor);
 }
 
 void Reader::setError(const QString &error) {

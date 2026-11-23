@@ -112,7 +112,7 @@ bool introducesValue(const QString &word) {
 // line break a PDF put after a hyphen or inside the last part of its path.
 qsizetype urlEnd(const QString &text, qsizetype start) {
     static const QRegularExpression token(R"([^\s<>"“”]+)");
-    static const QRegularExpression pathPiece(R"(^[a-z0-9][\w.~%#?=&/-]*(?:/|\.(?:html?|php|aspx?|pdf|md)\b)[\w.~%#?=&/-]*)");
+    static const QRegularExpression pathPiece(R"(^[a-z0-9][\w.~%#?=&/-]*\.(?:html?|php|aspx?|pdf|md)\b[\w.~%#?=&/-]*$)");
     qsizetype end = start;
     auto take = [&](qsizetype from) {
         const auto match = token.match(text, from, QRegularExpression::NormalMatch,
@@ -120,13 +120,18 @@ qsizetype urlEnd(const QString &text, qsizetype start) {
         return match.hasMatch() ? match.capturedEnd() : from;
     };
     end = take(start);
-    while (end < text.size() && text.at(end).isSpace()) {
+    // Only an address cut short goes on: never one that ends its sentence
+    // or clause, nor into a word that merely has a slash ("and/or").
+    while (end > start && end < text.size() && text.at(end).isSpace()
+           && !QStringLiteral(".,;:!?)]”’\"'").contains(text.at(end - 1))) {
         qsizetype next = end;
         while (next < text.size() && text.at(next).isSpace())
             ++next;
         if (next >= text.size() || next - end > 2)
             break;
         const QString following = text.mid(next, take(next) - next);
+        if (following.isEmpty())
+            break;
         const bool afterHyphen = text.at(end - 1) == '-' && (following.at(0).isLower() || following.at(0).isDigit());
         if (!afterHyphen && !pathPiece.match(following).hasMatch())
             break;
@@ -147,7 +152,7 @@ qsizetype urlEnd(const QString &text, qsizetype start) {
 }
 }
 
-QList<QPair<int, int>> clutter(const QString &text) {
+QList<QPair<int, int>> clutter(const QString &text, bool footnoteNumbers) {
     QList<QPair<int, int>> found;
     auto add = [&](qsizetype start, qsizetype end) {
         if (end > start)
@@ -157,12 +162,13 @@ QList<QPair<int, int>> clutter(const QString &text) {
 
     // A footnote number a PDF leaves after a word's punctuation ("failure.1
     // While"). The word has two letters at least, so "Appendix A.1" keeps
-    // its number, and isn't an abbreviation that numbers things ("Fig.1").
-    static const QRegularExpression afterPunctuation(R"((\p{L}+)([.,;:!?”’"')\]]+)(\d{1,3})(?=\s|$))");
+    // its number, and isn't an abbreviation that numbers things ("Fig.1");
+    // a colon is left alone, as numbers after one are ports and ratios.
+    static const QRegularExpression afterPunctuation(R"((\p{L}+)([.,;!?”’"')\]]+)(\d{1,3})(?=\s|$))");
     static const QSet<QString> numbering{"art", "ch", "chap", "def", "ed", "eq", "eqs", "ex", "fig", "figs",
                                          "no", "nos", "op", "p", "para", "pp", "pt", "ref", "refs", "sec",
                                          "tab", "thm", "v", "ver", "vol", "vols"};
-    for (auto it = afterPunctuation.globalMatch(text); it.hasNext();) {
+    for (auto it = afterPunctuation.globalMatch(footnoteNumbers ? text : QString()); it.hasNext();) {
         const auto m = it.next();
         if (m.capturedLength(1) < 2 || (m.captured(2).startsWith('.') && numbering.contains(m.captured(1).toLower())))
             continue;
@@ -171,7 +177,7 @@ QList<QPair<int, int>> clutter(const QString &text) {
     // One left on the word itself, where the PDF set the punctuation after
     // it apart ("a common pattern1 . For").
     static const QRegularExpression beforeLonePunctuation(R"(\p{Ll}{3}(\d{1,2})(?=\s[.,;:](?:\s|$)))");
-    for (auto it = beforeLonePunctuation.globalMatch(text); it.hasNext();) {
+    for (auto it = beforeLonePunctuation.globalMatch(footnoteNumbers ? text : QString()); it.hasNext();) {
         const auto m = it.next();
         add(m.capturedStart(1), m.capturedEnd(1));
     }
@@ -280,7 +286,7 @@ QList<QPair<int, int>> clutter(const QString &text) {
 
     // A footnote number after a reference that goes ("(see Figure 4-12).49").
     static const QRegularExpression afterBracket(R"([.,;:!?”’"']*(\d{1,3})(?=\s|$))");
-    for (int i = 0, count = int(found.size()); i < count; ++i) {
+    for (int i = 0, count = footnoteNumbers ? int(found.size()) : 0; i < count; ++i) {
         const int end = found.at(i).second;
         if (end < 1 || (text.at(end - 1) != ')' && text.at(end - 1) != ']'))
             continue;
@@ -438,7 +444,7 @@ void Book::segment() {
             const QString &text = paragraphs.at(p).text;
             // Words and sentences come from the text with its clutter
             // blanked out, so each keeps its place for the highlight.
-            const QList<QPair<int, int>> skip = paragraphs.at(p).note ? QList<QPair<int, int>>() : Text::clutter(text);
+            const QList<QPair<int, int>> skip = paragraphs.at(p).note ? QList<QPair<int, int>>() : Text::clutter(text, format == "pdf");
             QString spoken = text;
             for (const auto &range : skip)
                 spoken.replace(range.first, range.second - range.first, QString(range.second - range.first, ' '));

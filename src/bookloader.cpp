@@ -792,8 +792,17 @@ QList<Chapter> BookLoader::pdfChapters(const QString &output, const QList<PdfOut
         // for one, so the notes stay within the lower half of the page.
         int noteStart = int(lines.size());
         {
-            static const QRegularExpression startsNote(R"(^(\d{1,3}) (?!\d)\S.*\p{L}.*$)");
-            static const QRegularExpression marker(R"((?:\p{L}{2}[.,;:!?”’"')\]]|\p{L})(\d{1,3})(?=\s|$))");
+            // A note starts as a sentence or a reference does: a capital, a
+            // quote or a web address ("1 See...", "2 “Title,”", "3 https://"),
+            // never mid-sentence ("10 times as much data").
+            static const QRegularExpression startsNote(
+                R"(^(\d{1,3}) (?:\p{Lu}|[“"‘'(]|https?://|www\.).*\p{L}.*$)");
+            // A marker after a word's punctuation ("failure.1"), on a word
+            // before punctuation set apart ("pattern1 ."), or in brackets
+            // after a space or punctuation ("key [7]."); never just a word's
+            // last digit ("Python3") or an index ("a[3]").
+            static const QRegularExpression marker(
+                R"((?:\p{L}{2}[.,;!?”’"')\]]|\p{Ll}{3}(?=\d{1,3}\s[.,;:](?:\s|$))|(?<![\w\]])\[)(\d{1,3})(?=\]|\s|$))");
             QList<int> filled;
             for (int i = 0; i < lines.size(); ++i)
                 if (!lines.at(i).isEmpty())

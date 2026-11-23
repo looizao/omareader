@@ -48,6 +48,7 @@ void Library::load() {
         e.sentenceCount = o.value("sentenceCount").toInt();
         e.opened = QDateTime::fromString(o.value("opened").toString(), Qt::ISODate);
         e.offset = o.value("offset").toInt(-1);
+        e.anchor = o.value("anchor").toString();
         m_entries.append(e);
     }
     sort();
@@ -67,6 +68,7 @@ bool Library::save() const {
                                  {"sentence", e.sentence},
                                  {"sentenceCount", e.sentenceCount},
                                  {"offset", e.offset},
+                                 {"anchor", e.anchor},
                                  {"opened", e.opened.toString(Qt::ISODate)}});
     QDir().mkpath(QFileInfo(m_file).absolutePath());
     // Written beside the target and renamed over it, so a crash never leaves
@@ -162,14 +164,15 @@ void Library::opened(const Book &book) {
 }
 
 void Library::savePosition(const QString &path, int chapter, int paragraph, int sentence, int sentenceCount,
-                           int offset) {
+                           int offset, const QString &anchor) {
     const int i = indexOf(path);
     if (i < 0)
         return;
     LibraryEntry &e = m_entries[i];
     if (e.chapter == chapter && e.paragraph == paragraph && e.sentence == sentence && e.sentenceCount == sentenceCount
-        && e.offset == offset)
+        && e.offset == offset && e.anchor == anchor)
         return;
+    e.anchor = anchor;
     e.chapter = chapter;
     e.paragraph = paragraph;
     e.sentence = sentence;

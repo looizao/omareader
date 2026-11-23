@@ -309,17 +309,20 @@ private slots:
     }
 
     // What clutter() leaves out, as the pieces of text it covers.
-    static QStringList clutterIn(const QString &text) {
+    static QStringList clutterIn(const QString &text, bool pdf = false) {
         QStringList pieces;
-        for (const auto &range : Text::clutter(text))
+        for (const auto &range : Text::clutter(text, pdf))
             pieces << text.mid(range.first, range.second - range.first);
         return pieces;
     }
 
     void clutterFindsMarkersLinksAndAsides() {
-        QCOMPARE(clutterIn("A single point of failure.1 While replication helps,23 it costs."),
+        // Bare footnote numbers only in a PDF's text; other formats mark
+        // their notes up, and the loader drops them.
+        QCOMPARE(clutterIn("A single point of failure.1 While replication helps,23 it costs.", true),
                  (QStringList{"1", "23"}));
-        QCOMPARE(clutterIn("This is a common pattern1 . For example"), QStringList{"1"});
+        QCOMPARE(clutterIn("This is a common pattern1 . For example", true), QStringList{"1"});
+        QVERIFY(clutterIn("A single point of failure.1 While").isEmpty());
         QCOMPARE(clutterIn("It gained a cult following,[5] and wide use [12, 14]. Others agree [3–7]."),
                  (QStringList{"[5]", "[12, 14]", "[3–7]"}));
         QCOMPARE(clutterIn("Good enough is best [You95], as argued before [GHJV95; KP99]."),
@@ -338,7 +341,13 @@ private slots:
         QCOMPARE(clutterIn("It was trained from scratch (Zhu et al., 2017) and tuned (Smith, 2020; Lee and Park, 2019)."),
                  (QStringList{"(Zhu et al., 2017)", "(Smith, 2020; Lee and Park, 2019)"}));
         // A footnote number after a reference that goes, goes with it.
-        QCOMPARE(clutterIn("by one pixel (see Figure 4-12).49 Then"), (QStringList{"(see Figure 4-12)", "49"}));
+        QCOMPARE(clutterIn("by one pixel (see Figure 4-12).49 Then", true), (QStringList{"(see Figure 4-12)", "49"}));
+        // An address stops before a quote, and before a word with a slash.
+        QCOMPARE(clutterIn("See https://example.com/path- \"the tutorial\" now"),
+                 QStringList{"https://example.com/path-"});
+        QCOMPARE(clutterIn("Use https://example.org/a and/or ask your admin."), QStringList{"https://example.org/a"});
+        QCOMPARE(clutterIn("Go to https://example.org/a. Then docs/index.html says more."),
+                 QStringList{"https://example.org/a"});
     }
 
     void clutterLeavesCodeNumbersAndWords() {
@@ -355,12 +364,14 @@ private slots:
                  QString("Children [with ADHD] do well with structure."),
                  QString("For more, see examples (see examples above) and oreilly.com today."),
                  QString("For a complete list, see [110]."),
-                 QString("Write to support@example.com for help.")})
-            QVERIFY2(Text::clutter(text).isEmpty(), qPrintable(text + " → " + clutterIn(text).join(" | ")));
+                 QString("Write to support@example.com for help."),
+                 QString("Keep server:443 open, at a ratio of 3:1.")})
+            QVERIFY2(Text::clutter(text, true).isEmpty(), qPrintable(text + " → " + clutterIn(text, true).join(" | ")));
     }
 
     void clutterIsShownButNotRead() {
         Book book;
+        book.format = "pdf";
         const QString text = "Replication helps.1 See https://example.com/x for more [12].";
         book.chapters = {{"One", {{text, 0}, {"https://example.com/only", 0}, {"1 A footnote the voice skips.", 0, {}, true}}}};
         book.segment();
@@ -702,6 +713,7 @@ private slots:
         QVERIFY(text.contains("The heading above is in the outline, and stays a heading."));
 
         Book book;
+        book.format = "pdf";
         book.chapters = chapters;
         book.segment();
         for (int i = 0; i < book.sentenceCount(); ++i) {
@@ -710,6 +722,45 @@ private slots:
         }
         QVERIFY2(book.sentenceText(0).endsWith("removes a single point of failure."), qPrintable(book.sentenceText(0)));
         QVERIFY2(book.sentenceText(1).startsWith("While replication helps, it also"), qPrintable(book.sentenceText(1)));
+    }
+
+    void pdfFootnotesNeedAMarkerTheyAnswer() {
+        auto notesIn = [](const QString &page) {
+            QStringList notes;
+            for (const auto &chapter : BookLoader::pdfChapters(page, {}))
+                for (const auto &p : chapter.paragraphs)
+                    if (p.note)
+                        notes << p.text;
+            return notes;
+        };
+        const QString lead = "The deployment script is written for Python3 and runs on every host we\n"
+                             "manage, so the steps below apply to each of them in the same order\n"
+                             "without any change at all, whatever the host is used for.\n"
+                             "1 Copy the build to the host and unpack it in place.\n"
+                             "2 Restart the service and wait for it to come back.\n";
+        // A word's last digit is no footnote marker: the steps stay text.
+        QVERIFY(notesIn(lead + "3 Verify that the deployment is healthy and serving.\n").isEmpty());
+        // A marker in brackets is.
+        const QString cited = "Take care when updating a foreign key in a large table [7]. The lock it\n"
+                              "takes can hold up every write to that table for as long as it lasts,\n"
+                              "which is why the migration runs at night when the traffic is low.\n"
+                              "It runs in batches, each one small enough to finish in seconds.\n"
+                              "7 The database lock can last for ten minutes on the largest tables.\n";
+        QCOMPARE(notesIn(cited), QStringList{"7 The database lock can last for ten minutes on the largest tables."});
+        // A line that carries on a sentence is text, cited number or not,
+        // and so is a table after an index ("a[3]").
+        const QString scaled = "Ideally, if you have ten times as many nodes, you can handle about\n"
+                               "ten times the load, as the partitioning papers show [10]. With\n"
+                               "every node taking an equal share, there is no hot spot at all, and\n"
+                               "the system scales as far as the hardware lets it scale,\n"
+                               "10 times as much data and 10 times the read and write throughput.\n";
+        QVERIFY(notesIn(scaled).isEmpty());
+        const QString table = "The cache holds a[3] and a[4] after the loop has run once over the\n"
+                              "array, with each line holding four of its elements in a row and the\n"
+                              "rest of the lines left empty until the next pass reaches them at last.\n"
+                              "Element Address Hit or miss\n"
+                              "3 [h]\n4 [h]\n";
+        QVERIFY(notesIn(table).isEmpty());
     }
 
     void pdfDropsPageNumbersAndRunningHeadsNamingTheSection() {
@@ -985,6 +1036,21 @@ private slots:
         QCOMPARE(finished.size(), 1);
         QVERIFY(!finished.first().at(0).toBool());
         QVERIFY(finished.first().at(1).toString().contains("omareader setup"));
+    }
+
+    void narratorHasNothingToPlayWhereNothingIsRead() {
+        QTemporaryDir dir;
+        Narrator narrator;
+        narrator.setOverrides(fakeKoko(dir).binary, dir.path());
+        Book book;
+        book.chapters = {{"One", {{"https://example.com/only", 0}, {"1 A footnote.", 0, {}, true}}}};
+        book.segment();
+        narrator.setBook(std::make_shared<Book>(book));
+        narrator.play(0);
+        QCOMPARE(narrator.state(), Narrator::Stopped);
+        narrator.play(1);
+        QCOMPARE(narrator.state(), Narrator::Stopped);
+        QVERIFY(narrator.error().isEmpty());
     }
 
     void narratorSaysWhatIsMissing() {
@@ -1935,7 +2001,7 @@ private slots:
         Book book;
         book.path = dir.filePath("a.txt");
         book.title = "Clutter";
-        book.format = "txt";
+        book.format = "pdf";
         book.chapters = {{"One",
                           {{"It helps.1 Read more at https://example.com/x today [4].", 0},
                            {"1 A note the voice skips.", 0, {}, true},
@@ -2223,6 +2289,30 @@ private slots:
         library.remove(book.path);
         QCOMPARE(library.count(), 0);
         QVERIFY(QFile::exists(book.path)); // forgetting a book never deletes it
+    }
+
+    void readerFindsItsPlaceByTextWhenParagraphsMove() {
+        QTemporaryDir dir;
+        Library library(dir.filePath("library.json"), dir.filePath("covers"));
+        Book before = sampleBook(dir.filePath("a.txt"));
+        before.chapters = {{"One", {{"Opening words.", 0}, {"A running head", 0}, {"The place we stopped. More.", 0}}}};
+        before.segment();
+        library.opened(before);
+        {
+            Reader reader(&library, nullptr, nullptr);
+            reader.openBook(std::make_shared<Book>(before));
+            reader.goTo(0, 2, 22);
+            reader.closeBook();
+        }
+        QCOMPARE(library.entry(before.path).anchor, QString("More."));
+        // A newer reading of the same book drops the running head.
+        Book after = before;
+        after.chapters = {{"One", {{"Opening words.", 0}, {"The place we stopped. More.", 0}}}};
+        after.segment();
+        Reader reader(&library, nullptr, nullptr);
+        reader.openBook(std::make_shared<Book>(after));
+        QCOMPARE(reader.sentence(), after.sentenceAt(0, 1, 22));
+        QCOMPARE(after.sentenceText(reader.sentence()), QString("More."));
     }
 
     void readerResumesWhereReadingStopped() {

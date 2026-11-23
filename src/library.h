@@ -27,6 +27,9 @@ struct LibraryEntry {
     // place again even when the sentences are split differently; -1 for
     // positions saved before it was kept.
     int offset = -1;
+    // The text at the place, which finds it again when a newer omareader
+    // splits the book's paragraphs differently; empty for older positions.
+    QString anchor;
     QDateTime opened;
 };
 
@@ -47,7 +50,7 @@ public:
     // Records an opened book (metadata and cover), keeping its saved position.
     void opened(const Book &book);
     void savePosition(const QString &path, int chapter, int paragraph, int sentence, int sentenceCount,
-                      int offset = -1);
+                      int offset = -1, const QString &anchor = {});
     // Saves pasted text as a library item and returns its path, or an empty
     // string when there is no text to save or it can't be written. A web
     // page's text comes with the address it was fetched from and its byline.
