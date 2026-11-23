@@ -83,4 +83,9 @@ namespace Text {
 QList<QPair<int, int>> sentenceRanges(const QString &text, int maxLength = 320);
 QList<WordSpan> words(const QString &text, int start, int end);
 QString normalizeWord(const QString &word);
+// The text as a search compares it: lower case, accents dropped, curly
+// quotes, dashes and odd spaces made plain. Each character stays one
+// character, so an offset in the folded text is the same offset in the
+// original.
+QString fold(const QString &text);
 }

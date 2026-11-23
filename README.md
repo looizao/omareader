@@ -190,6 +190,18 @@ KOReader use, in `~/.stardict/dic` or `/usr/share/stardict/dic`) or dictd
 format (as the `dict-*` packages install in `/usr/share/dictd`, such as
 WordNet or GCIDE for English definitions).
 
+## Searching a book
+
+Press / (or Ctrl+F, or the magnifying glass in the title bar) to find a word
+or a phrase anywhere in the open book. Case and accents don't matter, and
+neither do curly quotes or the kind of dash, so `coracao` finds "Coração"
+and `don't` finds "don’t". Each match is listed with its chapter and the
+words around it. Return goes to the next match after where you are reading
+and tints it in the text; Shift+Return, or the ▶ beside a match, reads aloud
+from there. F3 and Shift+F3 (or Ctrl+G and Ctrl+Shift+G) step through the
+rest without opening the drawer, and Esc takes the tint away. Space after
+going to a match reads from it too.
+
 ## Bookmarks, highlights and notes
 
 Press M (or the ribbon in the title bar) to bookmark the sentence being
@@ -257,6 +269,8 @@ replaced. Exports need `ffmpeg`.
 | ← / → (or H / L) | Previous / next chapter |
 | ↑ ↓ (or K / J), PgUp, PgDn | Scroll |
 | T | Contents |
+| / or Ctrl+F | Search the book |
+| F3 / Shift+F3 | Next / previous match |
 | M | Bookmark this place, or remove its bookmark |
 | Drag over text | Highlight it, add a note, copy it or read it aloud |
 | Click a highlight | Its note |
@@ -328,7 +342,10 @@ omareader skill install                  # agent skill for ~/.claude/skills
   missing.
 - `src/highlight.cpp` colours that word inside the paragraph, and in focus
   mode fades the text around it, without changing its layout. The reader's
-  own highlights and the selection being dragged are drawn the same way.
+  own highlights, the selection being dragged and a search match are drawn
+  the same way. `src/reader.cpp` searches the book through `Text::fold`,
+  which lowers the case and drops accents one character for one, so a match
+  in the folded text sits at the same place in the book's.
 - `src/annotations.cpp` keeps the bookmarks, highlights and notes: it finds
   each one's words in the book again, and merges the files other computers
   leave in the sync folder, the latest change to each one winning.

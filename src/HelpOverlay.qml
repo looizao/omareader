@@ -22,6 +22,8 @@ Rectangle {
         ["← / →", qsTr("Previous / next chapter")],
         ["↑ ↓ PgUp PgDn", qsTr("Scroll")],
         ["T", qsTr("Contents")],
+        ["/", qsTr("Search the book")],
+        ["F3 / Shift+F3", qsTr("Next / previous match")],
         ["M", qsTr("Bookmark this place, or remove its bookmark")],
         [qsTr("Drag over text"), qsTr("Highlight it, add a note or copy it")],
         [qsTr("Click a highlight"), qsTr("Its note")],

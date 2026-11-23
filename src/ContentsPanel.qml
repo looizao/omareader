@@ -3,8 +3,8 @@ import QtQuick.Controls
 import QtQuick.Controls.Material
 import QtQuick.Layouts
 
-// The table of contents, and the book's bookmarks, highlights and notes,
-// with the folder they are kept in step through.
+// The table of contents, the book's bookmarks, highlights and notes, with
+// the folder they are kept in step through, and a search of the whole book.
 Drawer {
     id: panel
     objectName: "contentsPanel"
@@ -13,7 +13,7 @@ Drawer {
     Material.roundedScale: theme.radius
     background: Rectangle { color: Colors.surface }
 
-    // 0 for the contents, 1 for the notes.
+    // 0 for the contents, 1 for the notes, 2 for the search.
     property int tab: 0
 
     // Opens on a tab, or closes when it is already showing that one.
@@ -34,8 +34,40 @@ Drawer {
             chapters.currentIndex = reader.chapter
             chapters.positionViewAtIndex(reader.chapter, ListView.Center)
             chapters.forceActiveFocus()
-        } else {
+        } else if (panel.tab === 1) {
             notes.forceActiveFocus()
+        } else {
+            results.currentIndex = reader.searchIndex < results.count ? reader.searchIndex : -1
+            if (results.currentIndex >= 0)
+                results.positionViewAtIndex(results.currentIndex, ListView.Center)
+            searchField.forceActiveFocus()
+            searchField.selectAll()
+        }
+    }
+
+    // Shows a match, or reads aloud from it, and gets out of the way.
+    function goToMatch(index, read) {
+        if (read)
+            reader.readMatch(index)
+        else
+            reader.showMatch(index)
+        panel.close()
+    }
+
+    // The text around a match, with the match in the accent, as the
+    // little markup a Label takes.
+    function snippet(result) {
+        const escape = text => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        return escape(result.before) + "<font color=\"" + theme.accent + "\"><b>" + escape(result.text) + "</b></font>"
+               + escape(result.after)
+    }
+
+    // A different book starts with an empty search.
+    Connections {
+        target: reader
+        function onBookChanged() {
+            searchTimer.stop()
+            searchField.clear()
         }
     }
 
@@ -45,6 +77,7 @@ Drawer {
     // key outside a popup does, so the drawer answers them itself.
     Shortcut { sequence: "T"; enabled: panel.opened; onActivated: panel.toggle(0) }
     Shortcut { sequence: "N"; enabled: panel.opened; onActivated: panel.toggle(1) }
+    Shortcut { sequences: ["/", StandardKey.Find]; enabled: panel.opened; onActivated: panel.toggle(2) }
 
     ColumnLayout {
         anchors.fill: parent
@@ -67,6 +100,7 @@ Drawer {
             background: Rectangle { color: "transparent" }
             TabButton { text: qsTr("Contents (T)") }
             TabButton { objectName: "notesTab"; text: qsTr("Notes (N)") }
+            TabButton { objectName: "searchTab"; text: qsTr("Search (/)") }
         }
 
         StackLayout {
@@ -259,6 +293,145 @@ Drawer {
                         flat: true
                         text: qsTr("Stop syncing")
                         onClicked: annotations.stopSyncing()
+                    }
+                }
+            }
+
+            ColumnLayout {
+                spacing: 8
+
+                TextField {
+                    id: searchField
+                    objectName: "searchField"
+                    Layout.fillWidth: true
+                    placeholderText: qsTr("Find in the book")
+                    selectByMouse: true
+                    // Searching as the reader types, once the typing pauses.
+                    onTextChanged: searchTimer.restart()
+                    // Return goes to the next match after the reading place,
+                    // Shift+Return reads aloud from it; Down moves into the list.
+                    function pick(read) {
+                        searchTimer.stop()
+                        reader.search(text)
+                        if (reader.searchCount === 0)
+                            return
+                        reader.nextMatch()
+                        panel.goToMatch(reader.searchIndex, read)
+                    }
+                    Keys.onReturnPressed: event => pick(event.modifiers & Qt.ShiftModifier)
+                    Keys.onEnterPressed: event => pick(event.modifiers & Qt.ShiftModifier)
+                    Keys.onDownPressed: {
+                        searchTimer.stop()
+                        reader.search(text)
+                        if (results.count === 0)
+                            return
+                        results.currentIndex = Math.max(0, results.currentIndex)
+                        results.forceActiveFocus()
+                    }
+                }
+
+                Timer {
+                    id: searchTimer
+                    interval: 200
+                    onTriggered: reader.search(searchField.text)
+                }
+
+                Label {
+                    objectName: "searchStatus"
+                    Layout.fillWidth: true
+                    visible: reader.searchQuery !== ""
+                    text: reader.searchCount === 0 ? qsTr("Not found in this book.")
+                          : reader.searchCount > reader.searchResults.length
+                            ? qsTr("The first %1 of %n match(es).", "", reader.searchCount).arg(reader.searchResults.length)
+                            : qsTr("%n match(es).", "", reader.searchCount)
+                    wrapMode: Text.Wrap
+                    color: Colors.muted
+                    font.pixelSize: 12
+                }
+
+                ListView {
+                    id: results
+                    objectName: "searchResults"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    model: reader.searchResults
+                    keyNavigationEnabled: true
+                    highlightMoveDuration: 0
+                    spacing: 2
+                    ScrollBar.vertical: ScrollBar {}
+
+                    Keys.onReturnPressed: event => { if (currentIndex >= 0) panel.goToMatch(currentIndex, event.modifiers & Qt.ShiftModifier) }
+                    Keys.onEnterPressed: event => { if (currentIndex >= 0) panel.goToMatch(currentIndex, event.modifiers & Qt.ShiftModifier) }
+                    // Up from the first match goes back to the words.
+                    Keys.onUpPressed: event => {
+                        if (currentIndex <= 0)
+                            searchField.forceActiveFocus()
+                        else
+                            event.accepted = false
+                    }
+
+                    Label {
+                        anchors.fill: parent
+                        anchors.margins: 8
+                        visible: reader.searchQuery === ""
+                        text: qsTr("Type a word or a phrase to find it anywhere in the book. Return goes to the next match, Shift+Return reads aloud from it, and F3 steps through the rest.")
+                        wrapMode: Text.Wrap
+                        color: Colors.muted
+                        font.pixelSize: 13
+                    }
+
+                    delegate: ItemDelegate {
+                        id: result
+                        objectName: "searchResult"
+                        required property var modelData
+                        required property int index
+                        width: ListView.view.width
+                        highlighted: ListView.isCurrentItem
+                        topPadding: 10
+                        bottomPadding: 10
+                        rightPadding: 44
+                        contentItem: ColumnLayout {
+                            spacing: 4
+                            Label {
+                                Layout.fillWidth: true
+                                text: result.modelData.chapterTitle
+                                elide: Text.ElideRight
+                                color: result.index === reader.searchIndex ? theme.accent : Colors.muted
+                                font.pixelSize: 11
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                text: panel.snippet(result.modelData)
+                                textFormat: Text.StyledText
+                                wrapMode: Text.Wrap
+                                maximumLineCount: 3
+                                elide: Text.ElideRight
+                                font.family: reader.serif ? "serif" : "sans-serif"
+                                font.pixelSize: 14
+                                color: Colors.body
+                            }
+                        }
+                        onClicked: panel.goToMatch(index, false)
+
+                        // The triangle is drawn over the button, not as its
+                        // content, which Material would push off centre.
+                        ToolButton {
+                            objectName: "readMatch"
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: panel.goToMatch(result.index, true)
+                            ToolTip.visible: hovered
+                            ToolTip.text: qsTr("Read aloud from here")
+                            MediaIcon {
+                                anchors.centerIn: parent
+                                anchors.horizontalCenterOffset: 1
+                                width: 14
+                                height: 14
+                                kind: "play"
+                                color: Colors.text
+                            }
+                        }
                     }
                 }
             }

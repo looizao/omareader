@@ -6,5 +6,13 @@
   "In step through %1 with %n other computer(s).": {
     "one": "In step through %1 with %n other computer.",
     "other": "In step through %1 with %n other computers."
+  },
+  "The first %1 of %n match(es).": {
+    "one": "The first %1 of %n match.",
+    "other": "The first %1 of %n matches."
+  },
+  "%n match(es).": {
+    "one": "%n match.",
+    "other": "%n matches."
   }
 }

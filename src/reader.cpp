@@ -15,6 +15,7 @@
 #include <QUrl>
 #include <QtConcurrent>
 #include <cmath>
+#include <tuple>
 
 Reader::Reader(Library *library, Narrator *narrator, FilePicker *picker, QObject *parent)
     : QObject(parent), m_library(library), m_narrator(narrator), m_picker(picker) {
@@ -199,6 +200,7 @@ void Reader::openBook(BookPtr book) {
     }
     if (m_annotations)
         m_annotations->setBook(m_book);
+    clearSearch();
     emit bookChanged();
     setChapter(chapter, paragraph);
     emit progressChanged();
@@ -213,6 +215,7 @@ void Reader::closeBook() {
     m_book.reset();
     if (m_annotations)
         m_annotations->setBook(nullptr);
+    clearSearch();
     m_paragraphs.clear();
     m_chapter = 0;
     m_anchorParagraph = 0;
@@ -359,6 +362,137 @@ void Reader::followNarrator() {
     m_anchorParagraph = s.paragraph;
     emit progressChanged();
     m_saveTimer.start();
+}
+
+void Reader::clearSearch() {
+    m_folded.clear();
+    m_searchQuery.clear();
+    m_matches.clear();
+    m_searchResults.clear();
+    m_searchIndex = -1;
+    m_matchShown = false;
+    emit searchChanged();
+    emit matchChanged();
+}
+
+void Reader::search(const QString &query) {
+    const QString trimmed = query.trimmed();
+    if (!m_book || trimmed == m_searchQuery)
+        return;
+    m_searchQuery = trimmed;
+    m_matches.clear();
+    m_searchResults.clear();
+    m_searchIndex = -1;
+    m_matchShown = false;
+    const QString needle = Text::fold(trimmed);
+    if (!needle.isEmpty()) {
+        if (m_folded.isEmpty()) {
+            for (const Chapter &chapter : m_book->chapters) {
+                QStringList folded;
+                folded.reserve(chapter.paragraphs.size());
+                for (const Paragraph &p : chapter.paragraphs)
+                    folded.append(Text::fold(p.text));
+                m_folded.append(folded);
+            }
+        }
+        for (int c = 0; c < m_folded.size(); ++c)
+            for (int p = 0; p < m_folded.at(c).size(); ++p) {
+                const QString &text = m_folded.at(c).at(p);
+                for (int at = text.indexOf(needle); at >= 0; at = text.indexOf(needle, at + needle.size()))
+                    m_matches.append({c, p, int(at), int(needle.size())});
+            }
+    }
+    // The list shows each match with a little of the text around it, cut
+    // at a space so it starts and ends on whole words.
+    const int listed = qMin(int(m_matches.size()), SearchListLimit);
+    for (int i = 0; i < listed; ++i) {
+        const Match &m = m_matches.at(i);
+        const QString &text = m_book->chapters.at(m.chapter).paragraphs.at(m.paragraph).text;
+        int from = qMax(0, m.start - 40);
+        if (from > 0) {
+            const int space = text.indexOf(QLatin1Char(' '), from);
+            from = space >= 0 && space < m.start ? space + 1 : from;
+        }
+        const int end = m.start + m.length;
+        int to = qMin(int(text.size()), end + 80);
+        if (to < text.size()) {
+            const int space = text.lastIndexOf(QLatin1Char(' '), to);
+            to = space > end ? space : to;
+        }
+        m_searchResults.append(QVariantMap{
+            {"chapter", m.chapter},
+            {"paragraph", m.paragraph},
+            {"start", m.start},
+            {"end", end},
+            {"chapterTitle", m_book->chapters.at(m.chapter).title},
+            {"before", (from > 0 ? QStringLiteral("…") : QString()) + text.mid(from, m.start - from)},
+            {"text", text.mid(m.start, m.length)},
+            {"after", text.mid(end, to - end) + (to < text.size() ? QStringLiteral("…") : QString())},
+        });
+    }
+    emit searchChanged();
+    emit matchChanged();
+}
+
+QVariantMap Reader::match() const {
+    if (!m_matchShown || m_searchIndex < 0 || m_searchIndex >= m_matches.size())
+        return {};
+    const Match &m = m_matches.at(m_searchIndex);
+    return {{"chapter", m.chapter}, {"paragraph", m.paragraph}, {"start", m.start}, {"end", m.start + m.length}};
+}
+
+void Reader::showMatch(int index) {
+    if (!m_book || index < 0 || index >= m_matches.size())
+        return;
+    const Match &m = m_matches.at(index);
+    m_searchIndex = index;
+    m_matchShown = true;
+    goTo(m.chapter, m.paragraph, m.start);
+    emit matchChanged();
+}
+
+int Reader::matchAtPosition() const {
+    int chapter = m_chapter, paragraph = m_anchorParagraph, offset = 0;
+    if (m_book && m_sentence < m_book->sentenceCount() && m_book->sentences.at(m_sentence).chapter == m_chapter) {
+        const Sentence &s = m_book->sentences.at(m_sentence);
+        paragraph = s.paragraph;
+        offset = s.start;
+    }
+    for (int i = 0; i < m_matches.size(); ++i) {
+        const Match &m = m_matches.at(i);
+        if (std::tie(m.chapter, m.paragraph, m.start) >= std::tie(chapter, paragraph, offset))
+            return i;
+    }
+    return int(m_matches.size());
+}
+
+void Reader::nextMatch() {
+    if (m_matches.isEmpty())
+        return;
+    const int next = m_searchIndex >= 0 ? m_searchIndex + 1 : matchAtPosition();
+    showMatch(next < m_matches.size() ? next : 0);
+}
+
+void Reader::previousMatch() {
+    if (m_matches.isEmpty())
+        return;
+    const int previous = (m_searchIndex >= 0 ? m_searchIndex : matchAtPosition()) - 1;
+    showMatch(previous >= 0 ? previous : int(m_matches.size()) - 1);
+}
+
+void Reader::readMatch(int index) {
+    if (!m_book || index < 0 || index >= m_matches.size())
+        return;
+    showMatch(index);
+    const Match &m = m_matches.at(index);
+    readFrom(m.paragraph, m.start);
+}
+
+void Reader::hideMatch() {
+    if (!m_matchShown)
+        return;
+    m_matchShown = false;
+    emit matchChanged();
 }
 
 void Reader::saveNow() {

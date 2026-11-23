@@ -7,6 +7,7 @@
 #include <QStringList>
 #include <QTimer>
 #include <QVariantList>
+#include <QVariantMap>
 
 class Annotations;
 class Exporter;
@@ -53,6 +54,16 @@ class Reader : public QObject {
     // "glass", "both", "word" or "sentence": a glass window over the spoken
     // word, or which of the word and sentence the colour highlight marks.
     Q_PROPERTY(QString highlight READ highlight WRITE setHighlight NOTIFY focusChanged)
+    // A search of the whole book: what was asked, every match there is,
+    // and the first of them listed as {chapter, paragraph, start, end,
+    // chapterTitle, before, text, after}, the text around the match included.
+    Q_PROPERTY(QString searchQuery READ searchQuery NOTIFY searchChanged)
+    Q_PROPERTY(int searchCount READ searchCount NOTIFY searchChanged)
+    Q_PROPERTY(QVariantList searchResults READ searchResults NOTIFY searchChanged)
+    // The match last shown, and the same as {chapter, paragraph, start, end}
+    // while it is marked in the text; empty once the mark is put away.
+    Q_PROPERTY(int searchIndex READ searchIndex NOTIFY matchChanged)
+    Q_PROPERTY(QVariantMap match READ match NOTIFY matchChanged)
     // "subtle", "normal" or "strong".
     Q_PROPERTY(QString highlightStrength READ highlightStrength WRITE setHighlightStrength NOTIFY focusChanged)
 
@@ -102,6 +113,27 @@ public:
     void setHighlight(const QString &highlight);
     void setHighlightStrength(const QString &strength);
 
+    // At most this many matches are listed; every one can still be stepped to.
+    static constexpr int SearchListLimit = 500;
+    QString searchQuery() const { return m_searchQuery; }
+    int searchCount() const { return int(m_matches.size()); }
+    QVariantList searchResults() const { return m_searchResults; }
+    int searchIndex() const { return m_searchIndex; }
+    QVariantMap match() const;
+    // Finds the text everywhere in the open book, ignoring case, accents and
+    // the kind of quotes and dashes; an empty query clears the search.
+    Q_INVOKABLE void search(const QString &query);
+    // Goes to a match and marks it in the text.
+    Q_INVOKABLE void showMatch(int index);
+    // The match after or before the one shown; with none shown yet, the
+    // first one after or before the reading position. Both wrap around.
+    Q_INVOKABLE void nextMatch();
+    Q_INVOKABLE void previousMatch();
+    // Goes to a match and reads aloud from its sentence.
+    Q_INVOKABLE void readMatch(int index);
+    // Takes the mark off the match, keeping the search.
+    Q_INVOKABLE void hideMatch();
+
     Q_INVOKABLE void open(const QString &pathOrUrl);
     Q_INVOKABLE void openDialog();
     // Saves pasted text to the library and opens it; false when there is
@@ -148,8 +180,20 @@ signals:
     void appearanceChanged();
     void focusChanged();
     void bookmarkedChanged();
+    void searchChanged();
+    void matchChanged();
 
 private:
+    struct Match {
+        int chapter = 0;
+        int paragraph = 0;
+        int start = 0;
+        int length = 0;
+    };
+    // Forgets the search, as a different book or none at all does.
+    void clearSearch();
+    // The first match at or after the reading position.
+    int matchAtPosition() const;
     static QStringList spotlights() { return {"off", "paragraph", "sentence"}; }
     static QStringList highlights() { return {"glass", "both", "word", "sentence"}; }
     static QStringList strengths() { return {"subtle", "normal", "strong"}; }
@@ -174,6 +218,15 @@ private:
     int m_sentence = 0;
     QVariantList m_paragraphs;
     QTimer m_saveTimer;
+
+    QString m_searchQuery;
+    QList<Match> m_matches;
+    QVariantList m_searchResults;
+    int m_searchIndex = -1;
+    bool m_matchShown = false;
+    // The open book's paragraphs folded for searching, by chapter, made on
+    // the first search.
+    QList<QStringList> m_folded;
 
     int m_fontSize = 20;
     double m_lineHeight = 1.5;

@@ -1693,6 +1693,140 @@ private slots:
         QVERIFY(exporter.error().contains("omareader setup"));
     }
 
+    // Searching the open book.
+
+    void foldingForSearchKeepsEveryOffset() {
+        const QString text = QString::fromUtf8("Ação “Olá” — don’t\u00a0Ünïcode ÇA");
+        const QString folded = Text::fold(text);
+        QCOMPARE(folded.size(), text.size());
+        QCOMPARE(folded, QString("acao \"ola\" - don't unicode ca"));
+        // A ligature has no one-letter form, so it stays as it is.
+        QCOMPARE(Text::fold(QString::fromUtf8("ﬁne")), QString::fromUtf8("ﬁne"));
+    }
+
+    void searchFindsEveryMatchAndStepsThroughThem() {
+        QTemporaryDir dir;
+        Library library(dir.filePath("library.json"), dir.filePath("covers"));
+        Reader reader(&library, nullptr, nullptr);
+        reader.search("anything"); // no book: nothing happens
+        QCOMPARE(reader.searchCount(), 0);
+
+        const QString path = dir.filePath("search.txt");
+        write(path, "search");
+        Book book;
+        book.path = path;
+        book.title = "Search";
+        book.format = "txt";
+        book.chapters = {{"One", {{"The café opened early. Nobody came to the CAFE that day.", 0, {}}}},
+                         {"Two", {{"A quiet chapter.", 0, {}}, {"Later, the Café closed for good.", 0, {}}}},
+                         {"Three", {{"No match here at all.", 0, {}}}}};
+        book.segment();
+        reader.openBook(std::make_shared<Book>(book));
+        QSignalSpy searched(&reader, &Reader::searchChanged);
+
+        // Case and accents don't matter, and spaces around the words are dropped.
+        reader.search("  Cafe ");
+        QCOMPARE(searched.count(), 1);
+        QCOMPARE(reader.searchQuery(), QString("Cafe"));
+        QCOMPARE(reader.searchCount(), 3);
+        QCOMPARE(reader.searchIndex(), -1);
+        QVERIFY(reader.match().isEmpty());
+        const QVariantMap first = reader.searchResults().first().toMap();
+        QCOMPARE(first.value("chapter").toInt(), 0);
+        QCOMPARE(first.value("start").toInt(), 4);
+        QCOMPARE(first.value("end").toInt(), 8);
+        QCOMPARE(first.value("chapterTitle").toString(), QString("One"));
+        QCOMPARE(first.value("before").toString(), QString("The "));
+        QCOMPARE(first.value("text").toString(), QString::fromUtf8("café"));
+        QVERIFY(first.value("after").toString().startsWith(" opened early."));
+        const QVariantMap third = reader.searchResults().at(2).toMap();
+        QCOMPARE(third.value("chapter").toInt(), 1);
+        QCOMPARE(third.value("paragraph").toInt(), 1);
+        QCOMPARE(third.value("start").toInt(), 11);
+        // Asking again for the same thing changes nothing.
+        reader.search("Cafe");
+        QCOMPARE(searched.count(), 1);
+
+        // The first match after the reading place, which is now in chapter two.
+        reader.goToChapter(1);
+        reader.nextMatch();
+        QCOMPARE(reader.searchIndex(), 2);
+        QCOMPARE(reader.chapter(), 1);
+        QCOMPARE(reader.match().value("paragraph").toInt(), 1);
+        QCOMPARE(reader.match().value("start").toInt(), 11);
+        QCOMPARE(reader.match().value("end").toInt(), 15);
+        // The reading place is the match's sentence, so reading goes on from there.
+        QCOMPARE(reader.sentence(), book.sentenceAt(1, 1, 11));
+        // Stepping on wraps around to the first, and back again to the last.
+        reader.nextMatch();
+        QCOMPARE(reader.searchIndex(), 0);
+        QCOMPARE(reader.chapter(), 0);
+        reader.previousMatch();
+        QCOMPARE(reader.searchIndex(), 2);
+        reader.previousMatch();
+        QCOMPARE(reader.searchIndex(), 1);
+        QCOMPARE(reader.match().value("start").toInt(), 42);
+
+        // Putting the mark away keeps the search and the place in it.
+        reader.hideMatch();
+        QVERIFY(reader.match().isEmpty());
+        QCOMPARE(reader.searchIndex(), 1);
+        QCOMPARE(reader.searchCount(), 3);
+        reader.nextMatch();
+        QCOMPARE(reader.searchIndex(), 2);
+        reader.showMatch(7); // past the end: nothing happens
+        QCOMPARE(reader.searchIndex(), 2);
+
+        // Before the reading place, with none shown yet, steps back.
+        reader.search("chapter");
+        QCOMPARE(reader.searchCount(), 1);
+        reader.goToChapter(2);
+        reader.previousMatch();
+        QCOMPARE(reader.chapter(), 1);
+
+        reader.search("nowhere to be found");
+        QCOMPARE(reader.searchCount(), 0);
+        QVERIFY(reader.searchResults().isEmpty());
+        reader.nextMatch(); // nothing to step to
+        QCOMPARE(reader.searchIndex(), -1);
+        reader.search("   ");
+        QCOMPARE(reader.searchQuery(), QString());
+
+        // Another book, or none, starts with no search.
+        reader.search("cafe");
+        reader.nextMatch();
+        reader.closeBook();
+        QCOMPARE(reader.searchCount(), 0);
+        QCOMPARE(reader.searchQuery(), QString());
+        QVERIFY(reader.match().isEmpty());
+        QCOMPARE(reader.searchIndex(), -1);
+    }
+
+    void searchListsTheFirstMatchesButStepsThroughAll() {
+        QTemporaryDir dir;
+        Library library(dir.filePath("library.json"), dir.filePath("covers"));
+        Reader reader(&library, nullptr, nullptr);
+        const QString path = dir.filePath("many.txt");
+        write(path, "many");
+        Book book;
+        book.path = path;
+        book.title = "Many";
+        book.format = "txt";
+        QList<Paragraph> paragraphs;
+        for (int i = 0; i < 300; ++i)
+            paragraphs.append({"Echo and echo again.", 0, {}});
+        book.chapters = {{"Echoes", paragraphs}};
+        book.segment();
+        reader.openBook(std::make_shared<Book>(book));
+        reader.search("echo");
+        QCOMPARE(reader.searchCount(), 600);
+        QCOMPARE(reader.searchResults().size(), Reader::SearchListLimit);
+        reader.previousMatch(); // from the top, back round to the very last
+        QCOMPARE(reader.searchIndex(), 599);
+        QCOMPARE(reader.match().value("paragraph").toInt(), 299);
+        QCOMPARE(reader.match().value("start").toInt(), 9);
+    }
+
     // The library and the reading position.
 
     void libraryRemembersBooksAndPositions() {
@@ -3159,6 +3293,136 @@ private slots:
         QSettings().remove("reader");
     }
 
+    void searchPanelFindsAMatchAndMarksIt() {
+        QSettings().remove("reader");
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        QVERIFY(app.show());
+        const QString path = dir.filePath("search.txt");
+        write(path, "search");
+        Book book;
+        book.path = path;
+        book.title = "Search";
+        book.format = "txt";
+        QList<Paragraph> filler;
+        for (int i = 0; i < 30; ++i)
+            filler.append({"Plain words that fill the page and go on for a while, so the chapter is longer than "
+                           "the window.", 0, {}});
+        QList<Paragraph> second = filler;
+        second.append({"At last the lighthouse keeper climbed the stairs.", 0, {}});
+        book.chapters = {{"Shore", filler}, {"Tower", second}};
+        book.segment();
+        app.reader.openBook(std::make_shared<Book>(book));
+        QTRY_VERIFY(!app.items("bookParagraph").isEmpty());
+
+        // The button in the title bar draws its glass inside its circle.
+        QQuickItem *button = app.items("searchButton").value(0);
+        QVERIFY(button);
+        const QImage bar = app.grab("search-button");
+        const QRect glass = brightBoxInCircle(bar, app.area(bar, button), 150);
+        QVERIFY2(!glass.isEmpty(), "the magnifying glass isn't drawn");
+        const QPointF centre = QRectF(app.area(bar, button)).center();
+        QVERIFY2(qAbs(QRectF(glass).center().x() - centre.x()) <= 2 && qAbs(QRectF(glass).center().y() - centre.y()) <= 2,
+                 qPrintable(QString("the glass is off centre: %1,%2 in a button centred on %3,%4")
+                                .arg(QRectF(glass).center().x()).arg(QRectF(glass).center().y())
+                                .arg(centre.x()).arg(centre.y())));
+        if (!qEnvironmentVariableIsEmpty("OMAREADER_SCREENSHOTS"))
+            bar.copy(app.area(bar, button)).scaled(app.area(bar, button).size() * 8)
+                .save(qEnvironmentVariable("OMAREADER_SCREENSHOTS") + "/search-button-zoom.png");
+
+        // / opens the drawer on the search, with the words to type in focus.
+        QObject *panel = app.window->findChild<QObject *>("contentsPanel");
+        QVERIFY(panel);
+        QTest::keyClick(app.window, Qt::Key_Slash);
+        QTRY_VERIFY(panel->property("opened").toBool());
+        QCOMPARE(panel->property("tab").toInt(), 2);
+        QQuickItem *field = app.items("searchField").value(0);
+        QTRY_VERIFY(field && field->hasActiveFocus());
+        app.grab("search-empty");
+        // Letters that are shortcuts elsewhere go into the field.
+        for (const char c : QByteArray("lighthouse"))
+            QTest::keyClick(app.window, c);
+        QCOMPARE(field->property("text").toString(), QString("lighthouse"));
+        QVERIFY(panel->property("opened").toBool());
+        QTRY_COMPARE(app.reader.searchCount(), 1);
+        QTRY_COMPARE(app.items("searchResult").size(), 1);
+        app.grab("search-results");
+
+        // Return goes to it and marks it in the text, in view.
+        QTest::keyClick(app.window, Qt::Key_Return);
+        QTRY_VERIFY(!panel->property("opened").toBool());
+        QCOMPARE(app.reader.chapter(), 1);
+        QCOMPARE(app.reader.match().value("paragraph").toInt(), 30);
+        QQuickItem *found = nullptr;
+        QTRY_VERIFY((found = [&]() -> QQuickItem * {
+            for (QQuickItem *item : app.items("bookParagraph"))
+                if (item->property("index").toInt() == 30)
+                    return item;
+            return nullptr;
+        }()));
+        QQuickItem *list = app.window->findChild<QQuickItem *>("chapterList");
+        QVERIFY(list);
+        const QImage marked = app.grab("search-match");
+        QVariant rect;
+        QMetaObject::invokeMethod(found, "rectFor", Q_RETURN_ARG(QVariant, rect), Q_ARG(QVariant, 9));
+        const QRectF start = rect.toRectF();
+        QMetaObject::invokeMethod(found, "rectFor", Q_RETURN_ARG(QVariant, rect), Q_ARG(QVariant, 19));
+        const QRectF end = rect.toRectF();
+        const QRectF word = found->mapRectToScene(QRectF(start.x(), start.y(), end.x() - start.x(), start.height()));
+        const QRectF view = list->mapRectToScene(QRectF(0, 0, list->width(), list->height()));
+        QVERIFY2(view.contains(word), "the match isn't in view");
+        // The match is tinted; the words before it aren't. Compared with the
+        // same text once the mark is put away.
+        app.reader.hideMatch();
+        const QImage plain = app.grab("search-match-hidden");
+        auto changed = [&](const QRectF &r) {
+            const qreal ratio = marked.devicePixelRatio();
+            int count = 0;
+            for (int y = qRound(r.top() * ratio); y < qRound(r.bottom() * ratio); ++y)
+                for (int x = qRound(r.left() * ratio); x < qRound(r.right() * ratio); ++x) {
+                    const QColor a = marked.pixelColor(x, y), b = plain.pixelColor(x, y);
+                    count += qAbs(a.red() - b.red()) + qAbs(a.green() - b.green()) + qAbs(a.blue() - b.blue()) > 30;
+                }
+            return count;
+        };
+        const int inside = changed(word);
+        const int before = changed(word.translated(-word.width() - 4, 0));
+        QVERIFY2(inside > word.width() * word.height() * 0.5,
+                 qPrintable(QString("only %1 pixels changed on the match").arg(inside)));
+        QCOMPARE(before, 0);
+        if (!qEnvironmentVariableIsEmpty("OMAREADER_SCREENSHOTS"))
+            marked.copy(word.adjusted(-80, -20, 80, 20).toRect()).scaled(word.adjusted(-80, -20, 80, 20).size().toSize() * 3)
+                .save(qEnvironmentVariable("OMAREADER_SCREENSHOTS") + "/search-match-zoom.png");
+
+        // The view settling there leaves the reading place on the match.
+        QTest::qWait(600);
+        QCOMPARE(app.reader.sentence(), book.sentenceAt(1, 30, 9));
+
+        // F3 brings the mark back on the same match, the only one, and
+        // Escape takes it away.
+        QTest::keyClick(app.window, Qt::Key_F3);
+        QTRY_COMPARE(app.reader.match().value("paragraph").toInt(), 30);
+        QTest::keyClick(app.window, Qt::Key_Escape);
+        QTRY_VERIFY(app.reader.match().isEmpty());
+        QTest::keyClick(app.window, Qt::Key_F3);
+        QTRY_COMPARE(app.reader.match().value("paragraph").toInt(), 30);
+
+        // Shift+Return in the field reads aloud from the match. The tests'
+        // home has no voice, so it only gets as far as saying so.
+        QTest::keyClick(app.window, Qt::Key_Slash);
+        QTRY_VERIFY(panel->property("opened").toBool());
+        QTRY_VERIFY(field->hasActiveFocus());
+        app.reader.goToChapter(0);
+        QTest::keyClick(app.window, Qt::Key_Return, Qt::ShiftModifier);
+        QTRY_VERIFY(!panel->property("opened").toBool());
+        QCOMPARE(app.reader.chapter(), 1);
+        QCOMPARE(app.reader.sentence(), book.sentenceAt(1, 30, 9));
+        app.narrator.stop();
+        app.narrator.clearError();
+        app.reader.closeBook();
+        QSettings().remove("reader");
+    }
+
     void helpShowsEveryShortcutOnScreen() {
         QTemporaryDir dir;
         AppWindow app(dir.path());
@@ -3199,7 +3463,8 @@ private slots:
         const QJsonObject catalog = QJsonDocument::fromJson(file.readAll()).object();
         static const QRegularExpression call("\\b(?:qsTr|tr)\\(\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
         int found = 0;
-        for (const QString name : {"src/ContentsPanel.qml", "src/NoteEditor.qml", "src/portalfilepicker.cpp"}) {
+        for (const QString name : {"src/ContentsPanel.qml", "src/NoteEditor.qml", "src/portalfilepicker.cpp",
+                                   "src/ReaderView.qml", "src/HelpOverlay.qml"}) {
             QFile source(QString(OMAREADER_SOURCE) + "/" + name);
             QVERIFY(source.open(QIODevice::ReadOnly));
             const QString text = QString::fromUtf8(source.readAll());

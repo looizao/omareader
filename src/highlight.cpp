@@ -213,6 +213,11 @@ void ReadingHighlight::apply() {
         sentence.setBackground(m_sentenceColor);
         mark(m_sentenceStart, m_sentenceEnd, sentence);
     }
+    if (m_foundStart >= 0 && m_foundEnd > m_foundStart && shows(m_foundColor)) {
+        QTextCharFormat found;
+        found.setBackground(m_foundColor);
+        mark(m_foundStart, m_foundEnd, found);
+    }
     if (m_selectionStart >= 0 && m_selectionEnd > m_selectionStart && shows(m_selectionColor)) {
         QTextCharFormat selection;
         selection.setBackground(m_selectionColor);

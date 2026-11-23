@@ -30,6 +30,10 @@ class ReadingHighlight : public QObject {
     Q_PROPERTY(int selectionStart MEMBER m_selectionStart WRITE setSelectionStart NOTIFY rangeChanged)
     Q_PROPERTY(int selectionEnd MEMBER m_selectionEnd WRITE setSelectionEnd NOTIFY rangeChanged)
     Q_PROPERTY(QColor selectionColor MEMBER m_selectionColor WRITE setSelectionColor NOTIFY rangeChanged)
+    // A search match shown in this paragraph.
+    Q_PROPERTY(int foundStart MEMBER m_foundStart WRITE setFoundStart NOTIFY rangeChanged)
+    Q_PROPERTY(int foundEnd MEMBER m_foundEnd WRITE setFoundEnd NOTIFY rangeChanged)
+    Q_PROPERTY(QColor foundColor MEMBER m_foundColor WRITE setFoundColor NOTIFY rangeChanged)
     Q_PROPERTY(int sentenceStart MEMBER m_sentenceStart WRITE setSentenceStart NOTIFY rangeChanged)
     Q_PROPERTY(int sentenceEnd MEMBER m_sentenceEnd WRITE setSentenceEnd NOTIFY rangeChanged)
     Q_PROPERTY(int wordStart MEMBER m_wordStart WRITE setWordStart NOTIFY rangeChanged)
@@ -67,6 +71,9 @@ public:
     void setSelectionStart(int v) { set(m_selectionStart, v); }
     void setSelectionEnd(int v) { set(m_selectionEnd, v); }
     void setSelectionColor(const QColor &c) { set(m_selectionColor, c); }
+    void setFoundStart(int v) { set(m_foundStart, v); }
+    void setFoundEnd(int v) { set(m_foundEnd, v); }
+    void setFoundColor(const QColor &c) { set(m_foundColor, c); }
     void setSentenceStart(int v) { set(m_sentenceStart, v); }
     void setSentenceEnd(int v) { set(m_sentenceEnd, v); }
     void setWordStart(int v) { set(m_wordStart, v); }
@@ -127,6 +134,8 @@ private:
     QColor m_markColor, m_noteColor;
     int m_selectionStart = -1, m_selectionEnd = -1;
     QColor m_selectionColor;
+    int m_foundStart = -1, m_foundEnd = -1;
+    QColor m_foundColor;
     int m_sentenceStart = -1, m_sentenceEnd = -1, m_wordStart = -1, m_wordEnd = -1;
     QColor m_sentenceColor, m_wordColor, m_wordTextColor;
     int m_readEnd = -1;

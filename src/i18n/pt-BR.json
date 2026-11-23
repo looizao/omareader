@@ -335,5 +335,20 @@
   "Click a highlight": "Clicar num destaque",
   "Its note": "A nota dele",
   "Bookmarks, highlights and notes": "Marcadores, destaques e notas",
-  "Sync Bookmarks and Notes Through": "Sincronizar marcadores e notas por"
+  "Sync Bookmarks and Notes Through": "Sincronizar marcadores e notas por",
+  "Search (/)": "Buscar (/)",
+  "Find in the book": "Encontrar no livro",
+  "Not found in this book.": "Não encontrado neste livro.",
+  "The first %1 of %n match(es).": {
+    "one": "Os primeiros %1 de %n resultado.",
+    "other": "Os primeiros %1 de %n resultados."
+  },
+  "%n match(es).": {
+    "one": "%n resultado.",
+    "other": "%n resultados."
+  },
+  "Type a word or a phrase to find it anywhere in the book. Return goes to the next match, Shift+Return reads aloud from it, and F3 steps through the rest.": "Digite uma palavra ou uma frase para encontrá-la em qualquer parte do livro. Enter vai ao próximo resultado, Shift+Enter lê em voz alta a partir dele, e F3 percorre os demais.",
+  "Search the book (/)": "Buscar no livro (/)",
+  "Search the book": "Buscar no livro",
+  "Next / previous match": "Resultado seguinte / anterior"
 }

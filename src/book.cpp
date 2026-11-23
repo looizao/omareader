@@ -99,6 +99,36 @@ QString normalizeWord(const QString &word) {
     return out;
 }
 
+QString fold(const QString &text) {
+    QString out = text;
+    for (QChar &c : out) {
+        if (c.isSurrogate())
+            continue;
+        // Only canonical decompositions keep one character for one: a
+        // ligature's compatibility form would be two, and the offsets would
+        // no longer line up with the text.
+        while (c.decompositionTag() == QChar::Canonical && !c.decomposition().isEmpty())
+            c = c.decomposition().at(0);
+        switch (c.unicode()) {
+        case 0x2018: case 0x2019: case 0x201B: case 0x02BC: case 0x2032:
+            c = QLatin1Char('\'');
+            break;
+        case 0x201C: case 0x201D: case 0x201F: case 0x2033:
+            c = QLatin1Char('"');
+            break;
+        case 0x2010: case 0x2011: case 0x2012: case 0x2013: case 0x2014: case 0x2212:
+            c = QLatin1Char('-');
+            break;
+        default:
+            if (c.isSpace())
+                c = QLatin1Char(' ');
+            else
+                c = c.toCaseFolded();
+        }
+    }
+    return out;
+}
+
 }
 
 void Book::segment() {

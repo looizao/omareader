@@ -14,6 +14,10 @@ FocusScope {
 
     // The view keeps the spoken word in sight until the user scrolls away.
     property bool following: true
+    // After going to a search match the reading place is the match, not
+    // the paragraph that scrolling there leaves at the top, until the
+    // reader scrolls on.
+    property bool holdPlace: false
     // Reading keys step aside while a panel or the note has the keyboard.
     readonly property bool keysEnabled: visible && !contents.opened && !settings.opened && !noteEditor.opened
     // Focus mode holds the spoken line at one height and scrolls the text
@@ -61,6 +65,7 @@ FocusScope {
     }
 
     function closePanels() {
+        reader.hideMatch()
         card.close()
         contents.close()
         settings.close()
@@ -116,6 +121,7 @@ FocusScope {
     }
 
     function scrollBy(amount) {
+        root.holdPlace = false
         scroll.stop()
         const maxY = list.originY + Math.max(0, list.contentHeight - list.height)
         list.contentY = Math.max(list.originY, Math.min(maxY, list.contentY + amount))
@@ -149,6 +155,27 @@ FocusScope {
         }
     }
 
+    // Brings the search match into view: its paragraph at the top, or the
+    // match a third of the way down when it is further into a long one.
+    function revealMatch() {
+        const match = reader.match
+        if (match.chapter !== reader.chapter)
+            return
+        let item = list.itemAtIndex(match.paragraph)
+        if (!item) {
+            list.positionViewAtIndex(match.paragraph, ListView.Beginning)
+            item = list.itemAtIndex(match.paragraph)
+            if (!item)
+                return
+        }
+        const r = item.rectFor(match.start)
+        const y = item.y + r.y
+        if (y < list.contentY || y + r.height > list.contentY + list.height * 0.8) {
+            const maxY = list.originY + Math.max(0, list.contentHeight - list.height)
+            list.contentY = Math.max(list.originY, Math.min(maxY, y - list.height * 0.3))
+        }
+    }
+
     function follow() {
         root.following = true
         root.reveal()
@@ -164,8 +191,11 @@ FocusScope {
             // Pausing or playing by hand while the card is open settles it.
             if (card.opened && narrator.state !== Narrator.Paused)
                 card.resumeOnClose = false
-            if (narrator.state === Narrator.Preparing)
+            if (narrator.state === Narrator.Preparing) {
                 root.following = true
+                // The voice's own highlight takes over from the match's.
+                reader.hideMatch()
+            }
             if (narrator.state === Narrator.Playing)
                 root.wake()
         }
@@ -189,7 +219,18 @@ FocusScope {
 
     Connections {
         target: reader
+        function onMatchChanged() {
+            if (reader.match.chapter === undefined)
+                return
+            root.holdPlace = true
+            Qt.callLater(root.revealMatch)
+        }
+    }
+
+    Connections {
+        target: reader
         function onChapterChanged() {
+            root.holdPlace = false
             card.close()
             list.clearSelection()
             selectionMenu.close()
@@ -207,8 +248,8 @@ FocusScope {
     Shortcut { sequences: ["Up", "K"]; enabled: root.keysEnabled; onActivated: root.scrollBy(-80) }
     Shortcut { sequence: "PgDown"; enabled: root.keysEnabled; onActivated: root.scrollBy(list.height * 0.9) }
     Shortcut { sequence: "PgUp"; enabled: root.keysEnabled; onActivated: root.scrollBy(-list.height * 0.9) }
-    Shortcut { sequence: "Home"; enabled: root.keysEnabled; onActivated: { root.following = !narrator.active; list.positionViewAtBeginning() } }
-    Shortcut { sequence: "End"; enabled: root.keysEnabled; onActivated: { root.following = !narrator.active; list.positionViewAtEnd() } }
+    Shortcut { sequence: "Home"; enabled: root.keysEnabled; onActivated: { root.holdPlace = false; root.following = !narrator.active; list.positionViewAtBeginning() } }
+    Shortcut { sequence: "End"; enabled: root.keysEnabled; onActivated: { root.holdPlace = false; root.following = !narrator.active; list.positionViewAtEnd() } }
     Shortcut { sequences: ["Right", "L"]; enabled: root.keysEnabled; onActivated: reader.nextChapter() }
     Shortcut { sequences: ["Left", "H"]; enabled: root.keysEnabled; onActivated: reader.previousChapter() }
     Shortcut { sequence: "."; enabled: root.keysEnabled; onActivated: narrator.skip(1) }
@@ -224,6 +265,18 @@ FocusScope {
     Shortcut { sequence: "M"; enabled: root.keysEnabled; onActivated: reader.toggleBookmark() }
     Shortcut { sequence: "T"; enabled: root.visible && !settings.opened && !noteEditor.opened; onActivated: contents.toggle(0) }
     Shortcut { sequence: "N"; enabled: root.visible && !settings.opened && !noteEditor.opened; onActivated: contents.toggle(1) }
+    Shortcut { sequences: ["/", StandardKey.Find]; enabled: root.visible && !settings.opened && !noteEditor.opened; onActivated: contents.toggle(2) }
+    // With nothing searched yet, they open the search instead.
+    Shortcut {
+        sequences: ["F3", "Ctrl+G"]
+        enabled: root.keysEnabled
+        onActivated: reader.searchCount > 0 ? reader.nextMatch() : contents.toggle(2)
+    }
+    Shortcut {
+        sequences: ["Shift+F3", "Ctrl+Shift+G"]
+        enabled: root.keysEnabled
+        onActivated: reader.searchCount > 0 ? reader.previousMatch() : contents.toggle(2)
+    }
     Shortcut { sequence: "Ctrl+,"; enabled: root.visible && !contents.opened && !noteEditor.opened; onActivated: settings.opened ? settings.close() : settings.open() }
     Shortcut { sequence: "A"; enabled: root.visible && !contents.opened && !noteEditor.opened; onActivated: settings.opened ? settings.close() : settings.open() }
     Shortcut { sequence: "E"; enabled: root.keysEnabled; onActivated: root.exportRequested() }
@@ -261,6 +314,18 @@ FocusScope {
                     onClicked: contents.toggle(0)
                     ToolTip.visible: hovered && enabled
                     ToolTip.text: qsTr("Contents (T)")
+                }
+                ToolButton {
+                    objectName: "searchButton"
+                    onClicked: contents.toggle(2)
+                    ToolTip.visible: hovered && enabled
+                    ToolTip.text: qsTr("Search the book (/)")
+                    SearchIcon {
+                        anchors.centerIn: parent
+                        width: 16
+                        height: 16
+                        color: Colors.text
+                    }
                 }
                 Label {
                     Layout.fillWidth: true
@@ -431,7 +496,11 @@ FocusScope {
                     }
                 }
 
-                onMovementStarted: if (narrator.active) root.following = false
+                onMovementStarted: {
+                    root.holdPlace = false
+                    if (narrator.active)
+                        root.following = false
+                }
                 onContentYChanged: {
                     visibleTimer.restart()
                     // The card belongs beside its word, so scrolling closes it.
@@ -453,6 +522,8 @@ FocusScope {
                 id: visibleTimer
                 interval: 400
                 onTriggered: {
+                    if (root.holdPlace)
+                        return
                     const index = list.indexAt(list.width / 2, list.contentY + 40)
                     if (index >= 0)
                         reader.setVisibleParagraph(index)

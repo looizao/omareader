@@ -7,7 +7,8 @@ import Omareader
 // In focus mode the paragraphs around the voice dim, and what was read fades.
 //
 // The reader's highlights are tinted with the accent, those with a note
-// underlined, and a bookmark shows as a ribbon in the margin. Dragging over
+// underlined, and a bookmark shows as a ribbon in the margin. A search match
+// gone to is tinted more strongly. Dragging over
 // the text selects it, across paragraphs; the chapter's list keeps the
 // selection, since it can run past this paragraph.
 Item {
@@ -36,6 +37,8 @@ Item {
     readonly property var view: ListView.view
     // This paragraph's highlights and bookmark.
     readonly property var annotated: annotations.chapterMarks[root.index] || ({})
+    // The search match shown, when it is in this paragraph.
+    readonly property bool found: reader.match.chapter === reader.chapter && reader.match.paragraph === root.index
     readonly property bool selected: !!root.view && root.view.hasSelection
                                      && root.index >= root.view.selectionStartParagraph
                                      && root.index <= root.view.selectionEndParagraph
@@ -119,6 +122,9 @@ Item {
         selectionEnd: !root.selected ? -1
                       : root.index === root.view.selectionEndParagraph ? root.view.selectionEnd : root.modelData.text.length
         selectionColor: Qt.alpha(Colors.text, 0.24)
+        foundStart: root.found ? reader.match.start : -1
+        foundEnd: root.found ? reader.match.end : -1
+        foundColor: Qt.alpha(theme.accent, 0.5)
     }
 
     Loader {
