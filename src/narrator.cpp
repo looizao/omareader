@@ -23,12 +23,21 @@ void SleepTimer::listen(qint64 ms) {
         m_leftMs -= ms;
 }
 
-bool SleepTimer::pausesNow(bool betweenSentences, bool chapterEnds) const {
-    switch (m_mode) {
-    case Minutes: return m_leftMs <= 0 && (betweenSentences || m_leftMs <= -GraceMs);
-    case ChapterEnd: return betweenSentences && chapterEnds;
-    default: return false;
+qint64 SleepTimer::stopFrame(const QList<Queued> &queued, qint64 playedFrame, int sampleRate) const {
+    if (m_mode == Off || queued.isEmpty())
+        return -1;
+    // The sentence being heard: the last one to start at or before it.
+    int heard = 0;
+    while (heard + 1 < queued.size() && queued.at(heard + 1).startFrame <= playedFrame)
+        ++heard;
+    const qint64 expiry = playedFrame + msLeft() * sampleRate / 1000;
+    for (int next = heard + 1; next < queued.size(); ++next) {
+        const bool stops = m_mode == Minutes ? queued.at(next).startFrame >= expiry
+                                             : queued.at(next).chapter != queued.at(next - 1).chapter;
+        if (stops)
+            return queued.at(next).startFrame;
     }
+    return -1;
 }
 
 Narrator::Narrator(QObject *parent) : QObject(parent) {
@@ -487,6 +496,9 @@ void Narrator::appendReady() {
             break;
         const qint64 start = m_player.queuedFrames();
         m_timeline.append({m_nextToAppend, start, it->audio.frames(), it->timings});
+        // Before the audio goes in, so none of it is written past the
+        // sleep timer's stopping point.
+        updateSleepLimit();
         m_player.append(it->audio.samples);
         // The pause belongs to the stream, not to the sentence: the word
         // highlight stays on the last word through it.
@@ -534,14 +546,13 @@ void Narrator::tick() {
     if (m_state != Playing || m_timeline.isEmpty())
         return;
     const qint64 frame = m_player.playedFrames();
-    // The sleep timer looks at the sentence that was being heard before
-    // moving on, so it can stop in the pause after it. It counts whole
-    // milliseconds and keeps the frames left over for the next tick.
+    // The sleep timer counts whole milliseconds heard and keeps the frames
+    // left over for the next tick. It checks before moving on to the next
+    // sentence, so a pause there leaves the highlight on the last one.
     {
-        const Entry &heard = m_timeline.at(m_entry);
         const qint64 heardMs = qMax<qint64>(0, frame - m_sleepFrame) * 1000 / Synthesizer::SampleRate;
         m_sleepFrame = frame < m_sleepFrame ? frame : m_sleepFrame + heardMs * Synthesizer::SampleRate / 1000;
-        if (checkSleep(heardMs, frame >= heard.startFrame + heard.frames, heard.sentence))
+        if (checkSleep(heardMs, frame))
             return;
     }
     while (m_entry + 1 < m_timeline.size() && frame >= m_timeline.at(m_entry + 1).startFrame)
@@ -589,6 +600,7 @@ void Narrator::resume() {
     if (m_state != Paused)
         return;
     stopPreview();
+    updateSleepLimit();
     m_player.resume();
     setState(m_timeline.isEmpty() ? Preparing : Playing);
 }
@@ -632,6 +644,7 @@ int Narrator::sleepSecondsLeft() const {
 void Narrator::sleepAfter(int minutes) {
     const SleepTimer before = m_sleep;
     m_sleep.setMinutes(minutes);
+    updateSleepLimit();
     if (m_sleep.mode() != before.mode() || m_sleep.msLeft() != before.msLeft())
         emit sleepChanged();
 }
@@ -640,6 +653,7 @@ void Narrator::sleepAtEndOfChapter() {
     if (m_sleep.mode() == SleepTimer::ChapterEnd)
         return;
     m_sleep.setChapterEnd();
+    updateSleepLimit();
     emit sleepChanged();
 }
 
@@ -647,29 +661,35 @@ void Narrator::cancelSleep() {
     if (!m_sleep.isOn())
         return;
     m_sleep.cancel();
+    updateSleepLimit();
     emit sleepChanged();
 }
 
-// Whether the next sentence the voice would read is in another chapter.
-// After the last one the book simply ends.
-bool Narrator::chapterEndsAfter(int sentence) const {
-    if (!m_book || sentence < 0 || sentence >= m_book->sentenceCount())
-        return false;
-    for (int next = sentence + 1; next < m_book->sentenceCount(); ++next)
-        if (m_book->sentences.at(next).speakable())
-            return m_book->sentences.at(next).chapter != m_book->sentences.at(sentence).chapter;
-    return false;
+void Narrator::updateSleepLimit() {
+    if (!m_sleep.isOn() || m_timeline.isEmpty()) {
+        m_player.setLimit(-1);
+        return;
+    }
+    // Only what is still to come matters: from the sentence being heard on.
+    QList<SleepTimer::Queued> queued;
+    const int from = qBound(0, m_entry, int(m_timeline.size()) - 1);
+    queued.reserve(m_timeline.size() - from);
+    for (int i = from; i < m_timeline.size(); ++i)
+        queued.append({m_book->sentences.at(m_timeline.at(i).sentence).chapter, m_timeline.at(i).startFrame});
+    m_player.setLimit(m_sleep.stopFrame(queued, m_player.playedFrames(), Synthesizer::SampleRate));
 }
 
-bool Narrator::checkSleep(qint64 heardMs, bool betweenSentences, int sentence) {
+bool Narrator::checkSleep(qint64 heardMs, qint64 frame) {
     if (!m_sleep.isOn())
         return false;
     const int before = sleepSecondsLeft();
     m_sleep.listen(heardMs);
-    if (m_sleep.pausesNow(betweenSentences, betweenSentences && chapterEndsAfter(sentence))) {
+    const qint64 limit = m_player.limit();
+    if ((limit >= 0 && frame >= limit) || m_sleep.overdue()) {
         // Paused rather than stopped, so Space goes on from here.
         m_sleep.cancel();
         pause();
+        m_player.setLimit(-1);
         emit sleepChanged();
         emit fellAsleep();
         return true;
@@ -679,9 +699,9 @@ bool Narrator::checkSleep(qint64 heardMs, bool betweenSentences, int sentence) {
     return false;
 }
 
-void Narrator::listenForTests(qint64 ms, bool betweenSentences) {
+void Narrator::listenForTests(qint64 ms) {
     if (m_state == Playing)
-        checkSleep(ms, betweenSentences, m_sentence);
+        checkSleep(ms, m_player.playedFrames());
 }
 
 void Narrator::setPreviewing(bool previewing) {

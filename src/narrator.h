@@ -19,15 +19,22 @@
 
 // The sleep timer: how much listening is left before the narration pauses on
 // its own, or that it pauses where the chapter being heard ends. It counts
-// only time the voice is heard, so a pause to look a word up costs nothing,
-// and it stops between sentences rather than in the middle of a word.
+// only time the voice is heard, so a pause to look a word up costs nothing.
+// It stops the stream at the start of a sentence, so the one being heard is
+// finished and nothing of the next one is heard.
 class SleepTimer {
 public:
     enum Mode { Off, Minutes, ChapterEnd };
 
-    // How long past its time it waits for the sentence to end, for the odd
-    // sentence that runs on for a minute.
+    // How long past its time it lets a sentence run on before cutting it,
+    // for the odd sentence that lasts a minute.
     static constexpr qint64 GraceMs = 15000;
+
+    // A sentence queued on the stream: its chapter and where it starts.
+    struct Queued {
+        int chapter;
+        qint64 startFrame;
+    };
 
     Mode mode() const { return m_mode; }
     bool isOn() const { return m_mode != Off; }
@@ -35,14 +42,20 @@ public:
     int minutes() const { return m_mode == Minutes ? m_minutes : 0; }
     // What is left, never below zero; -1 when it isn't counting minutes.
     qint64 msLeft() const { return m_mode == Minutes ? qMax<qint64>(0, m_leftMs) : -1; }
+    // Past its time by more than the grace: stop now, mid-sentence or not.
+    bool overdue() const { return m_mode == Minutes && m_leftMs <= -GraceMs; }
 
     void setMinutes(int minutes);
     void setChapterEnd();
     void cancel() { m_mode = Off; }
     void listen(qint64 ms);
-    // Whether to pause now: betweenSentences says the sentence being heard
-    // has ended, chapterEnds that the next one is in another chapter.
-    bool pausesNow(bool betweenSentences, bool chapterEnds) const;
+    // Where the stream should run dry, as a frame on it: the start of the
+    // first queued sentence after the time is up, or of the first one in
+    // another chapter than the sentence before it. Only sentences after the
+    // one at playedFrame count, so a timer set again where the last one
+    // stopped goes on to the next chapter. -1 while that sentence isn't
+    // queued yet.
+    qint64 stopFrame(const QList<Queued> &queued, qint64 playedFrame, int sampleRate) const;
 
 private:
     Mode m_mode = Off;
@@ -170,9 +183,8 @@ public:
     Q_INVOKABLE void sleepAfter(int minutes);
     Q_INVOKABLE void sleepAtEndOfChapter();
     Q_INVOKABLE void cancelSleep();
-    // For tests: counts listening time and checks the timer as the voice
-    // would on reaching the end of a sentence, with no audio.
-    void listenForTests(qint64 ms, bool betweenSentences);
+    // For tests: counts listening time as the voice would, with no audio.
+    void listenForTests(qint64 ms);
     // For tests: puts the narration at a word in a state, with no audio, so
     // the window can be checked on machines without an audio device.
     void showForTests(State state, int sentence, int word, double wordSeconds = 0);
@@ -232,10 +244,11 @@ private:
     void ensureSynthesizer();
     double pauseAfter(int sentence) const;
     void setPreviewing(bool previewing);
-    bool chapterEndsAfter(int sentence) const;
-    // Counts what was heard since the last check and pauses if the timer
-    // says so; true when it did.
-    bool checkSleep(qint64 heardMs, bool betweenSentences, int sentence);
+    // Counts what was heard since the last check and pauses if the stream
+    // reached the sleep timer's stopping point; true when it did.
+    bool checkSleep(qint64 heardMs, qint64 frame);
+    // Tells the player where the sleep timer wants the stream to stop.
+    void updateSleepLimit();
 
     BookPtr m_book;
     VoiceSettings m_settings;

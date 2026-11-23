@@ -851,52 +851,97 @@ private slots:
 
     // The sleep timer.
 
-    void sleepTimerCountsListeningAndWaitsForTheSentence() {
+    void sleepTimerCountsListening() {
         SleepTimer timer;
         QVERIFY(!timer.isOn());
         QCOMPARE(timer.msLeft(), -1);
-        QVERIFY(!timer.pausesNow(true, true));
+        QVERIFY(!timer.overdue());
 
         timer.setMinutes(1);
         QVERIFY(timer.isOn());
         QCOMPARE(timer.minutes(), 1);
         QCOMPARE(timer.msLeft(), 60000);
         timer.listen(59000);
-        QVERIFY(!timer.pausesNow(true, true));
+        timer.listen(-5);
+        QCOMPARE(timer.msLeft(), 1000);
         timer.listen(1000);
         QCOMPARE(timer.msLeft(), 0);
-        // Time is up, but the sentence being spoken is finished first...
-        QVERIFY(!timer.pausesNow(false, false));
-        QVERIFY(timer.pausesNow(true, false));
-        // ...unless it runs on well past the time.
+        // A sentence may run on past the time, but not for long.
         timer.listen(SleepTimer::GraceMs - 1);
-        QVERIFY(!timer.pausesNow(false, false));
+        QVERIFY(!timer.overdue());
         timer.listen(1);
-        QVERIFY(timer.pausesNow(false, false));
+        QVERIFY(timer.overdue());
         QCOMPARE(timer.msLeft(), 0);
 
         // Setting it again starts over; 0 turns it off.
         timer.setMinutes(15);
         QCOMPARE(timer.msLeft(), 15 * 60000);
+        QVERIFY(!timer.overdue());
         timer.setMinutes(0);
         QVERIFY(!timer.isOn());
 
-        // At the end of the chapter, time doesn't matter, only where the
-        // next sentence is.
         timer.setChapterEnd();
         QVERIFY(timer.isOn());
         QCOMPARE(timer.minutes(), 0);
         QCOMPARE(timer.msLeft(), -1);
         timer.listen(10 * 3600 * 1000);
-        QVERIFY(!timer.pausesNow(true, false));
-        QVERIFY(!timer.pausesNow(false, true));
-        QVERIFY(timer.pausesNow(true, true));
+        QVERIFY(!timer.overdue());
         timer.cancel();
         QVERIFY(!timer.isOn());
-        QVERIFY(!timer.pausesNow(true, true));
     }
 
-    void narratorSleepTimerPausesBetweenSentences() {
+    void sleepTimerStopsTheStreamAtTheStartOfASentence() {
+        // Three sentences of chapter 0, then two of chapter 1, a second
+        // (100 frames at 100 Hz) apart.
+        const int rate = 100;
+        const QList<SleepTimer::Queued> queued{{0, 0}, {0, 100}, {0, 200}, {1, 300}, {1, 400}};
+        SleepTimer timer;
+        QCOMPARE(timer.stopFrame(queued, 0, rate), -1);
+
+        // At the end of the chapter: where the next chapter starts, wherever
+        // in the chapter the voice is.
+        timer.setChapterEnd();
+        QCOMPARE(timer.stopFrame(queued, 0, rate), 300);
+        QCOMPARE(timer.stopFrame(queued, 250, rate), 300);
+        // Set again where it stopped, it goes on to the end of the next one,
+        // which isn't queued yet.
+        QCOMPARE(timer.stopFrame(queued, 300, rate), -1);
+        QCOMPARE(timer.stopFrame(queued + QList<SleepTimer::Queued>{{2, 500}}, 300, rate), 500);
+        // A sentence that couldn't be spoken is never queued, so the chapter
+        // still ends where the next one starts.
+        QCOMPARE(timer.stopFrame({{0, 0}, {0, 100}, {1, 200}}, 50, rate), 200);
+        // Nothing queued past the chapter yet: no stopping point yet.
+        QCOMPARE(timer.stopFrame({{0, 0}, {0, 100}}, 50, rate), -1);
+        QCOMPARE(timer.stopFrame({}, 0, rate), -1);
+
+        // Counting minutes: the first sentence to start once the time is up,
+        // so the one it runs out in is finished.
+        timer.setMinutes(1);
+        timer.listen(60000 - 1500);
+        QCOMPARE(timer.stopFrame(queued, 0, rate), 200);
+        QCOMPARE(timer.stopFrame(queued, 120, rate), 300);
+        timer.listen(1500);
+        QCOMPARE(timer.stopFrame(queued, 100, rate), 200);
+        QCOMPARE(timer.stopFrame(queued, 200, rate), 300);
+        // Ran out in the last sentence queued: wait for the next one.
+        QCOMPARE(timer.stopFrame(queued, 450, rate), -1);
+        timer.cancel();
+        QCOMPARE(timer.stopFrame(queued, 0, rate), -1);
+    }
+
+    void audioPlayerWritesNothingPastItsLimit() {
+        // Four bytes a frame; room for 100 frames, 80 pending.
+        QCOMPARE(AudioPlayer::writable(400, 320, 0, -1, 4), qsizetype(320));
+        QCOMPARE(AudioPlayer::writable(200, 320, 0, -1, 4), qsizetype(200));
+        QCOMPARE(AudioPlayer::writable(400, 320, 10, 50, 4), qsizetype(160));
+        QCOMPARE(AudioPlayer::writable(400, 320, 50, 50, 4), qsizetype(0));
+        QCOMPARE(AudioPlayer::writable(400, 320, 60, 50, 4), qsizetype(0));
+        // Whole frames only.
+        QCOMPARE(AudioPlayer::writable(399, 400, 0, -1, 4), qsizetype(396));
+        QCOMPARE(AudioPlayer::writable(0, 320, 0, -1, 4), qsizetype(0));
+    }
+
+    void narratorSleepTimerCountsOnlyWhilePlaying() {
         Narrator narrator;
         QSignalSpy changed(&narrator, &Narrator::sleepChanged);
         QSignalSpy asleep(&narrator, &Narrator::fellAsleep);
@@ -904,7 +949,6 @@ private slots:
         book.chapters = {{"One", {{"First. Second.", 0}}}, {"Two", {{"Third. Fourth.", 0}}}};
         book.segment();
         narrator.setBook(std::make_shared<Book>(book));
-        QCOMPARE(narrator.book()->sentenceCount(), 4);
         QCOMPARE(narrator.sleepSecondsLeft(), -1);
 
         narrator.sleepAfter(1);
@@ -914,48 +958,32 @@ private slots:
         QCOMPARE(narrator.sleepSecondsLeft(), 60);
         QCOMPARE(changed.size(), 1);
 
-        // Only listening counts: nothing goes by while paused.
+        // Nothing goes by while paused.
         narrator.showForTests(Narrator::Paused, 0, 0);
-        narrator.listenForTests(90000, true);
+        narrator.listenForTests(90000);
         QCOMPARE(narrator.sleepSecondsLeft(), 60);
         QCOMPARE(narrator.state(), Narrator::Paused);
 
         narrator.showForTests(Narrator::Playing, 0, 0);
-        narrator.listenForTests(30500, false);
+        narrator.listenForTests(30500);
         QCOMPARE(narrator.sleepSecondsLeft(), 30);
-        narrator.listenForTests(29500, false);
+        narrator.listenForTests(29500);
         QCOMPARE(narrator.sleepSecondsLeft(), 0);
-        // The voice finishes its sentence and stops in the pause after it,
-        // paused rather than stopped so Space goes on from there.
+        // With nothing queued to stop at, it waits for the sentence, but
+        // not for ever.
         QCOMPARE(narrator.state(), Narrator::Playing);
-        narrator.listenForTests(0, true);
+        narrator.listenForTests(SleepTimer::GraceMs);
         QCOMPARE(narrator.state(), Narrator::Paused);
-        QCOMPARE(narrator.sentence(), 0);
         QVERIFY(!narrator.sleepTimerOn());
         QCOMPARE(narrator.sleepSecondsLeft(), -1);
         QCOMPARE(asleep.size(), 1);
 
-        // At the end of the chapter: not after the first sentence, but
-        // after the last one of the chapter being heard.
         narrator.sleepAtEndOfChapter();
         QVERIFY(narrator.sleepAtChapterEnd());
         QCOMPARE(narrator.sleepMinutes(), 0);
+        QCOMPARE(narrator.sleepSecondsLeft(), -1);
         narrator.showForTests(Narrator::Playing, 0, 0);
-        narrator.listenForTests(1000, true);
-        QCOMPARE(narrator.state(), Narrator::Playing);
-        narrator.showForTests(Narrator::Playing, 1, 0);
-        narrator.listenForTests(1000, false);
-        QCOMPARE(narrator.state(), Narrator::Playing);
-        narrator.listenForTests(0, true);
-        QCOMPARE(narrator.state(), Narrator::Paused);
-        QCOMPARE(narrator.sentence(), 1);
-        QVERIFY(!narrator.sleepTimerOn());
-        QCOMPARE(asleep.size(), 2);
-
-        // The last chapter simply ends with the book.
-        narrator.sleepAtEndOfChapter();
-        narrator.showForTests(Narrator::Playing, 3, 0);
-        narrator.listenForTests(0, true);
+        narrator.listenForTests(3600 * 1000);
         QCOMPARE(narrator.state(), Narrator::Playing);
 
         // Turning it off, or another book, ends it.
@@ -964,7 +992,7 @@ private slots:
         narrator.sleepAfter(15);
         narrator.setBook(nullptr);
         QVERIFY(!narrator.sleepTimerOn());
-        QCOMPARE(asleep.size(), 2);
+        QCOMPARE(asleep.size(), 1);
     }
 
     // Voice settings for both engines.

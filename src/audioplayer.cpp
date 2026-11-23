@@ -70,6 +70,7 @@ void AudioPlayer::close() {
     m_pending.clear();
     m_appendedFrames = 0;
     m_writtenBytes = 0;
+    m_limit = -1;
     m_sampleRate = 0;
 }
 
@@ -94,11 +95,8 @@ void AudioPlayer::append(const QByteArray &samples) {
 void AudioPlayer::pump() {
     if (!m_sink || !m_device || m_paused || m_pending.isEmpty())
         return;
-    const qsizetype free = m_sink->bytesFree();
-    if (free <= 0)
-        return;
-    const int frameBytes = m_format.bytesPerFrame();
-    const qsizetype chunk = qMin(free, m_pending.size()) / frameBytes * frameBytes;
+    const int frameBytes = qMax(1, m_format.bytesPerFrame());
+    const qsizetype chunk = writable(m_sink->bytesFree(), m_pending.size(), m_writtenBytes / frameBytes, m_limit, frameBytes);
     if (chunk <= 0)
         return;
     const qint64 written = m_device->write(m_pending.constData(), chunk);
@@ -106,6 +104,18 @@ void AudioPlayer::pump() {
         m_pending.remove(0, written);
         m_writtenBytes += written;
     }
+}
+
+qsizetype AudioPlayer::writable(qsizetype free, qsizetype pending, qint64 writtenFrames, qint64 limit, int frameBytes) {
+    qsizetype bytes = qMin(free, pending);
+    if (limit >= 0)
+        bytes = qMin<qsizetype>(bytes, qMax<qint64>(0, limit - writtenFrames) * frameBytes);
+    return qMax<qsizetype>(0, bytes / frameBytes * frameBytes);
+}
+
+void AudioPlayer::setLimit(qint64 frame) {
+    m_limit = frame < 0 ? -1 : frame;
+    pump();
 }
 
 qint64 AudioPlayer::playedFrames() const {
