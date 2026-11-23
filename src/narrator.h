@@ -203,6 +203,8 @@ public:
     // For tests: puts the narration at a word in a state, with no audio, so
     // the window can be checked on machines without an audio device.
     void showForTests(State state, int sentence, int word, double wordSeconds = 0);
+    // For tests: the audio handed to the output so far, pauses included.
+    qint64 queuedFramesForTests() const { return m_player.queuedFrames(); }
 
     // How many sentences the engine gets per run, and how far ahead of the
     // listener synthesis may go before it is held.
@@ -294,6 +296,9 @@ private:
     int m_runEnd = 0;
     Lexicon m_runLexicon;
     int m_nextToAppend = 0;
+    // The silence written after the last sentence in the stream, which a
+    // sentence the voice failed on after it may lengthen, see appendReady.
+    qint64 m_lastPauseFrames = 0;
     QHash<int, Ready> m_ready;
     QSet<int> m_failed;
     QList<Entry> m_timeline;

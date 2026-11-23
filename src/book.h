@@ -51,6 +51,9 @@ struct Sentence {
     // Character ranges inside the paragraph, within this sentence, that are
     // shown but not read aloud: citation markers, links and the like.
     QList<QPair<int, int>> skipped;
+    // False for a piece of a sentence too long for the voice, broken at a
+    // comma or a space, which is no place to pause.
+    bool ends = true;
     bool speakable() const { return !words.isEmpty(); }
 };
 
@@ -92,12 +95,10 @@ using BookPtr = std::shared_ptr<const Book>;
 namespace Text {
 // Sentences as character ranges, with very long ones broken at clause or
 // word boundaries so each stays a comfortable size for the voice.
-QList<QPair<int, int>> sentenceRanges(const QString &text, int maxLength = 320);
+// ends, when given, gets for each range whether a sentence ends there, false
+// for every piece of a long one but its last.
+QList<QPair<int, int>> sentenceRanges(const QString &text, int maxLength = 320, QList<bool> *ends = nullptr);
 QList<WordSpan> words(const QString &text, int start, int end);
-// Whether text ends a sentence: its last mark, past any closing quotes or
-// brackets, is a full stop, a question or exclamation mark, or an ellipsis,
-// rather than the comma or semicolon a long sentence is broken at.
-bool endsSentence(const QString &text);
 // The parts of a paragraph that sound bad spoken and say nothing a listener
 // misses: citation markers ("[12]", "[Bro96]"), web addresses, bracketed
 // editorial asides ("[sic]") and parenthesised cross-references ("(see

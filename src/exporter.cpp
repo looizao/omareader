@@ -353,6 +353,7 @@ void Exporter::startTrack() {
     m_failed.clear();
     m_runDone = false;
     m_trackFrames = 0;
+    m_lastPauseFrames = 0;
     emit progressChanged();
     if (m_track >= m_tracks.size()) {
         assemble();
@@ -410,6 +411,15 @@ void Exporter::writeReady() {
             const qint64 silence = Synthesis::pauseFramesAfter(*m_book, id, m_options.synthesis.voice);
             if (silence > 0)
                 writeSamples(QByteArray(silence * qint64(sizeof(float)), '\0'));
+            m_lastPauseFrames = silence;
+        } else if (m_encoder) {
+            // As the narrator does: a failed sentence that ended a paragraph
+            // or a chapter leaves that longer pause after the one before it.
+            const qint64 pause = Synthesis::pauseFramesAfter(*m_book, id, m_options.synthesis.voice);
+            if (pause > m_lastPauseFrames) {
+                writeSamples(QByteArray((pause - m_lastPauseFrames) * qint64(sizeof(float)), '\0'));
+                m_lastPauseFrames = pause;
+            }
         }
         m_doneWords += int(sentence.words.size());
         ++m_next;
@@ -639,6 +649,7 @@ void Exporter::reset() {
     m_runDone = false;
     m_sampleRate = 0;
     m_trackFrames = 0;
+    m_lastPauseFrames = 0;
     m_trackFiles.clear();
     m_trackTitles.clear();
     m_trackLengths.clear();

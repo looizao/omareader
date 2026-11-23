@@ -11,7 +11,9 @@ bool isSpace(QChar c) { return c.isSpace() || c == QChar(0x00A0); }
 
 // Breaks [start, end) into pieces no longer than maxLength, preferring the
 // last clause mark (comma, semicolon, colon, em or en dash) in the window and falling back to a space.
-void splitLong(const QString &text, int start, int end, int maxLength, QList<QPair<int, int>> &out) {
+// Each piece but the last is marked as not ending its sentence in ends.
+void splitLong(const QString &text, int start, int end, int maxLength, QList<QPair<int, int>> &out,
+               QList<bool> &ends) {
     while (end - start > maxLength) {
         int cut = -1;
         for (int i = start + maxLength; i > start + maxLength / 3; --i) {
@@ -30,17 +32,21 @@ void splitLong(const QString &text, int start, int end, int maxLength, QList<QPa
         if (cut < 0)
             cut = start + maxLength;
         out.append({start, cut});
+        ends.append(false);
         start = cut;
         while (start < end && isSpace(text.at(start)))
             ++start;
     }
-    if (end > start)
+    if (end > start) {
         out.append({start, end});
+        ends.append(true);
+    }
 }
 }
 
-QList<QPair<int, int>> sentenceRanges(const QString &text, int maxLength) {
+QList<QPair<int, int>> sentenceRanges(const QString &text, int maxLength, QList<bool> *ends) {
     QList<QPair<int, int>> ranges;
+    QList<bool> rangeEnds;
     QTextBoundaryFinder finder(QTextBoundaryFinder::Sentence, text);
     int previous = 0;
     auto add = [&](int start, int end) {
@@ -49,7 +55,7 @@ QList<QPair<int, int>> sentenceRanges(const QString &text, int maxLength) {
         while (end > start && isSpace(text.at(end - 1)))
             --end;
         if (end > start)
-            splitLong(text, start, end, maxLength, ranges);
+            splitLong(text, start, end, maxLength, ranges, rangeEnds);
     };
     while (finder.toNextBoundary() != -1) {
         const int position = finder.position();
@@ -64,17 +70,23 @@ QList<QPair<int, int>> sentenceRanges(const QString &text, int maxLength) {
         R"((?:^|\s)(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc|e\.g|i\.e|No|Sra|Srta)\.$)",
         QRegularExpression::CaseInsensitiveOption);
     QList<QPair<int, int>> merged;
-    for (const auto &range : ranges) {
+    QList<bool> mergedEnds;
+    for (int i = 0; i < ranges.size(); ++i) {
+        const auto &range = ranges.at(i);
         if (!merged.isEmpty()) {
             auto &last = merged.last();
             const QString tail = text.mid(last.first, last.second - last.first);
             if (abbreviation.match(tail).hasMatch() && range.second - last.first <= maxLength) {
                 last.second = range.second;
+                mergedEnds.last() = rangeEnds.at(i);
                 continue;
             }
         }
         merged.append(range);
+        mergedEnds.append(rangeEnds.at(i));
     }
+    if (ends)
+        *ends = mergedEnds;
     return merged;
 }
 
@@ -89,13 +101,6 @@ QList<WordSpan> words(const QString &text, int start, int end) {
         spans.append({start + int(match.capturedStart()), int(match.capturedLength())});
     }
     return spans;
-}
-
-bool endsSentence(const QString &text) {
-    int i = int(text.size()) - 1;
-    while (i >= 0 && (text.at(i).isSpace() || QStringLiteral("\"'”’»)]}*_").contains(text.at(i))))
-        --i;
-    return i >= 0 && QStringLiteral(".!?…。！？").contains(text.at(i));
 }
 
 namespace {
@@ -458,11 +463,14 @@ void Book::segment() {
             // Sentences end where the voice hears them end, so a footnote
             // number doesn't glue two together ("failure.1 While"). A
             // paragraph of nothing but clutter keeps one, unread.
-            QList<QPair<int, int>> ranges = Text::sentenceRanges(spoken);
+            QList<bool> ends;
+            QList<QPair<int, int>> ranges = Text::sentenceRanges(spoken, 320, &ends);
             if (ranges.isEmpty())
-                ranges = Text::sentenceRanges(text);
-            for (const auto &range : std::as_const(ranges)) {
+                ranges = Text::sentenceRanges(text, 320, &ends);
+            for (int r = 0; r < ranges.size(); ++r) {
+                const auto &range = ranges.at(r);
                 Sentence sentence;
+                sentence.ends = ends.at(r);
                 sentence.chapter = c;
                 sentence.paragraph = p;
                 sentence.start = range.first;

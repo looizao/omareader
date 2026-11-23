@@ -37,7 +37,7 @@ double Synthesis::pauseAfter(const Book &book, int sentence, const VoiceSettings
     }
     // A long sentence broken at a comma or a semicolon is still one
     // sentence, and a pause in the middle of it would sound like a stumble.
-    return Text::endsSentence(book.sentenceText(sentence)) ? voice.number("sentencePause") : 0;
+    return current.ends ? voice.number("sentencePause") : 0;
 }
 
 qint64 Synthesis::pauseFramesAfter(const Book &book, int sentence, const VoiceSettings &voice) {

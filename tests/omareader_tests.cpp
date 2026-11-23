@@ -1962,12 +1962,38 @@ private slots:
         QCOMPARE(Synthesis::pauseAfter(book, shortOne, voice), 0.3);
     }
 
-    void textKnowsWhereASentenceEnds() {
-        for (const char *ends : {"Done.", "Really?", "Stop!", "And then\u2026", "\u201cGo home.\u201d", "(As he said.)",
-                                 "Fim.  ", "\u7d42\u308f\u308a\u3002", "'Quoted.'"})
-            QVERIFY2(Text::endsSentence(QString::fromUtf8(ends)), ends);
-        for (const char *open : {"", "a clause,", "one; two;", "and so", "\u201cGo home,\u201d", "Note:"})
-            QVERIFY2(!Text::endsSentence(QString::fromUtf8(open)), open);
+    void pausesFollowWhereSentencesReallyEnd() {
+        VoiceSettings voice = VoiceSettings::recommended(Engine::Kokoro);
+        QVERIFY(voice.set("sentencePause", 0.3));
+        Book book;
+        // Hindi ends a sentence with a danda, not a full stop.
+        book.chapters = {{"One", {{QString::fromUtf8("\u0935\u0939 \u0906\u092f\u093e\u0964 \u0935\u0939 "
+                                                     "\u092c\u0948\u0920 \u0917\u092f\u093e\u0964 Last."),
+                                   0}}}};
+        book.segment();
+        QCOMPARE(book.sentenceCount(), 3);
+        QCOMPARE(Synthesis::pauseAfter(book, 0, voice), 0.3);
+        QCOMPARE(Synthesis::pauseAfter(book, 1, voice), 0.3);
+
+        // A long sentence the voice can't take whole, broken at the space
+        // after "e.g.": the piece ends in a full stop but not the sentence.
+        const QString text = QString("x ").repeated(156) + "xx e.g. " + QString("y ").repeated(200) + "end. Next.";
+        QList<bool> ends;
+        const auto ranges = Text::sentenceRanges(text, 320, &ends);
+        QCOMPARE(ends.size(), ranges.size());
+        QVERIFY(text.mid(ranges.first().first, ranges.first().second - ranges.first().first).trimmed().endsWith("e.g."));
+        QVERIFY(!ends.first());
+        QCOMPARE(ends.last(), true);
+        book.chapters = {{"One", {{text, 0}}}};
+        book.segment();
+        QVERIFY(!book.sentences.first().ends);
+        QCOMPARE(Synthesis::pauseAfter(book, 0, voice), 0.0);
+        QCOMPARE(Synthesis::pauseAfter(book, book.sentenceCount() - 2, voice), 0.3);
+
+        // Abbreviations glued back keep the sentence they join.
+        const auto glued = Text::sentenceRanges("Mr. Smith arrived. He sat.", 320, &ends);
+        QCOMPARE(glued.size(), 2);
+        QCOMPARE(ends, (QList<bool>{true, true}));
     }
 
     // Timing and the audio both engines deliver.
@@ -2381,6 +2407,32 @@ private slots:
         QCOMPARE(heard(), (QStringList{"Her-my-oh-nee waved.", "Then she left."}));
     }
 
+    void narratorKeepsTheChapterPauseOfAFailedSentence() {
+        QSettings().remove("voice");
+        QTemporaryDir dir;
+        Narrator narrator;
+        narrator.setOverrides(fakeKoko(dir).binary, dir.path());
+        narrator.setTuning("paragraphPause", 0.5);
+        narrator.setTuning("chapterPause", 1.5);
+        // The fake voice fails on "FAIL", which ends chapter One: the
+        // paragraph before it gets the chapter pause, as exports give it.
+        Book book;
+        book.chapters = {{"One", {{"Hello there.", 0}, {"FAIL", 0}}}, {"Two", {{"Next.", 0}}}};
+        book.segment();
+        narrator.setBook(std::make_shared<Book>(book));
+        narrator.play(0);
+        const bool playing = narrator.state() != Narrator::Stopped; // no audio output here otherwise
+        // Each sentence the fake voice says is three samples long.
+        const qint64 expected = 3 + qint64(1.5 * Synthesizer::SampleRate) + 3 + qint64(1.5 * Synthesizer::SampleRate);
+        if (playing)
+            QTRY_COMPARE_WITH_TIMEOUT(narrator.queuedFramesForTests(), expected, 10000);
+        narrator.stop();
+        narrator.setOverrides({}, {});
+        QSettings().remove("voice");
+        if (!playing)
+            QSKIP("There is no audio output to read aloud through.");
+    }
+
     void narratorHandsExportsACopyOfItsVoice() {
         QSettings().remove("voice");
         Narrator narrator;
@@ -2566,6 +2618,41 @@ private slots:
         };
         QVERIFY2(qAbs(length(0) - 2.25) < 0.01, qPrintable(QString::number(length(0))));
         QVERIFY2(qAbs(length(1) - 1.5) < 0.01, qPrintable(QString::number(length(1))));
+    }
+
+    void exportKeepsTheChapterPauseOfAFailedSentence() {
+        const QString ffprobe = QStandardPaths::findExecutable("ffprobe");
+        if (Exporter::findFfmpeg().isEmpty() || ffprobe.isEmpty())
+            QSKIP("ffmpeg is not installed");
+        QTemporaryDir dir;
+        Exporter exporter;
+        QSignalSpy finished(&exporter, &Exporter::finished);
+        Exporter::Options options;
+        options.synthesis.kokoro = fakeKoko(dir);
+        QVERIFY(options.synthesis.voice.set("paragraphPause", 0.5));
+        QVERIFY(options.synthesis.voice.set("chapterPause", 1.5));
+        options.folder = dir.filePath("out");
+        options.format = Exporter::M4b;
+        // The fake voice fails on "FAIL", which ends chapter One: the
+        // paragraph before it gets the chapter pause, as narration gives it.
+        write(dir.filePath("a.txt"), "sample");
+        Book book;
+        book.path = dir.filePath("a.txt");
+        book.title = "Sample";
+        book.format = "txt";
+        book.chapters = {{"One", {{"Hello there.", 0}, {"FAIL", 0}}}, {"Two", {{"Next.", 0}}}};
+        book.segment();
+        QVERIFY(exporter.start(std::make_shared<Book>(book), options));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 20000);
+        QVERIFY2(finished.first().at(0).toBool(), qPrintable(finished.first().at(1).toString()));
+        QProcess probe;
+        probe.start(ffprobe, {"-v", "error", "-show_chapters", "-of", "json", exporter.result()});
+        QVERIFY(probe.waitForFinished());
+        const QJsonArray chapters = QJsonDocument::fromJson(probe.readAllStandardOutput()).object().value("chapters").toArray();
+        QCOMPARE(chapters.size(), 2);
+        const QJsonObject first = chapters.at(0).toObject();
+        const double length = first.value("end_time").toString().toDouble() - first.value("start_time").toString().toDouble();
+        QVERIFY2(qAbs(length - 1.5) < 0.01, qPrintable(QString::number(length)));
     }
 
     void exportWritesAFolderWithAFilePerChapter() {

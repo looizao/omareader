@@ -549,6 +549,7 @@ void Narrator::play(int sentence) {
         return; // errorOccurred already reported why
 
     m_nextToAppend = sentence;
+    m_lastPauseFrames = 0;
     setState(Preparing);
     setPosition(sentence, -1);
     m_ticker.start();
@@ -594,6 +595,16 @@ void Narrator::appendReady() {
     const int count = m_book->sentenceCount();
     while (m_nextToAppend < count) {
         if (skippable(m_nextToAppend)) {
+            // A sentence the voice failed on still held its break: when it
+            // ended a paragraph or a chapter, the one before it gets that
+            // longer pause instead of its own.
+            if (m_failed.contains(m_nextToAppend) && !m_timeline.isEmpty()) {
+                const qint64 pause = Synthesis::pauseFramesAfter(*m_book, m_nextToAppend, m_settings);
+                if (pause > m_lastPauseFrames) {
+                    m_player.append(QByteArray((pause - m_lastPauseFrames) * qint64(sizeof(float)), '\0'));
+                    m_lastPauseFrames = pause;
+                }
+            }
             ++m_nextToAppend;
             continue;
         }
@@ -611,6 +622,7 @@ void Narrator::appendReady() {
         const qint64 silence = Synthesis::pauseFramesAfter(*m_book, m_nextToAppend, m_settings);
         if (silence > 0)
             m_player.append(QByteArray(silence * qint64(sizeof(float)), '\0'));
+        m_lastPauseFrames = silence;
         m_ready.erase(it);
         ++m_nextToAppend;
     }

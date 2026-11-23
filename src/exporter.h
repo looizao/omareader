@@ -159,6 +159,9 @@ private:
     bool m_runDone = false;
     int m_sampleRate = 0;
     qint64 m_trackFrames = 0;
+    // The silence written after the track's last sentence so far, which a
+    // sentence the voice failed on after it may lengthen, see writeReady.
+    qint64 m_lastPauseFrames = 0;
     QStringList m_trackFiles;
     QStringList m_trackTitles;
     QList<qint64> m_trackLengths;
