@@ -262,6 +262,7 @@ FocusScope {
     Shortcut { sequences: ["-", StandardKey.ZoomOut]; enabled: root.keysEnabled; onActivated: reader.fontSize = reader.fontSize - 1 }
     Shortcut { sequence: "F"; enabled: root.keysEnabled; onActivated: root.follow() }
     Shortcut { sequence: "S"; enabled: root.keysEnabled; onActivated: narrator.stop() }
+    Shortcut { sequence: "C"; enabled: root.keysEnabled; onActivated: narrationBar.openSleepMenu() }
     Shortcut { sequence: "Z"; enabled: root.keysEnabled; onActivated: reader.focusMode = !reader.focusMode }
     Shortcut { sequence: "D"; enabled: root.keysEnabled; onActivated: root.lookUpWord() }
     Shortcut { sequence: "M"; enabled: root.keysEnabled; onActivated: reader.toggleBookmark() }
@@ -591,6 +592,7 @@ FocusScope {
         }
 
         NarrationBar {
+            id: narrationBar
             objectName: "narrationBar"
             Layout.fillWidth: true
             opacity: root.controlsHidden ? 0 : 1

@@ -14,5 +14,9 @@
   "%n match(es).": {
     "one": "%n match.",
     "other": "%n matches."
+  },
+  "%n minute(s)": {
+    "one": "%n minute",
+    "other": "%n minutes"
   }
 }

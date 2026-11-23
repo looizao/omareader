@@ -3,6 +3,34 @@
 #include <QSettings>
 #include <cmath>
 
+void SleepTimer::setMinutes(int minutes) {
+    if (minutes <= 0) {
+        cancel();
+        return;
+    }
+    m_mode = Minutes;
+    m_minutes = minutes;
+    m_leftMs = qint64(minutes) * 60 * 1000;
+}
+
+void SleepTimer::setChapterEnd() {
+    m_mode = ChapterEnd;
+    m_minutes = 0;
+}
+
+void SleepTimer::listen(qint64 ms) {
+    if (m_mode == Minutes && ms > 0)
+        m_leftMs -= ms;
+}
+
+bool SleepTimer::pausesNow(bool betweenSentences, bool chapterEnds) const {
+    switch (m_mode) {
+    case Minutes: return m_leftMs <= 0 && (betweenSentences || m_leftMs <= -GraceMs);
+    case ChapterEnd: return betweenSentences && chapterEnds;
+    default: return false;
+    }
+}
+
 Narrator::Narrator(QObject *parent) : QObject(parent) {
     QSettings settings;
     m_settings = VoiceSettings::loadSelected();
@@ -43,6 +71,8 @@ Narrator::~Narrator() {
 
 void Narrator::setBook(BookPtr book) {
     halt();
+    // A timer set for one book doesn't carry over to the next.
+    cancelSleep();
     m_book = std::move(book);
     m_sentence = -1;
     m_word = -1;
@@ -365,6 +395,7 @@ void Narrator::halt() {
     m_failed.clear();
     m_timeline.clear();
     m_entry = 0;
+    m_sleepFrame = 0;
     setState(Stopped);
 }
 
@@ -503,6 +534,16 @@ void Narrator::tick() {
     if (m_state != Playing || m_timeline.isEmpty())
         return;
     const qint64 frame = m_player.playedFrames();
+    // The sleep timer looks at the sentence that was being heard before
+    // moving on, so it can stop in the pause after it. It counts whole
+    // milliseconds and keeps the frames left over for the next tick.
+    {
+        const Entry &heard = m_timeline.at(m_entry);
+        const qint64 heardMs = qMax<qint64>(0, frame - m_sleepFrame) * 1000 / Synthesizer::SampleRate;
+        m_sleepFrame = frame < m_sleepFrame ? frame : m_sleepFrame + heardMs * Synthesizer::SampleRate / 1000;
+        if (checkSleep(heardMs, frame >= heard.startFrame + heard.frames, heard.sentence))
+            return;
+    }
     while (m_entry + 1 < m_timeline.size() && frame >= m_timeline.at(m_entry + 1).startFrame)
         ++m_entry;
     const Entry &entry = m_timeline.at(m_entry);
@@ -511,6 +552,7 @@ void Narrator::tick() {
         // Heard everything queued: either the book is over or the engine is behind.
         if (m_nextToAppend >= m_book->sentenceCount() && !(m_synth && m_synth->isRunning())) {
             halt();
+            cancelSleep();
             emit finishedBook();
         }
         return;
@@ -580,6 +622,66 @@ void Narrator::skip(int sentences) {
     play(target);
     if (wasPaused)
         pause();
+}
+
+int Narrator::sleepSecondsLeft() const {
+    const qint64 ms = m_sleep.msLeft();
+    return ms < 0 ? -1 : int((ms + 999) / 1000);
+}
+
+void Narrator::sleepAfter(int minutes) {
+    const SleepTimer before = m_sleep;
+    m_sleep.setMinutes(minutes);
+    if (m_sleep.mode() != before.mode() || m_sleep.msLeft() != before.msLeft())
+        emit sleepChanged();
+}
+
+void Narrator::sleepAtEndOfChapter() {
+    if (m_sleep.mode() == SleepTimer::ChapterEnd)
+        return;
+    m_sleep.setChapterEnd();
+    emit sleepChanged();
+}
+
+void Narrator::cancelSleep() {
+    if (!m_sleep.isOn())
+        return;
+    m_sleep.cancel();
+    emit sleepChanged();
+}
+
+// Whether the next sentence the voice would read is in another chapter.
+// After the last one the book simply ends.
+bool Narrator::chapterEndsAfter(int sentence) const {
+    if (!m_book || sentence < 0 || sentence >= m_book->sentenceCount())
+        return false;
+    for (int next = sentence + 1; next < m_book->sentenceCount(); ++next)
+        if (m_book->sentences.at(next).speakable())
+            return m_book->sentences.at(next).chapter != m_book->sentences.at(sentence).chapter;
+    return false;
+}
+
+bool Narrator::checkSleep(qint64 heardMs, bool betweenSentences, int sentence) {
+    if (!m_sleep.isOn())
+        return false;
+    const int before = sleepSecondsLeft();
+    m_sleep.listen(heardMs);
+    if (m_sleep.pausesNow(betweenSentences, betweenSentences && chapterEndsAfter(sentence))) {
+        // Paused rather than stopped, so Space goes on from here.
+        m_sleep.cancel();
+        pause();
+        emit sleepChanged();
+        emit fellAsleep();
+        return true;
+    }
+    if (sleepSecondsLeft() != before)
+        emit sleepChanged();
+    return false;
+}
+
+void Narrator::listenForTests(qint64 ms, bool betweenSentences) {
+    if (m_state == Playing)
+        checkSleep(ms, betweenSentences, m_sentence);
 }
 
 void Narrator::setPreviewing(bool previewing) {

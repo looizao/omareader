@@ -350,5 +350,13 @@
   "Type a word or a phrase to find it anywhere in the book. Return goes to the next match, Shift+Return reads aloud from it, and F3 steps through the rest.": "Digite uma palavra ou uma frase para encontrá-la em qualquer parte do livro. Enter vai ao próximo resultado, Shift+Enter lê em voz alta a partir dele, e F3 percorre os demais.",
   "Search the book (/)": "Buscar no livro (/)",
   "Search the book": "Buscar no livro",
-  "Next / previous match": "Resultado seguinte / anterior"
+  "Next / previous match": "Resultado seguinte / anterior",
+  "Sleep timer (C)": "Timer de sono (C)",
+  "Sleep timer: stop reading aloud after a while": "Timer de sono: parar a leitura em voz alta depois de um tempo",
+  "End of chapter": "Fim do capítulo",
+  "%n minute(s)": {
+    "one": "%n minuto",
+    "many": "%n de minutos",
+    "other": "%n minutos"
+  }
 }

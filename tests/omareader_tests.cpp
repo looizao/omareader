@@ -849,6 +849,124 @@ private slots:
         narrator.setOverrides({}, {});
     }
 
+    // The sleep timer.
+
+    void sleepTimerCountsListeningAndWaitsForTheSentence() {
+        SleepTimer timer;
+        QVERIFY(!timer.isOn());
+        QCOMPARE(timer.msLeft(), -1);
+        QVERIFY(!timer.pausesNow(true, true));
+
+        timer.setMinutes(1);
+        QVERIFY(timer.isOn());
+        QCOMPARE(timer.minutes(), 1);
+        QCOMPARE(timer.msLeft(), 60000);
+        timer.listen(59000);
+        QVERIFY(!timer.pausesNow(true, true));
+        timer.listen(1000);
+        QCOMPARE(timer.msLeft(), 0);
+        // Time is up, but the sentence being spoken is finished first...
+        QVERIFY(!timer.pausesNow(false, false));
+        QVERIFY(timer.pausesNow(true, false));
+        // ...unless it runs on well past the time.
+        timer.listen(SleepTimer::GraceMs - 1);
+        QVERIFY(!timer.pausesNow(false, false));
+        timer.listen(1);
+        QVERIFY(timer.pausesNow(false, false));
+        QCOMPARE(timer.msLeft(), 0);
+
+        // Setting it again starts over; 0 turns it off.
+        timer.setMinutes(15);
+        QCOMPARE(timer.msLeft(), 15 * 60000);
+        timer.setMinutes(0);
+        QVERIFY(!timer.isOn());
+
+        // At the end of the chapter, time doesn't matter, only where the
+        // next sentence is.
+        timer.setChapterEnd();
+        QVERIFY(timer.isOn());
+        QCOMPARE(timer.minutes(), 0);
+        QCOMPARE(timer.msLeft(), -1);
+        timer.listen(10 * 3600 * 1000);
+        QVERIFY(!timer.pausesNow(true, false));
+        QVERIFY(!timer.pausesNow(false, true));
+        QVERIFY(timer.pausesNow(true, true));
+        timer.cancel();
+        QVERIFY(!timer.isOn());
+        QVERIFY(!timer.pausesNow(true, true));
+    }
+
+    void narratorSleepTimerPausesBetweenSentences() {
+        Narrator narrator;
+        QSignalSpy changed(&narrator, &Narrator::sleepChanged);
+        QSignalSpy asleep(&narrator, &Narrator::fellAsleep);
+        Book book;
+        book.chapters = {{"One", {{"First. Second.", 0}}}, {"Two", {{"Third. Fourth.", 0}}}};
+        book.segment();
+        narrator.setBook(std::make_shared<Book>(book));
+        QCOMPARE(narrator.book()->sentenceCount(), 4);
+        QCOMPARE(narrator.sleepSecondsLeft(), -1);
+
+        narrator.sleepAfter(1);
+        QVERIFY(narrator.sleepTimerOn());
+        QCOMPARE(narrator.sleepMinutes(), 1);
+        QVERIFY(!narrator.sleepAtChapterEnd());
+        QCOMPARE(narrator.sleepSecondsLeft(), 60);
+        QCOMPARE(changed.size(), 1);
+
+        // Only listening counts: nothing goes by while paused.
+        narrator.showForTests(Narrator::Paused, 0, 0);
+        narrator.listenForTests(90000, true);
+        QCOMPARE(narrator.sleepSecondsLeft(), 60);
+        QCOMPARE(narrator.state(), Narrator::Paused);
+
+        narrator.showForTests(Narrator::Playing, 0, 0);
+        narrator.listenForTests(30500, false);
+        QCOMPARE(narrator.sleepSecondsLeft(), 30);
+        narrator.listenForTests(29500, false);
+        QCOMPARE(narrator.sleepSecondsLeft(), 0);
+        // The voice finishes its sentence and stops in the pause after it,
+        // paused rather than stopped so Space goes on from there.
+        QCOMPARE(narrator.state(), Narrator::Playing);
+        narrator.listenForTests(0, true);
+        QCOMPARE(narrator.state(), Narrator::Paused);
+        QCOMPARE(narrator.sentence(), 0);
+        QVERIFY(!narrator.sleepTimerOn());
+        QCOMPARE(narrator.sleepSecondsLeft(), -1);
+        QCOMPARE(asleep.size(), 1);
+
+        // At the end of the chapter: not after the first sentence, but
+        // after the last one of the chapter being heard.
+        narrator.sleepAtEndOfChapter();
+        QVERIFY(narrator.sleepAtChapterEnd());
+        QCOMPARE(narrator.sleepMinutes(), 0);
+        narrator.showForTests(Narrator::Playing, 0, 0);
+        narrator.listenForTests(1000, true);
+        QCOMPARE(narrator.state(), Narrator::Playing);
+        narrator.showForTests(Narrator::Playing, 1, 0);
+        narrator.listenForTests(1000, false);
+        QCOMPARE(narrator.state(), Narrator::Playing);
+        narrator.listenForTests(0, true);
+        QCOMPARE(narrator.state(), Narrator::Paused);
+        QCOMPARE(narrator.sentence(), 1);
+        QVERIFY(!narrator.sleepTimerOn());
+        QCOMPARE(asleep.size(), 2);
+
+        // The last chapter simply ends with the book.
+        narrator.sleepAtEndOfChapter();
+        narrator.showForTests(Narrator::Playing, 3, 0);
+        narrator.listenForTests(0, true);
+        QCOMPARE(narrator.state(), Narrator::Playing);
+
+        // Turning it off, or another book, ends it.
+        narrator.cancelSleep();
+        QVERIFY(!narrator.sleepTimerOn());
+        narrator.sleepAfter(15);
+        narrator.setBook(nullptr);
+        QVERIFY(!narrator.sleepTimerOn());
+        QCOMPARE(asleep.size(), 2);
+    }
+
     // Voice settings for both engines.
 
     void voiceSettingsKeepKokoroAsTheDefault() {
@@ -1006,7 +1124,8 @@ private slots:
         const QJsonObject catalog = QJsonDocument::fromJson(file.readAll()).object();
         static const QRegularExpression call("\\b(?:qsTr|tr)\\(\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
         int found = 0;
-        for (const QString name : {"src/SettingsPanel.qml", "src/ExportDialog.qml", "src/ReaderView.qml"}) {
+        for (const QString name : {"src/SettingsPanel.qml", "src/ExportDialog.qml", "src/ReaderView.qml",
+                                   "src/NarrationBar.qml", "src/HelpOverlay.qml"}) {
             QFile source(QString(OMAREADER_SOURCE) + "/" + name);
             QVERIFY(source.open(QIODevice::ReadOnly));
             const QString text = QString::fromUtf8(source.readAll());
@@ -3136,6 +3255,114 @@ private slots:
                  qPrintable(QString("the cross is %1, %2 px off the button's centre").arg(offset.x()).arg(offset.y())));
         // And it is a cross, not a dot: about 12 px each way.
         QVERIFY2(cross.width() >= 7 && cross.height() >= 7, qPrintable(QString("cross is %1x%2").arg(cross.width()).arg(cross.height())));
+    }
+
+    void narrationBarShowsTheSleepTimer() {
+        QSettings().remove("reader");
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        QVERIFY(app.show());
+        QVERIFY(app.reader.addText("Bedtime", "Some words to hear before sleeping.\n\nAnd a few more of them."));
+        QTRY_COMPARE(app.items("sleepButton").size(), 1);
+        QQuickItem *button = app.items("sleepButton").first();
+        QTest::mouseMove(app.window, QPoint(20, 300));
+
+        auto zoom = [&](const QImage &shot, const QRect &area, const QString &name) {
+            if (!qEnvironmentVariableIsEmpty("OMAREADER_SCREENSHOTS"))
+                shot.copy(area.adjusted(-8, -8, 8, 8)).scaled(area.width() * 8, area.height() * 8)
+                    .save(qEnvironmentVariable("OMAREADER_SCREENSHOTS") + "/" + name + ".png");
+        };
+        auto accent = [](const QImage &shot, const QRect &area) {
+            int count = 0;
+            for (int y = area.top(); y <= area.bottom(); ++y)
+                for (int x = area.left(); x <= area.right(); ++x) {
+                    const QColor c = shot.pixelColor(x, y);
+                    count += c.red() > 200 && c.green() > 170 && c.blue() < 80;
+                }
+            return count;
+        };
+
+        // Off: a moon in the text's colour, centred on its button, and no
+        // time beside it.
+        QImage shot = app.grab("sleep-timer-off");
+        QRect area = app.area(shot, button);
+        zoom(shot, area, "sleep-timer-off-zoom");
+        const QRect moon = brightBoxInCircle(shot, area, 150);
+        QVERIFY2(moon.isValid(), "no moon drawn on the button");
+        const QPointF offset = QRectF(moon).center() - QRectF(area).center();
+        QVERIFY2(qAbs(offset.x()) <= 1.5 && qAbs(offset.y()) <= 1.5,
+                 qPrintable(QString("the moon is %1, %2 px off the button's centre").arg(offset.x()).arg(offset.y())));
+        QVERIFY2(moon.width() >= 9 && moon.height() >= 12, qPrintable(QString("moon is %1x%2").arg(moon.width()).arg(moon.height())));
+        // A crescent, not a disc: its middle, right of centre, is empty.
+        QVERIFY(qGray(shot.pixel(moon.right() - 1, moon.center().y())) < 150);
+        QCOMPARE(accent(shot, area), 0);
+        QVERIFY(app.items("sleepLabel").isEmpty());
+
+        // On: the moon lights up in the accent, with the time left beside it.
+        app.narrator.sleepAfter(30);
+        QTRY_COMPARE(app.items("sleepLabel").size(), 1);
+        QQuickItem *label = app.items("sleepLabel").first();
+        QCOMPARE(label->property("text").toString(), QString("30:00"));
+        shot = app.grab("sleep-timer-on");
+        area = app.area(shot, button);
+        zoom(shot, area.united(app.area(shot, label)), "sleep-timer-on-zoom");
+        QVERIFY2(accent(shot, area) > 30, qPrintable(QString::number(accent(shot, area))));
+        QVERIFY2(accent(shot, app.area(shot, label)) > 20, qPrintable(QString::number(accent(shot, app.area(shot, label)))));
+        // It sits inside the bar, clear of the speed buttons.
+        QQuickItem *bar = app.items("narrationBar").value(0);
+        QVERIFY(bar);
+        const QRectF inBar = label->mapRectToItem(bar, QRectF(0, 0, label->width(), label->height()));
+        QVERIFY(inBar.left() > 0 && inBar.right() < bar->width());
+
+        app.narrator.sleepAtEndOfChapter();
+        QTRY_COMPARE(label->property("text").toString(), QString("End of chapter"));
+        app.grab("sleep-timer-chapter");
+        // The play button stays in the middle of the bar.
+        QQuickItem *play = nullptr;
+        for (QQuickItem *item : bar->findChildren<QQuickItem *>())
+            if (item->width() == 60 && item->height() == 60 && QString(item->metaObject()->className()).startsWith("AbstractButton"))
+                play = item;
+        QVERIFY(play);
+        const qreal playCentre = play->mapRectToItem(bar, QRectF(0, 0, 60, 60)).center().x();
+        QVERIFY2(qAbs(playCentre - bar->width() / 2) <= 1, qPrintable(QString("%1 in %2").arg(playCentre).arg(bar->width())));
+        // Even in the narrowest window, the longest of them stays clear of
+        // the speed and the transport buttons.
+        app.window->resize(640, 720);
+        QTRY_COMPARE(app.window->width(), 640);
+        app.grab("sleep-timer-narrow");
+        const QRectF narrow = label->mapRectToItem(bar, QRectF(0, 0, label->width(), label->height()));
+        // Past the play button and the next-sentence one beside it.
+        const qreal transportEnd = play->mapRectToItem(bar, QRectF(0, 0, 60, 60)).right() + 8 + 44;
+        QVERIFY2(narrow.left() > transportEnd && narrow.right() < bar->width(),
+                 qPrintable(QString("%1 to %2 in %3, the buttons end at %4").arg(narrow.left()).arg(narrow.right()).arg(bar->width()).arg(transportEnd)));
+        QQuickItem *faster = app.items("fasterButton").value(0);
+        QVERIFY(faster);
+        const QRectF fasterInBar = faster->mapRectToItem(bar, QRectF(0, 0, faster->width(), faster->height()));
+        QVERIFY2(fasterInBar.right() <= bar->width() - 8 && fasterInBar.left() > narrow.right(),
+                 qPrintable(QString("+ from %1 to %2 in %3").arg(fasterInBar.left()).arg(fasterInBar.right()).arg(bar->width())));
+        // The voice's name gives way to it, and comes back with room.
+        QVERIFY(app.items("voiceName").isEmpty());
+        app.window->resize(1100, 720);
+        QTRY_COMPARE(app.items("voiceName").size(), 1);
+
+        // C opens the menu; the first choice is ten minutes.
+        QObject *menu = app.window->findChild<QObject *>("sleepMenu");
+        QVERIFY(menu);
+        QTest::keyClick(app.window, Qt::Key_C);
+        QTRY_VERIFY(menu->property("opened").toBool());
+        app.grab("sleep-timer-menu");
+        // It opens above the bar, not over it.
+        QQuickItem *menuBox = qvariant_cast<QQuickItem *>(menu->property("background"));
+        QVERIFY(menuBox);
+        QVERIFY2(menuBox->mapToItem(bar, QPointF(0, menuBox->height())).y() <= 0,
+                 qPrintable(QString::number(menuBox->mapToItem(bar, QPointF(0, menuBox->height())).y())));
+        QTest::keyClick(app.window, Qt::Key_Down);
+        QTest::keyClick(app.window, Qt::Key_Return);
+        QTRY_COMPARE(app.narrator.sleepMinutes(), 10);
+        QTRY_VERIFY(!menu->property("opened").toBool());
+        QTRY_COMPARE(label->property("text").toString(), QString("10:00"));
+        app.narrator.cancelSleep();
+        QTRY_VERIFY(app.items("sleepLabel").isEmpty());
     }
 
     void readerDrawsHighlightsNotesAndBookmarks() {

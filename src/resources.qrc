@@ -16,6 +16,7 @@
         <file alias="HelpOverlay.qml">HelpOverlay.qml</file>
         <file alias="MediaIcon.qml">MediaIcon.qml</file>
         <file alias="SearchIcon.qml">SearchIcon.qml</file>
+        <file alias="SleepIcon.qml">SleepIcon.qml</file>
         <file alias="AccentButton.qml">AccentButton.qml</file>
         <file alias="ChoiceBox.qml">ChoiceBox.qml</file>
         <file alias="ExportDialog.qml">ExportDialog.qml</file>

@@ -146,6 +146,17 @@ number for another reading of the same text. Each engine remembers its own
 settings. Changing one while reading rebuilds the audio ahead from the
 sentence you are on.
 
+### Sleep timer
+
+To fall asleep listening, press C (or the moon in the bar below the text)
+and choose how long to keep reading, from 10 minutes to an hour and a half,
+or to stop at the end of the chapter. The moon lights up and the time left
+counts down beside it. Only listening counts: while the voice is paused, the
+timer waits too. When the time is up the voice finishes its sentence and
+pauses, so Space goes on from there; at the end of a chapter it pauses before
+the next one begins. The timer then turns itself off, and opening another
+book turns it off too.
+
 ## Focus mode
 
 If your attention drifts while you read, press Z (or the ◎ button) for focus
@@ -264,6 +275,7 @@ replaced. Exports need `ffmpeg`.
 | `,` / `.` | Previous / next sentence |
 | `[` / `]` | Slower / faster |
 | S | Stop reading aloud |
+| C | Sleep timer: stop reading aloud after a while |
 | F | Back to the voice after scrolling |
 | Z | Focus mode |
 | ← / → (or H / L) | Previous / next chapter |

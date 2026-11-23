@@ -17,6 +17,39 @@
 #include <memory>
 #include <optional>
 
+// The sleep timer: how much listening is left before the narration pauses on
+// its own, or that it pauses where the chapter being heard ends. It counts
+// only time the voice is heard, so a pause to look a word up costs nothing,
+// and it stops between sentences rather than in the middle of a word.
+class SleepTimer {
+public:
+    enum Mode { Off, Minutes, ChapterEnd };
+
+    // How long past its time it waits for the sentence to end, for the odd
+    // sentence that runs on for a minute.
+    static constexpr qint64 GraceMs = 15000;
+
+    Mode mode() const { return m_mode; }
+    bool isOn() const { return m_mode != Off; }
+    // The minutes it was set to, 0 when it isn't counting minutes.
+    int minutes() const { return m_mode == Minutes ? m_minutes : 0; }
+    // What is left, never below zero; -1 when it isn't counting minutes.
+    qint64 msLeft() const { return m_mode == Minutes ? qMax<qint64>(0, m_leftMs) : -1; }
+
+    void setMinutes(int minutes);
+    void setChapterEnd();
+    void cancel() { m_mode = Off; }
+    void listen(qint64 ms);
+    // Whether to pause now: betweenSentences says the sentence being heard
+    // has ended, chapterEnds that the next one is in another chapter.
+    bool pausesNow(bool betweenSentences, bool chapterEnds) const;
+
+private:
+    Mode m_mode = Off;
+    int m_minutes = 0;
+    qint64 m_leftMs = 0;
+};
+
 // Reads the book aloud and tracks the word being heard. The selected engine
 // (Kokoro or Qwen3-TTS) synthesises ahead in batches of sentences; each
 // sentence's audio joins one continuous stream, with a pause after each
@@ -55,6 +88,13 @@ class Narrator : public QObject {
     Q_PROPERTY(QVariantList tuning READ tuning NOTIFY tuningChanged)
     Q_PROPERTY(bool tuned READ tuned NOTIFY tuningChanged)
     Q_PROPERTY(bool previewing READ previewing NOTIFY previewChanged)
+    // The sleep timer: the minutes it was set to (0 when off or at the end
+    // of the chapter), whether it waits for the chapter to end, and the
+    // seconds of listening left (-1 unless it counts minutes).
+    Q_PROPERTY(bool sleepTimerOn READ sleepTimerOn NOTIFY sleepChanged)
+    Q_PROPERTY(int sleepMinutes READ sleepMinutes NOTIFY sleepChanged)
+    Q_PROPERTY(bool sleepAtChapterEnd READ sleepAtChapterEnd NOTIFY sleepChanged)
+    Q_PROPERTY(int sleepSecondsLeft READ sleepSecondsLeft NOTIFY sleepChanged)
 
 public:
     enum State { Stopped, Preparing, Playing, Paused };
@@ -98,6 +138,10 @@ public:
     QVariantList tuning() const;
     bool tuned() const;
     bool previewing() const { return m_previewing; }
+    bool sleepTimerOn() const { return m_sleep.isOn(); }
+    int sleepMinutes() const { return m_sleep.minutes(); }
+    bool sleepAtChapterEnd() const { return m_sleep.mode() == SleepTimer::ChapterEnd; }
+    int sleepSecondsLeft() const;
 
     void setEngine(const QString &engine);
     void setVoice(const QString &voice);
@@ -121,6 +165,14 @@ public:
     // pausing the narration first.
     Q_INVOKABLE void preview();
     Q_INVOKABLE void stopPreview();
+    // Pauses the narration after this many minutes of listening (0 turns
+    // the timer off), or where the chapter being heard ends.
+    Q_INVOKABLE void sleepAfter(int minutes);
+    Q_INVOKABLE void sleepAtEndOfChapter();
+    Q_INVOKABLE void cancelSleep();
+    // For tests: counts listening time and checks the timer as the voice
+    // would on reaching the end of a sentence, with no audio.
+    void listenForTests(qint64 ms, bool betweenSentences);
     // For tests: puts the narration at a word in a state, with no audio, so
     // the window can be checked on machines without an audio device.
     void showForTests(State state, int sentence, int word, double wordSeconds = 0);
@@ -145,6 +197,9 @@ signals:
     void tuningChanged();
     void previewChanged();
     void finishedBook();
+    void sleepChanged();
+    // The sleep timer paused the narration.
+    void fellAsleep();
 
 private:
     struct Ready {
@@ -177,6 +232,10 @@ private:
     void ensureSynthesizer();
     double pauseAfter(int sentence) const;
     void setPreviewing(bool previewing);
+    bool chapterEndsAfter(int sentence) const;
+    // Counts what was heard since the last check and pauses if the timer
+    // says so; true when it did.
+    bool checkSleep(qint64 heardMs, bool betweenSentences, int sentence);
 
     BookPtr m_book;
     VoiceSettings m_settings;
@@ -205,4 +264,8 @@ private:
     AudioPlayer m_previewPlayer;
     QTimer m_previewTicker;
     bool m_previewing = false;
+
+    SleepTimer m_sleep;
+    // The played frame the sleep timer last counted up to.
+    qint64 m_sleepFrame = 0;
 };
