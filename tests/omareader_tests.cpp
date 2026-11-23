@@ -5095,7 +5095,7 @@ private slots:
         QSettings().remove("reader");
         QTemporaryDir dir;
         AppWindow app(dir.path());
-        QVERIFY(app.show());
+        QVERIFY(app.show({1100, 600}));
         QVERIFY(app.reader.addText("Names", "Hermione waved at the crowd from the steps of the old library."));
         QTRY_COMPARE(app.items("bookParagraph").size(), 1);
         QQuickItem *paragraph = app.items("bookParagraph").first();
@@ -5139,11 +5139,15 @@ private slots:
         QTRY_VERIFY(settings->property("opened").toBool());
         QTRY_COMPARE(app.items("pronunciationRow").size(), 1);
         QQuickItem *row = app.items("pronunciationRow").first();
-        QMetaObject::invokeMethod(settings, "forceActiveFocus");
-        // Brought into view, as a reader scrolls to it.
-        QQuickItem *flick = row->parentItem() ? row->parentItem()->parentItem() : nullptr;
-        if (flick && flick->property("contentY").isValid())
-            flick->setProperty("contentY", qMax(0.0, row->y() - 100));
+        // The panel scrolls it into view, as a reader would on a short window.
+        QQuickItem *flick = row->parentItem();
+        while (flick && !flick->inherits("QQuickFlickable"))
+            flick = flick->parentItem();
+        QVERIFY(flick);
+        QQuickItem *content = flick->property("contentItem").value<QQuickItem *>();
+        QVERIFY(content);
+        flick->setProperty("contentY", qMax(0.0, row->mapToItem(content, QPointF(0, 0)).y() - 100));
+        QTRY_VERIFY(row->mapToScene(QPointF(0, row->height())).y() < app.window->height());
         shot = app.grab("pronunciation-list");
         QQuickItem *saidLabel = app.items("pronunciationSpokenLabel").first();
         QQuickItem *writtenLabel = app.items("pronunciationWrittenLabel").first();
