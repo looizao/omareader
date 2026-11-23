@@ -35,21 +35,28 @@ Popup {
         if (!book)
             return
         picker.path = book.path
+        picker.problem = ""
         nameField.clear()
         open()
     }
 
+    property string problem: ""
+
     function toggle(name) {
         if (picker.book)
-            library.setInCollection(picker.path, name, picker.book.collections.indexOf(name) < 0)
+            picker.report(library.setInCollection(picker.path, name, picker.book.collections.indexOf(name) < 0))
     }
 
     function create() {
-        const name = library.addCollection(nameField.text)
-        if (name === "")
+        if (nameField.text.trim() === "")
             return
-        library.setInCollection(picker.path, name, true)
-        nameField.clear()
+        if (picker.report(library.setInCollection(picker.path, nameField.text, true)))
+            nameField.clear()
+    }
+
+    function report(saved) {
+        picker.problem = saved ? "" : qsTr("The library couldn't be saved, so nothing changed.")
+        return saved
     }
 
     onOpened: {
@@ -68,6 +75,7 @@ Popup {
         Label {
             Layout.fillWidth: true
             text: picker.book ? qsTr("Collections for “%1”").arg(picker.book.title) : ""
+            textFormat: Text.PlainText
             font.pixelSize: 20
             font.family: "serif"
             color: Colors.text
@@ -102,6 +110,17 @@ Popup {
                 text: modelData.name
                 checked: picker.book !== null && picker.book.collections.indexOf(modelData.name) >= 0
                 highlighted: list.activeFocus && list.currentIndex === index
+                // Material's own label reads a name that looks like markup as
+                // rich text, which can load images; names are plain text.
+                contentItem: Label {
+                    leftPadding: choice.mirrored ? choice.indicator.width + choice.spacing : 0
+                    rightPadding: choice.mirrored ? 0 : choice.indicator.width + choice.spacing
+                    text: choice.text
+                    textFormat: Text.PlainText
+                    elide: Text.ElideRight
+                    verticalAlignment: Text.AlignVCenter
+                    color: Colors.text
+                }
                 onClicked: {
                     list.currentIndex = index
                     picker.toggle(modelData.name)
@@ -140,6 +159,15 @@ Popup {
                 enabled: nameField.text.trim() !== ""
                 onClicked: picker.create()
             }
+        }
+
+        Label {
+            Layout.fillWidth: true
+            visible: picker.problem !== ""
+            text: picker.problem
+            color: theme.accent
+            wrapMode: Text.Wrap
+            font.pixelSize: 13
         }
 
         RowLayout {

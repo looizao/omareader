@@ -464,5 +464,6 @@
   "Previous / next collection": "Coleção anterior / seguinte",
   "Filter the library by title or author": "Filtrar a biblioteca por título ou autor",
   "Change how the library is sorted": "Mudar a ordem da biblioteca",
-  "Filter by title or author": "Filtrar por título ou autor"
+  "Filter by title or author": "Filtrar por título ou autor",
+  "The library couldn't be saved, so nothing changed.": "A biblioteca não pôde ser salva, então nada mudou."
 }

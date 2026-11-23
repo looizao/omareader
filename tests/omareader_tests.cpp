@@ -3684,6 +3684,11 @@ private slots:
     }
 
     void libraryKeepsBooksInCollections() {
+        // Titles sort the way the reader's language does; English here, so
+        // the test doesn't depend on the locale it runs under.
+        const QLocale locale;
+        QLocale::setDefault(QLocale(QLocale::English, QLocale::UnitedStates));
+        const auto restore = qScopeGuard([&] { QLocale::setDefault(locale); });
         QTemporaryDir dir;
         const QString file = dir.filePath("library.json");
         QString cat, dune, emma, notes;
@@ -3788,6 +3793,25 @@ private slots:
         library.remove(emma);
         QCOMPARE(library.collectionNames(), (QStringList{"Classics", "Empty", "To read"}));
         QCOMPARE(library.collectionList().at(0).toMap().value("count").toInt(), 0);
+    }
+
+    // A change the library can't save is undone, so a restart never brings
+    // back something the window said was gone.
+    void libraryUndoesCollectionChangesItCannotSave() {
+        QTemporaryDir dir;
+        write(dir.filePath("blocker"), "a file where the library's folder would be");
+        Library library(dir.filePath("blocker/library.json"), dir.filePath("covers"));
+        Book book = sampleBook(dir.filePath("a.txt"));
+        library.opened(book);
+        QCOMPARE(library.count(), 1);
+        QSignalSpy changed(&library, &Library::changed);
+        QCOMPARE(library.addCollection("Classics"), QString());
+        QVERIFY(!library.setInCollection(book.path, "Classics", true));
+        QCOMPARE(library.collectionNames(), QStringList());
+        QVERIFY(library.entry(book.path).collections.isEmpty());
+        library.setSortOrder("title");
+        QCOMPARE(library.sortOrder(), QString("recent"));
+        QVERIFY(changed.count() >= 1); // the window hears it was put back
     }
 
     void libraryKeepsPastedText() {
@@ -4850,6 +4874,23 @@ private slots:
         QVERIFY(newButton);
         QVERIFY(newButton->mapToScene({0, 0}).x() >= app.items("shelfTabs").first()->mapToScene({app.items("shelfTabs").first()->width(), 0}).x());
         QVERIFY(newButton->mapToScene({newButton->width(), 0}).x() <= filter->mapToScene({0, 0}).x());
+
+        // A name is shown as written, never read as markup that could load
+        // something.
+        QVERIFY(app.library.setInCollection(dune, "<img src=\"http://127.0.0.1:9/x.png\">Odd", true));
+        QTRY_COMPARE(app.items("shelfTabLabel").size(), 3);
+        for (QQuickItem *label : app.items("shelfTabLabel"))
+            QCOMPARE(label->property("textFormat").toInt(), 0); // Text.PlainText
+        // In the picker too.
+        QTest::keyClick(app.window, Qt::Key_C);
+        QTRY_VERIFY(picker->property("opened").toBool());
+        QTRY_COMPARE(app.items("collectionChoice").size(), 2);
+        for (QQuickItem *choice : app.items("collectionChoice"))
+            QCOMPARE(choice->property("contentItem").value<QObject *>()->property("textFormat").toInt(), 0);
+        app.grab("library-collection-picker-plain");
+        QTest::keyClick(app.window, Qt::Key_Escape);
+        QTRY_VERIFY(!picker->property("visible").toBool());
+        QVERIFY(app.library.removeCollection("<img src=\"http://127.0.0.1:9/x.png\">Odd"));
 
         // New collection asks for a name.
         auto centre = [](QQuickItem *item) { return item->mapToScene(QPointF(item->width() / 2, item->height() / 2)).toPoint(); };

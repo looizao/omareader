@@ -269,7 +269,10 @@ FocusScope {
                     border.color: chosen ? theme.accent : Colors.line
                     Label {
                         id: tabLabel
+                        objectName: "shelfTabLabel"
                         anchors.centerIn: parent
+                        // Names are the reader's own text, never markup.
+                        textFormat: Text.PlainText
                         text: tab.modelData.name === ""
                               ? qsTr("All books · %1").arg(tab.modelData.count.toLocaleString(Qt.locale(), 'f', 0))
                               : qsTr("%1 · %2").arg(tab.modelData.name).arg(tab.modelData.count.toLocaleString(Qt.locale(), 'f', 0))
@@ -537,6 +540,7 @@ FocusScope {
                 spacing: 12
                 Label {
                     objectName: "emptyShelfTitle"
+                    textFormat: Text.PlainText
                     width: parent.width
                     horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.Wrap
@@ -554,6 +558,7 @@ FocusScope {
                           ? (library.collection !== "" ? qsTr("Only “%1” is searched. Esc clears the filter.").arg(library.collection)
                                                        : qsTr("Esc clears the filter."))
                           : qsTr("Go to All books, then press C on a book, or right-click it, to put it here.")
+                    textFormat: Text.PlainText
                     color: Colors.muted
                 }
             }

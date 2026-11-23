@@ -239,9 +239,9 @@ void Library::setCollection(const QString &name) {
 void Library::setSortOrder(const QString &order) {
     if (order == m_sortOrder || !sortOrders().contains(order))
         return;
+    const Organisation before = organisation();
     m_sortOrder = order;
-    save();
-    emit changed();
+    commit(before);
 }
 
 void Library::setFilter(const QString &filter) {
@@ -252,14 +252,12 @@ void Library::setFilter(const QString &filter) {
 }
 
 QString Library::addCollection(const QString &name) {
-    const int before = int(m_collections.size());
+    const Organisation before = organisation();
     const QString kept = addName(m_collections, name);
-    if (kept.isEmpty() || m_collections.size() == before)
+    if (kept.isEmpty() || m_collections.size() == before.collections.size())
         return kept;
     sortNames(m_collections);
-    save();
-    emit changed();
-    return kept;
+    return commit(before) ? kept : QString();
 }
 
 bool Library::renameCollection(const QString &name, const QString &newName) {
@@ -273,6 +271,7 @@ bool Library::renameCollection(const QString &name, const QString &newName) {
         return false;
     if (clean == old)
         return true;
+    const Organisation before = organisation();
     m_collections[i] = clean;
     sortNames(m_collections);
     for (auto &e : m_entries)
@@ -281,42 +280,67 @@ bool Library::renameCollection(const QString &name, const QString &newName) {
                 n = clean;
     if (m_collection == old)
         m_collection = clean;
-    save();
-    emit changed();
-    return true;
+    return commit(before);
 }
 
-void Library::removeCollection(const QString &name) {
+bool Library::removeCollection(const QString &name) {
     const int i = collectionIndex(name);
     if (i < 0)
-        return;
+        return false;
+    const Organisation before = organisation();
     const QString old = m_collections.takeAt(i);
     for (auto &e : m_entries)
         e.collections.removeAll(old);
     if (m_collection == old)
         m_collection.clear();
-    save();
-    emit changed();
+    return commit(before);
 }
 
-void Library::setInCollection(const QString &path, const QString &name, bool in) {
+bool Library::setInCollection(const QString &path, const QString &name, bool in) {
     const int b = indexOf(path);
     if (b < 0)
-        return;
+        return false;
+    const Organisation before = organisation();
     LibraryEntry &e = m_entries[b];
     if (in) {
         const QString kept = addName(m_collections, name);
-        if (kept.isEmpty() || e.collections.contains(kept))
-            return;
+        if (kept.isEmpty())
+            return false;
+        if (e.collections.contains(kept))
+            return true;
         sortNames(m_collections);
         e.collections.append(kept);
     } else {
         const int i = collectionIndex(name);
-        if (i < 0 || !e.collections.removeAll(m_collections.at(i)))
-            return;
+        if (i < 0)
+            return false;
+        if (!e.collections.removeAll(m_collections.at(i)))
+            return true;
     }
-    save();
+    return commit(before);
+}
+
+Library::Organisation Library::organisation() const {
+    Organisation o{m_collections, {}, m_collection, m_sortOrder};
+    for (const auto &e : m_entries)
+        o.memberships.append(e.collections);
+    return o;
+}
+
+bool Library::commit(const Organisation &before) {
+    // A change that can't be saved is undone, so the window never shows
+    // what a restart would lose.
+    if (!save()) {
+        m_collections = before.collections;
+        for (int i = 0; i < m_entries.size() && i < before.memberships.size(); ++i)
+            m_entries[i].collections = before.memberships.at(i);
+        m_collection = before.collection;
+        m_sortOrder = before.sortOrder;
+        emit changed();
+        return false;
+    }
     emit changed();
+    return true;
 }
 
 QString Library::siteOf(const QString &source) {

@@ -69,15 +69,17 @@ public:
     void setFilter(const QString &filter);
 
     // Adds a collection and returns its name as kept, or the name of the one
-    // that already has it; empty when the name is blank.
+    // that already has it; empty when the name is blank or the library can't
+    // be saved. Every change to the collections is undone when it can't be
+    // saved, and reports false then.
     Q_INVOKABLE QString addCollection(const QString &name);
     // Renames a collection, taking its books along. Fails for a blank name
     // or one another collection has.
     Q_INVOKABLE bool renameCollection(const QString &name, const QString &newName);
     // Deletes a collection. Its books stay in the library.
-    Q_INVOKABLE void removeCollection(const QString &name);
+    Q_INVOKABLE bool removeCollection(const QString &name);
     // Puts a book in a collection, or takes it out.
-    Q_INVOKABLE void setInCollection(const QString &path, const QString &name, bool in);
+    Q_INVOKABLE bool setInCollection(const QString &path, const QString &name, bool in);
     const QList<LibraryEntry> &entries() const { return m_entries; }
     int count() const { return int(m_entries.size()); }
     LibraryEntry entry(const QString &path) const;
@@ -112,6 +114,15 @@ private:
     int collectionIndex(const QString &name) const;
     void sort();
     QVariantMap bookMap(const LibraryEntry &e) const;
+    // How the library is organised, to put back when a change can't be saved.
+    struct Organisation {
+        QStringList collections;
+        QList<QStringList> memberships;
+        QString collection;
+        QString sortOrder;
+    };
+    Organisation organisation() const;
+    bool commit(const Organisation &before);
 
     QString m_file;
     QString m_coverDirectory;

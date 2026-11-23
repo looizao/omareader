@@ -51,18 +51,34 @@ Popup {
 
     function accept() {
         if (dialog.mode === "delete") {
-            library.removeCollection(dialog.name)
-            close()
+            if (library.removeCollection(dialog.name))
+                close()
+            else
+                dialog.problem = dialog.unsaved
         } else if (nameField.text.trim() === "") {
             return
         } else if (dialog.mode === "rename") {
             if (library.renameCollection(dialog.name, nameField.text))
                 close()
             else
-                dialog.problem = qsTr("Another collection already has that name.")
+                dialog.problem = dialog.nameTaken(nameField.text) ? qsTr("Another collection already has that name.")
+                                                                  : dialog.unsaved
         } else if (library.addCollection(nameField.text) !== "") {
             close()
+        } else {
+            dialog.problem = dialog.unsaved
         }
+    }
+
+    readonly property string unsaved: qsTr("The library couldn't be saved, so nothing changed.")
+
+    // Whether another collection has the name, regardless of case.
+    function nameTaken(name) {
+        const wanted = name.trim().replace(/\s+/g, " ").toLowerCase()
+        for (const c of library.collections)
+            if (c.name.toLowerCase() === wanted && c.name !== dialog.name)
+                return true
+        return false
     }
 
     onOpened: {
@@ -82,6 +98,7 @@ Popup {
             text: dialog.mode === "rename" ? qsTr("Rename the collection")
                   : dialog.mode === "delete" ? qsTr("Delete “%1”?").arg(dialog.name)
                   : qsTr("New collection")
+            textFormat: Text.PlainText
             font.pixelSize: 20
             font.family: "serif"
             color: Colors.text
