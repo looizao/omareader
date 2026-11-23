@@ -25,6 +25,7 @@ HEADERS += \
     src/book.h \
     src/bookloader.h \
     src/cli.h \
+    src/dialogue.h \
     src/dictionary.h \
     src/exporter.h \
     src/filepicker.h \
@@ -54,6 +55,7 @@ SOURCES += \
     src/book.cpp \
     src/bookloader.cpp \
     src/cli.cpp \
+    src/dialogue.cpp \
     src/dictionary.cpp \
     src/exporter.cpp \
     src/highlight.cpp \

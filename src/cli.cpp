@@ -89,6 +89,9 @@ void addVoiceOptions(QCommandLineParser &parser) {
     parser.addOption({"voice", "One of the engine's voices, such as af_heart or ryan (see omareader voices)", "voice"});
     parser.addOption({"language", "Qwen3-TTS only: the language to read in, such as English or Portuguese", "language"});
     parser.addOption({"speed", "Speaking speed from 0.5 to 2.0", "speed"});
+    parser.addOption({"dialogue-voice", "Another of the engine's voices for what the characters say, in quotation "
+                                        "marks or after a dialogue dash; off for the narration's voice",
+                      "voice"});
     parser.addOption({"tune", "Change one tuning setting for this run, such as temperature=0.6 (repeatable; "
                               "see omareader voices)",
                       "key=value"});
@@ -110,6 +113,8 @@ bool voiceFromOptions(const QCommandLineParser &parser, VoiceSettings *voice) {
     for (const char *key : {"voice", "language", "speed"})
         if (parser.isSet(key))
             overrides.append({key, parser.value(key)});
+    if (parser.isSet("dialogue-voice"))
+        overrides.append({"dialogueVoice", parser.value("dialogue-voice")});
     for (const QString &tune : parser.values("tune")) {
         const qsizetype equals = tune.indexOf('=');
         if (equals <= 0) {
@@ -263,12 +268,13 @@ int text(const QStringList &arguments) {
     command.parser.addOption({"spoken", "The text as the voice reads it: without footnotes, citation markers, "
                                         "links and other clutter, with your pronunciations respelled, one sentence "
                                         "per line"});
+    command.parser.addOption({"dialogue", "With --spoken: mark what a dialogue voice would read, between « and »"});
     command.json();
     if (!command.parse(arguments))
         return command.parser.isSet("help") ? 0 : 1;
     const QStringList positional = command.parser.positionalArguments();
     if (positional.size() != 1)
-        return fail("Use: omareader text <book> [--chapter N] [--spoken] [--json]");
+        return fail("Use: omareader text <book> [--chapter N] [--spoken [--dialogue]] [--json]");
     const auto book = loadBook(positional.first());
     if (!book)
         return 1;
@@ -286,15 +292,39 @@ int text(const QStringList &arguments) {
         const int first = book->chapterFirstSentence.at(from);
         const int last = to < book->chapters.size() ? book->chapterFirstSentence.at(to) : book->sentenceCount();
         const Lexicon lexicon = Lexicon::load();
+        // Any second voice marks the dialogue; which one doesn't change where it is.
+        SynthesisOptions options;
+        options.lexicon = lexicon;
+        if (command.parser.isSet("dialogue")) {
+            options.voice = VoiceSettings::recommended(Engine::Kokoro);
+            options.voice.dialogueVoice = options.voice.voice == "am_adam" ? "af_heart" : "am_adam";
+        }
+        QList<int> speakable;
+        for (int s = first; s < last; ++s)
+            if (book->sentences.at(s).speakable())
+                speakable.append(s);
+        const QList<Synthesizer::Line> lines = Synthesis::lines(*book, speakable, options);
         QJsonArray sentences;
         int paragraph = -1, chapter = from;
-        for (int s = first; s < last; ++s) {
-            if (!book->sentences.at(s).speakable())
-                continue;
-            const Sentence &sentence = book->sentences.at(s);
-            const QString text = Pronounce::utterance(*book, s, lexicon).text;
+        for (const Synthesizer::Line &line : lines) {
+            const Sentence &sentence = book->sentences.at(line.id);
+            QString text = line.text;
+            QJsonArray pieces;
+            if (!line.pieces.isEmpty()) {
+                QStringList marked;
+                for (const auto &piece : line.pieces) {
+                    marked.append(piece.dialogue ? "«" + piece.text + "»" : piece.text);
+                    pieces.append(QJsonObject{{"text", piece.text}, {"dialogue", piece.dialogue}});
+                }
+                text = marked.join(' ');
+            }
             if (command.parser.isSet("json")) {
-                sentences.append(QJsonObject{{"chapter", sentence.chapter + 1}, {"text", text}});
+                QJsonObject entry{{"chapter", sentence.chapter + 1}, {"text", line.text}};
+                if (command.parser.isSet("dialogue"))
+                    entry.insert("pieces", pieces.isEmpty() ? QJsonArray{QJsonObject{{"text", line.text},
+                                                                                       {"dialogue", false}}}
+                                                            : pieces);
+                sentences.append(entry);
                 continue;
             }
             // A blank line between paragraphs, and two between chapters.

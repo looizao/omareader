@@ -358,6 +358,15 @@ void Narrator::setVoice(const QString &voice) {
     settingsChanged();
 }
 
+void Narrator::setDialogueVoice(const QString &voice) {
+    if (voice == m_settings.dialogueVoice || (!voice.isEmpty() && !EngineCatalog::hasVoice(m_settings.engine, voice)))
+        return;
+    m_settings.dialogueVoice = voice;
+    m_settings.save();
+    emit voiceChanged();
+    settingsChanged();
+}
+
 void Narrator::setLanguage(const QString &language) {
     if (language == m_settings.language || !EngineCatalog::hasLanguage(m_settings.engine, language))
         return;
@@ -519,9 +528,10 @@ void Narrator::restart() {
 }
 
 void Narrator::ensureSynthesizer() {
-    if (m_synth && m_synth->engine() == m_settings.engine)
+    if (m_synth && m_synth->engine() == m_settings.engine
+        && m_synth->readsDialogue() == !m_settings.dialogue().isEmpty())
         return;
-    m_synth = Synthesizer::create(m_settings.engine);
+    m_synth = Synthesizer::forVoice(m_settings);
     connect(m_synth.get(), &Synthesizer::sentenceReady, this, &Narrator::onSentenceReady);
     connect(m_synth.get(), &Synthesizer::sentenceFailed, this, [this](int id) { onSentenceFailed(id); });
     connect(m_synth.get(), &Synthesizer::finished, this, &Narrator::onRunFinished);
@@ -564,11 +574,11 @@ void Narrator::startRun(int from) {
     // while it plays is heard from the next run on.
     const SynthesisOptions options = synthesisOptions();
     m_runLexicon = options.lexicon;
-    QList<Synthesizer::Line> lines;
+    QList<int> sentences;
     for (int i = from; i < m_runEnd; ++i)
         if (m_book->sentences.at(i).speakable())
-            lines.append({i, Pronounce::utterance(*m_book, i, m_runLexicon).text});
-    m_synth->start(options, lines);
+            sentences.append(i);
+    m_synth->start(options, Synthesis::lines(*m_book, sentences, options));
 }
 
 void Narrator::onSentenceReady(int id, const SpokenSentence &sentence) {
@@ -846,7 +856,7 @@ void Narrator::previewText(const QString &words) {
     }
     if (m_state == Playing || m_state == Preparing)
         pause();
-    m_previewSynth = Synthesizer::create(m_settings.engine);
+    m_previewSynth = Synthesizer::forVoice(m_settings);
     connect(m_previewSynth.get(), &Synthesizer::sentenceReady, this, [this](int, const SpokenSentence &sentence) {
         if (!m_previewPlayer.isOpen() && !m_previewPlayer.open(Synthesizer::SampleRate))
             return; // errorOccurred already reported why
@@ -868,8 +878,18 @@ void Narrator::previewText(const QString &words) {
     const QString text = !sample.isEmpty() ? sample
                                            : EngineCatalog::previewText(EngineCatalog::previewLanguage(
                                                  m_settings.engine, m_settings.voice, m_settings.language));
+    Synthesizer::Line line{0, text};
+    // With a voice for dialogue, the sample's closing question is said in
+    // it, as if a character asked it.
+    if (sample.isEmpty() && m_previewSynth->readsDialogue()) {
+        const QList<QPair<int, int>> sentences = Text::sentenceRanges(text);
+        if (sentences.size() > 1) {
+            const int cut = sentences.last().first;
+            line.pieces = {{text.left(cut).trimmed(), false}, {text.mid(cut).trimmed(), true}};
+        }
+    }
     setPreviewing(true);
-    m_previewSynth->start(options, {{0, text}});
+    m_previewSynth->start(options, {line});
 }
 
 void Narrator::stopPreview() {

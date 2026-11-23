@@ -118,11 +118,17 @@ void AudioPlayer::setLimit(qint64 frame) {
     pump();
 }
 
+qint64 AudioPlayer::framesIn(qint64 usecs, int sampleRate) {
+    if (usecs <= 0 || sampleRate <= 0)
+        return 0;
+    return (usecs * sampleRate + 999999) / 1000000;
+}
+
 qint64 AudioPlayer::playedFrames() const {
     if (!m_sink)
         return 0;
     // What the sink has consumed, never ahead of what was written to it.
-    const qint64 processed = m_format.framesForDuration(m_sink->processedUSecs());
+    const qint64 processed = framesIn(m_sink->processedUSecs(), m_format.sampleRate());
     const qint64 written = m_writtenBytes / qMax(1, m_format.bytesPerFrame());
     return qBound<qint64>(0, processed, written);
 }

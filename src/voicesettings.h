@@ -83,6 +83,13 @@ struct VoiceSettings {
     QString language; // Qwen only
     double speed = 1.0;
     QVariantMap tuning; // every parameter of the engine, with its effective value
+    // Another of the engine's voices for what the book's characters say, or
+    // empty to read dialogue in the narration's voice, as by default.
+    QString dialogueVoice;
+
+    // The voice dialogue is read in when it differs from the narration's,
+    // otherwise empty.
+    QString dialogue() const;
 
     double number(const QString &key) const;
     QString text(const QString &key) const;

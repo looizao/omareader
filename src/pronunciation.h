@@ -94,6 +94,8 @@ namespace Pronounce {
 // The sentence's spoken text (Book::sentenceText) with the lexicon's
 // respellings in place of the written forms.
 Utterance utterance(const Book &book, int sentence, const Lexicon &lexicon);
+// The same for a stretch of a paragraph cut like a sentence.
+Utterance utterance(const Book &book, const Sentence &sentence, const Lexicon &lexicon);
 // One timing per word on the page, from the engine's timings of the words
 // it said: a respelled word is lit for as long as its respelling is heard,
 // and a respelled phrase shares that time among its words by length.

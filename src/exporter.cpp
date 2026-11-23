@@ -304,7 +304,7 @@ bool Exporter::start(BookPtr book, const Options &options) {
     // Exports run at a lower priority than anything someone is listening to.
     m_options.synthesis.background = true;
     m_options.synthesis.preview = false;
-    m_synth = Synthesizer::create(m_options.synthesis.voice.engine);
+    m_synth = Synthesizer::forVoice(m_options.synthesis.voice);
     connect(m_synth.get(), &Synthesizer::sentenceReady, this, &Exporter::onSentenceReady);
     connect(m_synth.get(), &Synthesizer::sentenceFailed, this, [this](int id) {
         m_failed.insert(id);
@@ -359,10 +359,7 @@ void Exporter::startTrack() {
         assemble();
         return;
     }
-    QList<Synthesizer::Line> lines;
-    for (const int sentence : std::as_const(m_tracks.at(m_track).sentences))
-        lines.append({sentence, Pronounce::utterance(*m_book, sentence, m_options.synthesis.lexicon).text});
-    m_synth->start(m_options.synthesis, lines);
+    m_synth->start(m_options.synthesis, Synthesis::lines(*m_book, m_tracks.at(m_track).sentences, m_options.synthesis));
 }
 
 void Exporter::onSentenceReady(int id, const SpokenSentence &sentence) {

@@ -95,6 +95,9 @@ class Narrator : public QObject {
     Q_PROPERTY(QVariantList engines READ engines NOTIFY setupChanged)
     Q_PROPERTY(QString voice READ voice WRITE setVoice NOTIFY voiceChanged)
     Q_PROPERTY(QString language READ language WRITE setLanguage NOTIFY voiceChanged)
+    // Another of the engine's voices for what the book's characters say, or
+    // empty when the narration's voice reads it, as it does by default.
+    Q_PROPERTY(QString dialogueVoice READ dialogueVoice WRITE setDialogueVoice NOTIFY voiceChanged)
     Q_PROPERTY(double speed READ speed WRITE setSpeed NOTIFY speedChanged)
     Q_PROPERTY(QVariantList voices READ voices NOTIFY engineChanged)
     Q_PROPERTY(QVariantList languages READ languages NOTIFY engineChanged)
@@ -151,6 +154,7 @@ public:
     QVariantList engines() const;
     QString voice() const { return m_settings.voice; }
     QString language() const { return m_settings.language; }
+    QString dialogueVoice() const { return m_settings.dialogue(); }
     double speed() const { return m_settings.speed; }
     VoiceSettings voiceSettings() const { return m_settings; }
     QVariantList voices() const;
@@ -167,6 +171,7 @@ public:
     void setEngine(const QString &engine);
     void setVoice(const QString &voice);
     void setLanguage(const QString &language);
+    void setDialogueVoice(const QString &voice);
     void setSpeed(double speed);
     Q_INVOKABLE void setTuning(const QString &key, const QVariant &value);
     // Back to the recommended speed and tuning for the current engine.

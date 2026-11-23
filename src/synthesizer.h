@@ -7,6 +7,7 @@
 #include "speech.h"
 #include "voicesettings.h"
 
+#include <QHash>
 #include <QObject>
 #include <memory>
 
@@ -30,6 +31,9 @@ struct SynthesisOptions {
     bool background = false;
     // Previews jump ahead of everything else.
     bool preview = false;
+    // Kokoro: the language to read in when it isn't the voice's own, as when
+    // a second voice reads the dialogue of a book in the narration's language.
+    QString kokoroLanguage = QString();
 };
 
 namespace Synthesis {
@@ -57,14 +61,27 @@ class Synthesizer : public QObject {
     Q_OBJECT
 
 public:
+    // Part of a line read in one voice: the narration's, or the dialogue's.
+    struct Piece {
+        QString text;
+        bool dialogue = false;
+    };
     struct Line {
         int id;
         QString text;
+        // When the dialogue has a voice of its own and the line holds some:
+        // the line cut where speech starts and stops, in order. Empty when
+        // the narration's voice reads it all.
+        QList<Piece> pieces = {};
     };
 
     static constexpr int SampleRate = 24000;
 
     static std::unique_ptr<Synthesizer> create(const QString &engine, QObject *parent = nullptr);
+    // The synthesizer for these voice settings: the engine's own, or, when
+    // the dialogue has a voice of its own, one that reads each line's
+    // pieces in their voices and delivers the line whole.
+    static std::unique_ptr<Synthesizer> forVoice(const VoiceSettings &voice, QObject *parent = nullptr);
     // Whether the engine can run with these options, and why not.
     static QString problem(const SynthesisOptions &options);
 
@@ -72,6 +89,8 @@ public:
     ~Synthesizer() override = default;
 
     virtual QString engine() const = 0;
+    // Whether it reads the lines' dialogue pieces in a voice of their own.
+    virtual bool readsDialogue() const { return false; }
     // Replaces any run in progress; its sentences are never reported.
     virtual bool start(const SynthesisOptions &options, const QList<Line> &lines) = 0;
     virtual void stop() = 0;
@@ -90,6 +109,77 @@ protected:
     // the audio to SampleRate, plays it stretch times faster (scaling the
     // word times to match) and applies the gain.
     bool deliver(int id, const QString &wav, const QString &tsv, double stretch, double gain);
+};
+
+namespace Synthesis {
+// What the engine is given for these sentences of the book: each one as the
+// voice says it, with the reader's pronunciations, and, when the voice
+// settings give the dialogue a voice of its own, cut into the pieces the
+// narrator and the characters say. Narration, previews and exports share it.
+QList<Synthesizer::Line> lines(const Book &book, const QList<int> &sentences, const SynthesisOptions &options);
+}
+
+// Reads a book's narration in one voice and its dialogue in another, with
+// two synthesizers of the same engine, and delivers each line whole: its
+// pieces' audio one after another, and their words with times in it, so
+// the highlight follows it as it would a line read in one voice. Of the
+// two, only the one with the earlier piece to say runs at a time, so they
+// don't fight over the CPU or GPU and the next line is always the one
+// being worked on.
+class DialogueSynthesizer : public Synthesizer {
+    Q_OBJECT
+
+public:
+    explicit DialogueSynthesizer(const QString &engine, QObject *parent = nullptr);
+    QString engine() const override { return m_engine; }
+    bool readsDialogue() const override { return true; }
+    bool start(const SynthesisOptions &options, const QList<Line> &lines) override;
+    void stop() override;
+    void setHeld(bool held) override;
+    bool isRunning() const override { return m_running; }
+    bool isHeld() const override { return m_running && m_held; }
+
+    // The options the dialogue is read with: the narration's, with the
+    // dialogue voice in place of its own and no blend, in the narration's
+    // language.
+    static SynthesisOptions dialogueOptions(const SynthesisOptions &narration);
+    // A line's pieces as one: their audio one after another, with the
+    // silence each engine run starts and ends with cut down where two meet
+    // so the voices hand over as quickly as a reader pauses at a comma, and
+    // each piece's word times spread over what is kept of it. The line's own start and
+    // end keep theirs, so the pauses between lines stay as they were.
+    static SpokenSentence join(const QList<SpokenSentence> &pieces);
+    // How much silence is kept on each side where two pieces meet.
+    static constexpr double KeptBefore = 0.1;
+    static constexpr double KeptAfter = 0.15;
+
+private:
+    enum { Narration, Speech, VoiceCount };
+    struct Pending {
+        int id;
+        QList<int> pieces;
+    };
+
+    void onReady(int voice, int piece, const SpokenSentence &sentence);
+    void onFailed(int voice, int piece, const QString &message);
+    void onFinished(int voice, bool ok, const QString &error);
+    // Delivers the lines whose pieces are all in, in order; false when the
+    // run was stopped or replaced while it did.
+    bool deliverDone();
+    void balance();
+
+    QString m_engine;
+    std::unique_ptr<Synthesizer> m_voices[VoiceCount];
+    // Each voice's pieces still to come, in the order it says them.
+    QList<int> m_waiting[VoiceCount];
+    bool m_finished[VoiceCount] = {true, true};
+    QList<Pending> m_lines;
+    int m_next = 0;
+    QHash<int, SpokenSentence> m_spoken;
+    QHash<int, QString> m_failed;
+    bool m_running = false;
+    bool m_held = false;
+    quint64 m_run = 0;
 };
 
 class KokoroSynthesizer : public Synthesizer {

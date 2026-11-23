@@ -41,6 +41,10 @@ public:
     // How many bytes the pump may write now: what the output has room for
     // and what is pending, short of the limit, in whole frames.
     static qsizetype writable(qsizetype free, qsizetype pending, qint64 writtenFrames, qint64 limit, int frameBytes);
+    // The frames heard after usecs microseconds, rounded up: the sink counts
+    // whole microseconds, which at 24 kHz fall short of most frame counts,
+    // and rounding down would leave the last frame forever unplayed.
+    static qint64 framesIn(qint64 usecs, int sampleRate);
     QString error() const { return m_error; }
 
     // The format the sink is opened with: positioned mono at sampleRate in

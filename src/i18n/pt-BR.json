@@ -465,5 +465,9 @@
   "Filter the library by title or author": "Filtrar a biblioteca por título ou autor",
   "Change how the library is sorted": "Mudar a ordem da biblioteca",
   "Filter by title or author": "Filtrar por título ou autor",
-  "The library couldn't be saved, so nothing changed.": "A biblioteca não pôde ser salva, então nada mudou."
+  "The library couldn't be saved, so nothing changed.": "A biblioteca não pôde ser salva, então nada mudou.",
+  "Dialogue voice": "Voz dos diálogos",
+  "Same as narration": "A mesma da narração",
+  "Reads what the characters say, in quotation marks or after a dialogue dash, in a second voice.": "Lê o que os personagens dizem, entre aspas ou depois do travessão, com uma segunda voz.",
+  "The voice skipped it.": "A voz pulou esta parte."
 }

@@ -84,6 +84,10 @@ struct Book {
     // The sentence as the voice reads it, without its skipped clutter.
     QString sentenceText(int index) const;
     QStringList sentenceWords(int index) const;
+    // The same for any stretch of a paragraph cut like a sentence, such as
+    // the part of one a character speaks.
+    QString spokenText(const Sentence &sentence) const;
+    QStringList wordsOf(const Sentence &sentence) const;
     // The sentence that holds the character at offset, or the nearest one
     // after it; -1 when the chapter has none.
     int sentenceAt(int chapter, int paragraph, int offset = 0) const;

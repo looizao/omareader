@@ -60,6 +60,10 @@ public:
         // to hear right away (exports), so live narration and the desktop
         // stay responsive.
         bool background = false;
+        // The espeak-ng language to read in; empty for the voice's own. A
+        // second voice reading a book's dialogue reads in the narration's
+        // language, whatever language that voice was made for.
+        QString language = QString();
     };
 
     explicit KokoroRunner(QObject *parent = nullptr);

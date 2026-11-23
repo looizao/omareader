@@ -278,13 +278,16 @@ QList<Lexicon::Match> Lexicon::find(const QString &text) const {
 namespace Pronounce {
 
 Utterance utterance(const Book &book, int index, const Lexicon &lexicon) {
-    Utterance u;
     if (index < 0 || index >= book.sentenceCount())
-        return u;
-    const Sentence &s = book.sentences.at(index);
-    const QStringList shown = book.sentenceWords(index);
+        return {};
+    return utterance(book, book.sentences.at(index), lexicon);
+}
+
+Utterance utterance(const Book &book, const Sentence &s, const Lexicon &lexicon) {
+    Utterance u;
+    const QStringList shown = book.wordsOf(s);
     auto asWritten = [&] {
-        u.text = book.sentenceText(index);
+        u.text = book.spokenText(s);
         u.words = shown;
         for (int i = 0; i < shown.size(); ++i)
             u.heard.append({i, i});

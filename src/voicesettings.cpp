@@ -13,6 +13,7 @@ namespace {
 QString voiceKey(const QString &engine) { return engine == Engine::Kokoro ? "voice/name" : "voice/" + engine + "/voice"; }
 QString speedKey(const QString &engine) { return engine == Engine::Kokoro ? "voice/speed" : "voice/" + engine + "/speed"; }
 QString languageKey(const QString &engine) { return "voice/" + engine + "/language"; }
+QString dialogueKey(const QString &engine) { return "voice/" + engine + "/dialogueVoice"; }
 QString tuningKey(const QString &engine, const QString &key) { return "voice/" + engine + "/tuning/" + key; }
 
 TuningParameter number(const QString &key, const QString &label, const QString &description, double minimum,
@@ -290,6 +291,18 @@ bool VoiceSettings::set(const QString &key, const QVariant &value, QString *erro
         voice = value.toString();
         return true;
     }
+    if (key == "dialogueVoice") {
+        // "off" or "none" (or nothing) reads dialogue in the narration's voice.
+        const QString wanted = value.toString().trimmed();
+        if (wanted.isEmpty() || wanted == "off" || wanted == "none") {
+            dialogueVoice.clear();
+            return true;
+        }
+        if (!EngineCatalog::hasVoice(engine, wanted))
+            return failed(QString("%1 has no voice %2.").arg(Engine::displayName(engine), wanted));
+        dialogueVoice = wanted;
+        return true;
+    }
     if (key == "language") {
         if (!EngineCatalog::hasLanguage(engine, value.toString()))
             return failed(QString("%1 does not read %2.").arg(Engine::displayName(engine), value.toString()));
@@ -328,7 +341,15 @@ QVariantMap VoiceSettings::toMap() const {
     QVariantMap map{{"engine", engine}, {"voice", voice}, {"speed", speed}, {"tuning", tuning}};
     if (engine == Engine::Qwen)
         map.insert("language", language);
+    if (!dialogue().isEmpty())
+        map.insert("dialogueVoice", dialogue());
     return map;
+}
+
+QString VoiceSettings::dialogue() const {
+    if (dialogueVoice.isEmpty() || dialogueVoice == voice || !EngineCatalog::hasVoice(engine, dialogueVoice))
+        return {};
+    return dialogueVoice;
 }
 
 VoiceSettings VoiceSettings::recommended(const QString &engine) {
@@ -354,6 +375,9 @@ VoiceSettings VoiceSettings::load(const QString &engine) {
         settings.voice = voice;
     if (stored.contains(speedKey(settings.engine)))
         settings.speed = clampSpeed(stored.value(speedKey(settings.engine)).toDouble());
+    const QString dialogue = stored.value(dialogueKey(settings.engine)).toString();
+    if (EngineCatalog::hasVoice(settings.engine, dialogue))
+        settings.dialogueVoice = dialogue;
     if (settings.engine == Engine::Qwen) {
         const QString language = stored.value(languageKey(settings.engine)).toString();
         if (EngineCatalog::hasLanguage(settings.engine, language))
@@ -375,6 +399,10 @@ void VoiceSettings::save() const {
     QSettings stored;
     stored.setValue(voiceKey(engine), voice);
     stored.setValue(speedKey(engine), speed);
+    if (dialogueVoice.isEmpty())
+        stored.remove(dialogueKey(engine));
+    else
+        stored.setValue(dialogueKey(engine), dialogueVoice);
     if (engine == Engine::Qwen)
         stored.setValue(languageKey(engine), language);
     // Only what differs from the recommendation is stored, so a better

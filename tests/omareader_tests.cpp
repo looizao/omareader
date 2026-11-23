@@ -44,6 +44,7 @@
 #include "filepicker.h"
 #include "fixtures.h"
 #include "highlight.h"
+#include "dialogue.h"
 #include "kokoro.h"
 #include "language.h"
 #include "pronunciation.h"
@@ -185,6 +186,32 @@ static int redPixels(const QImage &image, const QRect &area) {
 
 // Every book here is made up inside the test, so nothing personal or
 // copyrighted is checked in.
+// Each stretch Dialogue::find() takes for speech, as "paragraph:text".
+static QStringList speechIn(const QList<Paragraph> &paragraphs) {
+    QStringList out;
+    const QList<QList<Dialogue::Range>> found = Dialogue::find(paragraphs);
+    for (int p = 0; p < found.size(); ++p)
+        for (const auto &range : found.at(p))
+            out << QString::number(p) + ":" + paragraphs.at(p).text.mid(range.first, range.second - range.first);
+    return out;
+}
+
+static QList<Paragraph> bodyParagraphs(const QStringList &texts) {
+    QList<Paragraph> out;
+    for (const QString &text : texts)
+        out.append({text, 0, {}});
+    return out;
+}
+
+// What the engine is asked to say for each of a line's pieces, with "D:"
+// before what the dialogue voice says.
+static QStringList piecesOf(const Synthesizer::Line &line) {
+    QStringList out;
+    for (const auto &piece : line.pieces)
+        out << (piece.dialogue ? "D:" : "") + piece.text;
+    return out;
+}
+
 class OmareaderTests : public QObject {
     Q_OBJECT
 
@@ -1358,6 +1385,15 @@ private slots:
         QCOMPARE(timer.stopFrame(queued, 450, rate), -1);
         timer.cancel();
         QCOMPARE(timer.stopFrame(queued, 0, rate), -1);
+    }
+
+    void audioPlayerCountsTheLastFrameHeard() {
+        // The sink counts whole microseconds: 366442 frames at 24 kHz are
+        // 15268416.67 of them, reported as 15268416, and the narration only
+        // ends once the last frame is counted as heard.
+        QCOMPARE(AudioPlayer::framesIn(15268416, 24000), qint64(366442));
+        QCOMPARE(AudioPlayer::framesIn(1000000, 24000), qint64(24000));
+        QCOMPARE(AudioPlayer::framesIn(0, 24000), qint64(0));
     }
 
     void audioPlayerWritesNothingPastItsLimit() {
@@ -6664,6 +6700,398 @@ private slots:
         QTRY_VERIFY(app.narrator.state() != Narrator::Paused);
         app.narrator.stop();
         app.reader.closeBook();
+    }
+
+    // Dialogue in a voice of its own.
+
+    void dialogueFindsQuotationMarks() {
+        QCOMPARE(speechIn(bodyParagraphs({"“Hello,” said Tom. “Come here.”"})),
+                 (QStringList{"0:“Hello,”", "0:“Come here.”"}));
+        QCOMPARE(speechIn(bodyParagraphs({"\"Hi,\" she said, \"it's late.\""})),
+                 (QStringList{"0:\"Hi,\"", "0:\"it's late.\""}));
+        QCOMPARE(speechIn(bodyParagraphs({"« Bonjour », dit-il."})), QStringList{"0:« Bonjour »"});
+        QCOMPARE(speechIn(bodyParagraphs({"„Komm her“, sagte er."})), QStringList{"0:„Komm her“"});
+        QCOMPARE(speechIn(bodyParagraphs({"»Komm her«, sagte er."})), QStringList{"0:»Komm her«"});
+        // Closed the way TeX writes it.
+        QCOMPARE(speechIn(bodyParagraphs({"A “just the facts'' briefing. Others chat."})),
+                 QStringList{"0:“just the facts''"});
+        // Inches and feet aren't speech.
+        QCOMPARE(speechIn(bodyParagraphs({"He was 6' 2\" tall and wore a 12\" hat."})), QStringList{});
+        QCOMPARE(speechIn(bodyParagraphs({"The 12\" record. \"Play it,\" he said."})), QStringList{"0:\"Play it,\""});
+        QCOMPARE(speechIn(bodyParagraphs({"No one said a word.", ""})), QStringList{});
+    }
+
+    void dialogueRunsOverParagraphs() {
+        // A long speech reopens its quotation on each paragraph and closes
+        // it only on the last.
+        QCOMPARE(speechIn(bodyParagraphs({"“The first part of a long speech.",
+                                          "“And the second,” he said, “ends here.”", "Narration after."})),
+                 (QStringList{"0:“The first part of a long speech.", "1:“And the second,”", "1:“ends here.”"}));
+        // A paragraph a page break split in two still closes it.
+        QCOMPARE(speechIn(bodyParagraphs({"“Split across", "a page break,” he said. “Then more.”"})),
+                 (QStringList{"0:“Split across", "1:a page break,”", "1:“Then more.”"}));
+        // A curly quotation never closed is speech to its paragraph's end,
+        // and no further.
+        QCOMPARE(speechIn(bodyParagraphs({"“Never closed", "Plain narration."})), QStringList{"0:“Never closed"});
+        // A heading ends it too.
+        QList<Paragraph> chapter = bodyParagraphs({"“Open", "Two", "“Next,” she said."});
+        chapter[1].level = 2;
+        QCOMPARE(speechIn(chapter), (QStringList{"0:“Open", "2:“Next,”"}));
+        // A footnote in between is passed over.
+        chapter = bodyParagraphs({"“Still", "1 A note.", "“talking,” she said."});
+        chapter[1].note = true;
+        QCOMPARE(speechIn(chapter), (QStringList{"0:“Still", "2:“talking,”"}));
+    }
+
+    void dialogueFollowsTheDash() {
+        QCOMPARE(speechIn(bodyParagraphs({"— Olá — disse ele. — Tudo bem?"})),
+                 (QStringList{"0:— Olá ", "0:— Tudo bem?"}));
+        QCOMPARE(speechIn(bodyParagraphs({"—Hola —dijo él—. ¿Qué tal?"})), (QStringList{"0:—Hola ", "0:—. ¿Qué tal?"}));
+        QCOMPARE(speechIn(bodyParagraphs({"– Bonjour, dit-il."})), QStringList{"0:– Bonjour, dit-il."});
+        // Dashes inside words and numbers don't hand over.
+        QCOMPARE(speechIn(bodyParagraphs({"— Foi em 1990–2000, bem—feito."})),
+                 QStringList{"0:— Foi em 1990–2000, bem—feito."});
+        // A paragraph that doesn't open with one is narration, dashes or not.
+        QCOMPARE(speechIn(bodyParagraphs({"He paused—then left — quietly."})), QStringList{});
+    }
+
+    void dialogueTellsQuotesFromApostrophes() {
+        QCOMPARE(speechIn(bodyParagraphs({"‘Don’t go,’ said Alice. ‘It’s late.’"})),
+                 (QStringList{"0:‘Don’t go,’", "0:‘It’s late.’"}));
+        // Books quoting speech in single marks put quotes within it in double ones.
+        QCOMPARE(speechIn(bodyParagraphs({"‘He said “never”, and left,’ she said.", "‘Again,’ she said."})),
+                 (QStringList{"0:‘He said “never”, and left,’", "1:‘Again,’"}));
+        // An apostrophe that looks like an opening quote opens nothing.
+        QCOMPARE(speechIn(bodyParagraphs({"The dogs’ bowls were ‘em all empty."})), QStringList{});
+        QCOMPARE(speechIn(bodyParagraphs({"'Tis the season, he thought."})), QStringList{});
+    }
+
+    void dialogueCutsSentencesWhereSpeechStarts() {
+        Book book;
+        book.chapters = {{"One",
+                          {{"“Come here,” she said. He said, “Go.” “All of it is speech.” Tom nodded.", 0, {}},
+                           {"— Olá — disse ele.", 0, {}}}}};
+        book.segment();
+        SynthesisOptions options;
+        options.voice = VoiceSettings::recommended(Engine::Kokoro);
+        QList<int> all;
+        for (int i = 0; i < book.sentenceCount(); ++i)
+            all << i;
+        // Off, as it is by default: whole sentences, as before.
+        for (const auto &line : Synthesis::lines(book, all, options))
+            QVERIFY(line.pieces.isEmpty());
+
+        QVERIFY(options.voice.set("dialogueVoice", "am_adam"));
+        options.lexicon.set("Tom", "Tahm");
+        const QList<Synthesizer::Line> lines = Synthesis::lines(book, all, options);
+        QCOMPARE(lines.size(), 5);
+        QCOMPARE(lines.at(0).text, QString("“Come here,” she said."));
+        QCOMPARE(piecesOf(lines.at(0)), (QStringList{"D:“Come here,”", "she said."}));
+        QCOMPARE(piecesOf(lines.at(1)), (QStringList{"He said,", "D:“Go.”"}));
+        QCOMPARE(piecesOf(lines.at(2)), QStringList{"D:“All of it is speech.”"});
+        // Narration alone is a line like any other, respelled as ever.
+        QCOMPARE(lines.at(3).text, QString("Tahm nodded."));
+        QVERIFY(lines.at(3).pieces.isEmpty());
+        QCOMPARE(piecesOf(lines.at(4)), (QStringList{"D:— Olá", "— disse ele."}));
+
+        // Every word of a sentence is in exactly one of its parts.
+        const QList<Dialogue::Range> speech = Dialogue::find(book.chapters.first().paragraphs).first();
+        for (int i = 0; i < 4; ++i) {
+            const Sentence &sentence = book.sentences.at(i);
+            int words = 0, at = sentence.start;
+            for (const Dialogue::Part &part : Dialogue::parts(sentence, speech)) {
+                QCOMPARE(part.start, at);
+                at = part.end;
+                words += Dialogue::slice(sentence, part.start, part.end).words.size();
+            }
+            QCOMPARE(at, sentence.end);
+            QCOMPARE(words, sentence.words.size());
+        }
+    }
+
+    void voiceSettingsKeepADialogueVoicePerEngine() {
+        QSettings().remove("voice");
+        VoiceSettings kokoro = VoiceSettings::load(Engine::Kokoro);
+        QVERIFY(kokoro.dialogueVoice.isEmpty());
+        QVERIFY(kokoro.dialogue().isEmpty());
+        QVERIFY(!Synthesizer::forVoice(kokoro)->readsDialogue());
+        QVERIFY(!kokoro.toMap().contains("dialogueVoice"));
+
+        QString error;
+        QVERIFY(!kokoro.set("dialogueVoice", "ryan", &error)); // a Qwen3-TTS speaker
+        QVERIFY(error.contains("ryan"));
+        QVERIFY(kokoro.set("dialogueVoice", "bm_george"));
+        QCOMPARE(kokoro.dialogue(), QString("bm_george"));
+        QVERIFY(Synthesizer::forVoice(kokoro)->readsDialogue());
+        QCOMPARE(kokoro.toMap().value("dialogueVoice").toString(), QString("bm_george"));
+        kokoro.save();
+        QCOMPARE(VoiceSettings::load(Engine::Kokoro).dialogueVoice, QString("bm_george"));
+        QVERIFY(VoiceSettings::load(Engine::Qwen).dialogueVoice.isEmpty());
+        // Resetting the tuning keeps the voices.
+        VoiceSettings::reset(Engine::Kokoro);
+        QCOMPARE(VoiceSettings::load(Engine::Kokoro).dialogueVoice, QString("bm_george"));
+        // The narration's own voice reads dialogue as it reads the rest.
+        kokoro.voice = "bm_george";
+        QVERIFY(kokoro.dialogue().isEmpty());
+        QVERIFY(kokoro.set("dialogueVoice", "off"));
+        QVERIFY(kokoro.dialogueVoice.isEmpty());
+        kokoro.save();
+        QVERIFY(VoiceSettings::load(Engine::Kokoro).dialogueVoice.isEmpty());
+        QSettings().remove("voice");
+    }
+
+    void dialogueSynthesizerReadsEachPieceInItsVoice() {
+        QTemporaryDir dir;
+        const QString log = dir.filePath("koko.log");
+        qputenv("FAKE_KOKO_LOG", log.toUtf8());
+        SynthesisOptions options;
+        options.voice = VoiceSettings::recommended(Engine::Kokoro);
+        QVERIFY(options.voice.set("blend", "af_bella"));
+        QVERIFY(options.voice.set("dialogueVoice", "bm_george"));
+        options.kokoro = fakeKoko(dir);
+        const auto synth = Synthesizer::forVoice(options.voice);
+        QVERIFY(synth->readsDialogue());
+        QList<QPair<int, SpokenSentence>> ready;
+        QList<int> failed;
+        connect(synth.get(), &Synthesizer::sentenceReady, this,
+                [&](int id, const SpokenSentence &sentence) { ready.append({id, sentence}); });
+        connect(synth.get(), &Synthesizer::sentenceFailed, this, [&](int id) { failed.append(id); });
+        QSignalSpy finished(synth.get(), &Synthesizer::finished);
+        QVERIFY(synth->start(options, {{7, "“Hi,” she said.", {{"“Hi,”", true}, {"she said.", false}}},
+                                       {8, "Plain.", {}},
+                                       {9, "Broken.", {{"FAIL", true}, {"after.", false}}},
+                                       {10, "“Bye.”", {{"“Bye.”", true}}}}));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 10000);
+        unsetenv("FAKE_KOKO_LOG");
+        QVERIFY(finished.first().at(0).toBool());
+        QCOMPARE(failed, QList<int>{9});
+        QCOMPARE(ready.size(), 3);
+        QCOMPARE(ready.at(0).first, 7);
+        QCOMPARE(ready.at(1).first, 8);
+        QCOMPARE(ready.at(2).first, 10);
+        // Line 7 is both pieces' audio, one after the other, and the words
+        // of the second start where its audio does.
+        const SpokenSentence &both = ready.at(0).second;
+        QCOMPARE(both.audio.sampleRate, Synthesizer::SampleRate);
+        QCOMPARE(both.audio.frames(), qint64(6));
+        QCOMPARE(both.words.size(), 2);
+        QCOMPARE(both.words.at(0).start, 0.0);
+        QVERIFY(qFuzzyCompare(both.words.at(1).start, 3.0 / Synthesizer::SampleRate));
+        QCOMPARE(ready.at(1).second.audio.frames(), qint64(3));
+
+        // Two runs: the narration in the blended voice, the dialogue in its
+        // own voice, plain, in the narration's language.
+        QFile file(log);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QStringList runs = QString::fromUtf8(file.readAll()).split('\n', Qt::SkipEmptyParts);
+        QCOMPARE(runs.size(), 2);
+        const QString narration = runs.filter("af_heart").value(0), dialogue = runs.filter("bm_george").value(0);
+        QVERIFY2(narration.contains("--style af_heart.7+af_bella.3 --lan en-us"), qPrintable(narration));
+        QVERIFY2(dialogue.contains("--style bm_george --lan en-us"), qPrintable(dialogue));
+    }
+
+    void dialogueSynthesizerJoinsPiecesWithoutLongSilences() {
+        // Each piece: half a second of silence, a tenth of sound, and half
+        // a second of silence, as an engine run starts and ends.
+        auto piece = [](const QString &word) {
+            SpokenSentence s;
+            s.audio.sampleRate = Synthesizer::SampleRate;
+            QList<float> samples(Synthesizer::SampleRate * 11 / 10, 0.0f);
+            for (int i = Synthesizer::SampleRate / 2; i < Synthesizer::SampleRate * 6 / 10; ++i)
+                samples[i] = 0.5f;
+            s.audio.samples = QByteArray(reinterpret_cast<const char *>(samples.constData()),
+                                         samples.size() * qsizetype(sizeof(float)));
+            s.words = {{word, 0.5, 0.6}};
+            return s;
+        };
+        const SpokenSentence whole = DialogueSynthesizer::join({piece("one"), piece("two"), piece("three")});
+        const double rate = Synthesizer::SampleRate;
+        // The first keeps its start and the last its end; where they meet,
+        // only a short pause is left.
+        const double first = 0.6 + DialogueSynthesizer::KeptAfter;
+        const double middle = DialogueSynthesizer::KeptBefore + 0.1 + DialogueSynthesizer::KeptAfter;
+        const double last = DialogueSynthesizer::KeptBefore + 0.6;
+        QCOMPARE(whole.audio.frames(), qint64(std::lround((first + middle + last) * rate)));
+        // Each piece's word, timed across the whole of its run as engines
+        // time them, keeps its place in what is left of that run, with
+        // time of its own to be lit.
+        QCOMPARE(whole.words.size(), 3);
+        const double spans[3][2] = {{0, first}, {first, first + middle}, {first + middle, first + middle + last}};
+        const double lengths[3] = {first, middle, last};
+        for (int i = 0; i < 3; ++i) {
+            const SpokenWord &word = whole.words.at(i);
+            QVERIFY(qAbs(word.start - (spans[i][0] + 0.5 / 1.1 * lengths[i])) < 1e-3);
+            QVERIFY(qAbs(word.end - (spans[i][0] + 0.6 / 1.1 * lengths[i])) < 1e-3);
+            QVERIFY(word.end > word.start + 0.01);
+        }
+        // The sound itself is all there.
+        const auto *samples = reinterpret_cast<const float *>(whole.audio.samples.constData());
+        int loud = 0;
+        for (qint64 i = 0; i < whole.audio.frames(); ++i)
+            loud += samples[i] > 0.4f;
+        QCOMPARE(loud, 3 * Synthesizer::SampleRate / 10);
+    }
+
+    void dialogueSynthesizerSaysWhyItCannotStart() {
+        SynthesisOptions options;
+        options.voice = VoiceSettings::recommended(Engine::Kokoro);
+        QVERIFY(options.voice.set("dialogueVoice", "am_adam"));
+        DialogueSynthesizer synth(Engine::Kokoro);
+        QSignalSpy finished(&synth, &Synthesizer::finished);
+        QVERIFY(!synth.start(options, {{0, "Hi.", {{"“Hi.”", true}}}}));
+        QCOMPARE(finished.size(), 1);
+        QVERIFY(!finished.first().at(0).toBool());
+        QVERIFY(finished.first().at(1).toString().contains("omareader setup"));
+        QVERIFY(!synth.isRunning());
+    }
+
+    void narratorPreviewsTheDialogueVoice() {
+        QSettings().remove("voice");
+        QTemporaryDir dir;
+        const QString log = dir.filePath("koko.log"), spoken = dir.filePath("spoken.txt");
+        qputenv("FAKE_KOKO_LOG", log.toUtf8());
+        qputenv("FAKE_KOKO_TEXT", spoken.toUtf8());
+        Narrator narrator;
+        narrator.setOverrides(fakeKoko(dir).binary, dir.path());
+        QSignalSpy changed(&narrator, &Narrator::voiceChanged);
+        narrator.setDialogueVoice("not-a-voice");
+        QVERIFY(narrator.dialogueVoice().isEmpty());
+        narrator.setDialogueVoice("am_adam");
+        QCOMPARE(narrator.dialogueVoice(), QString("am_adam"));
+        QCOMPARE(changed.size(), 1);
+        // Exports get it with the rest of the voice.
+        QCOMPARE(narrator.synthesisOptions().voice.dialogue(), QString("am_adam"));
+        narrator.preview();
+        auto read = [](const QString &path) {
+            QFile f(path);
+            return f.open(QIODevice::ReadOnly) ? QString::fromUtf8(f.readAll()) : QString();
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(read(spoken).contains("Would you like") && read(spoken).contains("Once upon"), 10000);
+        narrator.stopPreview();
+        unsetenv("FAKE_KOKO_LOG");
+        unsetenv("FAKE_KOKO_TEXT");
+        QFile said(spoken);
+        QVERIFY(said.open(QIODevice::ReadOnly));
+        const QStringList lines = QString::fromUtf8(said.readAll()).trimmed().split('\n');
+        // The sample's closing question is asked in the dialogue voice.
+        QVERIFY2(lines.contains("Would you like to hear it?"), qPrintable(lines.join(" | ")));
+        QVERIFY2(lines.filter("Once upon a time").size() == 1, qPrintable(lines.join(" | ")));
+        QFile runs(log);
+        QVERIFY(runs.open(QIODevice::ReadOnly));
+        QVERIFY(QString::fromUtf8(runs.readAll()).contains("--style am_adam"));
+        narrator.setDialogueVoice({});
+        QVERIFY(VoiceSettings::load(Engine::Kokoro).dialogueVoice.isEmpty());
+        narrator.setOverrides({}, {});
+        QSettings().remove("voice");
+    }
+
+    void narratorReadsDialogueInItsOwnVoice() {
+        QSettings().remove("voice");
+        QTemporaryDir dir;
+        const QString log = dir.filePath("koko.log");
+        qputenv("FAKE_KOKO_LOG", log.toUtf8());
+        Narrator narrator;
+        narrator.setOverrides(fakeKoko(dir).binary, dir.path());
+        narrator.setTuning("paragraphPause", 0.0);
+        // Long enough that the book is still playing when it is checked.
+        narrator.setTuning("chapterPause", 1.5);
+        narrator.setDialogueVoice("am_adam");
+        Book book;
+        book.chapters = {{"One", {{"“Hi,” she said. Then she left.", 0}}}};
+        book.segment();
+        narrator.setBook(std::make_shared<Book>(book));
+        narrator.play(0);
+        const bool playing = narrator.state() != Narrator::Stopped; // no audio output here otherwise
+        // Each piece the fake voice says is three samples long: two for the
+        // first sentence, one for the second, then the chapter's pause.
+        if (playing)
+            QTRY_COMPARE_WITH_TIMEOUT(narrator.queuedFramesForTests(), 9 + qint64(1.5 * Synthesizer::SampleRate), 10000);
+        narrator.stop();
+        unsetenv("FAKE_KOKO_LOG");
+        narrator.setOverrides({}, {});
+        QSettings().remove("voice");
+        if (!playing)
+            QSKIP("There is no audio output to read aloud through.");
+        QFile file(log);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QString runs = QString::fromUtf8(file.readAll());
+        QVERIFY2(runs.contains("--style af_heart") && runs.contains("--style am_adam"), qPrintable(runs));
+    }
+
+    void exportReadsDialogueInItsOwnVoice() {
+        if (Exporter::findFfmpeg().isEmpty())
+            QSKIP("ffmpeg is not installed");
+        QTemporaryDir dir;
+        const QString log = dir.filePath("koko.log"), spoken = dir.filePath("spoken.txt");
+        qputenv("FAKE_KOKO_LOG", log.toUtf8());
+        qputenv("FAKE_KOKO_TEXT", spoken.toUtf8());
+        write(dir.filePath("a.txt"), "dialogue");
+        Book book;
+        book.path = dir.filePath("a.txt");
+        book.title = "Dialogue";
+        book.chapters = {{"One", {{"“Hi,” she said.", 0}, {"The end.", 0}}}};
+        book.segment();
+        Exporter exporter;
+        QSignalSpy finished(&exporter, &Exporter::finished);
+        Exporter::Options options;
+        options.synthesis.kokoro = fakeKoko(dir);
+        QVERIFY(options.synthesis.voice.set("dialogueVoice", "bf_emma"));
+        options.folder = dir.filePath("out");
+        QVERIFY(exporter.start(std::make_shared<Book>(book), options));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 20000);
+        unsetenv("FAKE_KOKO_LOG");
+        unsetenv("FAKE_KOKO_TEXT");
+        QVERIFY2(finished.first().at(0).toBool(), qPrintable(finished.first().at(1).toString()));
+        QFile file(log);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QString runs = QString::fromUtf8(file.readAll());
+        QVERIFY2(runs.contains("--style bf_emma --lan en-us"), qPrintable(runs));
+        QFile said(spoken);
+        QVERIFY(said.open(QIODevice::ReadOnly));
+        QStringList lines = QString::fromUtf8(said.readAll()).trimmed().split('\n');
+        lines.sort();
+        QCOMPARE(lines, (QStringList{"The end.", "she said.", "“Hi,”"}));
+    }
+
+    void settingsPanelOffersADialogueVoice() {
+        QSettings().remove("voice");
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        QVERIFY(app.show({1100, 1900}));
+        QVERIFY(app.reader.addText("Settings", "“Some text,” she said."));
+        QTRY_VERIFY(app.reader.hasBook());
+        QObject *panel = app.window->findChild<QObject *>("settingsPanel");
+        QVERIFY(panel);
+        QMetaObject::invokeMethod(panel, "open");
+        QTRY_VERIFY(panel->property("opened").toBool());
+        QTRY_COMPARE(app.items("dialogueVoice").size(), 1);
+        QQuickItem *box = app.items("dialogueVoice").first();
+        // Off by default, and the narration's own voice isn't offered.
+        QCOMPARE(box->property("displayText").toString(), QString("Same as narration"));
+        const QVariantList model = box->property("model").toList();
+        QVERIFY(model.size() > 2);
+        for (const QVariant &entry : model)
+            QVERIFY(entry.toMap().value("id").toString() != app.narrator.voice());
+        // Picking one sets it.
+        QMetaObject::invokeMethod(box, "chosen", Q_ARG(QVariant, QVariant(QString("bm_george"))));
+        QCOMPARE(app.narrator.dialogueVoice(), QString("bm_george"));
+        QTRY_VERIFY(box->property("displayText").toString().startsWith("George"));
+
+        // It sits under the voice, inside the panel, with its name drawn.
+        const QImage image = app.grab("settings-dialogue-voice");
+        const QRect area = app.area(image, box);
+        QVERIFY(QRect(QPoint(0, 0), image.size()).contains(area));
+        QVERIFY2(brightPixels(image, area, 110) > 40, "the dialogue voice is not drawn");
+        QQuickItem *voice = nullptr;
+        for (QQuickItem *child : box->parentItem()->childItems())
+            if (child->property("selected").toString() == app.narrator.voice()
+                && child->metaObject()->indexOfSignal("chosen(QVariant)") >= 0)
+                voice = child;
+        QVERIFY(voice);
+        QVERIFY(voice->mapToScene(QPointF(0, 0)).y() < box->mapToScene(QPointF(0, 0)).y());
+        app.narrator.setDialogueVoice({});
+        app.reader.closeBook();
+        QSettings().remove("voice");
     }
 
 private:

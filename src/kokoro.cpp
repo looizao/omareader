@@ -150,7 +150,7 @@ QStringList KokoroRunner::arguments(const Options &options, const QString &input
     return {"--model", options.setup.model,
             "--data", options.setup.voices,
             "--style", options.voice,
-            "--lan", Voices::languageFor(options.voice),
+            "--lan", options.language.isEmpty() ? Voices::languageFor(options.voice) : options.language,
             "--speed", QString::number(options.speed, 'f', 2),
             "--mono",
             "--timestamps",

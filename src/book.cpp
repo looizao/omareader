@@ -490,7 +490,10 @@ void Book::segment() {
 QString Book::sentenceText(int index) const {
     if (index < 0 || index >= sentences.size())
         return {};
-    const Sentence &s = sentences.at(index);
+    return spokenText(sentences.at(index));
+}
+
+QString Book::spokenText(const Sentence &s) const {
     QString text = chapters.at(s.chapter).paragraphs.at(s.paragraph).text.mid(s.start, s.end - s.start);
     QList<QPair<int, int>> skipped;
     for (const auto &gap : s.skipped)
@@ -501,10 +504,13 @@ QString Book::sentenceText(int index) const {
 }
 
 QStringList Book::sentenceWords(int index) const {
-    QStringList out;
     if (index < 0 || index >= sentences.size())
-        return out;
-    const Sentence &s = sentences.at(index);
+        return {};
+    return wordsOf(sentences.at(index));
+}
+
+QStringList Book::wordsOf(const Sentence &s) const {
+    QStringList out;
     const QString &text = chapters.at(s.chapter).paragraphs.at(s.paragraph).text;
     for (const auto &w : s.words)
         out.append(text.mid(w.start, w.length));

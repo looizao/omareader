@@ -130,6 +130,31 @@ Drawer {
                 onChosen: value => narrator.language = value
             }
 
+            Label { Layout.leftMargin: 16; Layout.topMargin: 6; text: qsTr("Dialogue voice"); color: Colors.body }
+            ChoiceBox {
+                id: dialogueVoice
+                objectName: "dialogueVoice"
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                model: [{ id: "", label: qsTr("Same as narration") }].concat(
+                    narrator.voices.filter(v => v.id !== narrator.voice).map(v => ({
+                        id: v.id,
+                        label: qsTr("%1 · %2").arg(v.name).arg(panel.languageName(v.language))
+                    })))
+                selected: narrator.dialogueVoice
+                onChosen: value => narrator.dialogueVoice = value
+            }
+            Label {
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                text: qsTr("Reads what the characters say, in quotation marks or after a dialogue dash, in a second voice.")
+                wrapMode: Text.Wrap
+                font.pixelSize: 12
+                color: Colors.muted
+            }
+
             Label {
                 Layout.leftMargin: 16
                 Layout.topMargin: 10

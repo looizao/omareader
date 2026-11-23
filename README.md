@@ -192,6 +192,35 @@ such as a PDF footnote at the end of a chapter, still gets its pause.
 Exports leave exactly the same silences as reading aloud, so each chapter
 of an exported audiobook ends with the chapter pause.
 
+### Dialogue in a second voice
+
+Stories are easier to follow by ear when the characters don't sound like
+the narrator. Under the voice, pick a Dialogue voice (it starts as Same as
+narration, which reads everything in one voice) and what the characters say
+is read in that voice, in narration and exports alike, with the highlight
+following each word as before. omareader finds the speech offline, from the
+punctuation alone:
+
+- quotation marks of every kind: “curly”, "straight", « guillemets »,
+  „German“ and »Danish« quotes, and ‘single’ quotes in books that use them
+  for speech (then “double” ones inside are left to the speaker);
+- the dialogue dash of Portuguese, Spanish, French and Russian books, where
+  a paragraph that opens with a dash is speech and each dash after it
+  switches between speaker and narrator ("— Olá — disse ele. — Tudo bem?");
+- a speech that runs over several paragraphs, each reopening the quote and
+  only the last closing it.
+
+An apostrophe, an inch mark or a dash inside a word ("well—known") isn't
+taken for speech. It tells speech from narration, not one character from
+another, and it also voices quoted words in non-fiction ("so-called
+“features”"), so it suits novels and stories best. With Kokoro the second
+voice reads in the narration's language, whatever language it was made
+for; the preview asks its closing question in it. The two voices take
+turns on the same engine, so reading needs no more CPU or GPU; Kokoro loads
+its model a second time for them, Qwen3-TTS shares its one.
+`omareader text book.epub --spoken --dialogue` marks what the second voice
+would read, and `--dialogue-voice` sets it for an export.
+
 ### Pronunciation
 
 When the voice gets a name, a place or a term wrong, teach it: press P on
@@ -406,6 +435,8 @@ omareader setup --dictionary eng-por     # install one (uses the network)
 omareader export book.epub --split       # audio, one MP3 per chapter
 omareader export book.epub --format m4b  # one M4B audiobook with chapters
 omareader export book.epub --engine qwen --voice ryan --tune temperature=0.7
+omareader export story.epub --dialogue-voice bm_george # characters in a second voice
+omareader text story.epub --spoken --dialogue # «marks» what the second voice reads
 omareader voices --engine qwen           # voices, languages and tuning ranges
 omareader doctor --json                  # is read-aloud ready?
 omareader skill install                  # agent skill for ~/.claude/skills
@@ -427,6 +458,11 @@ omareader skill install                  # agent skill for ~/.claude/skills
   audio plus its word timings, which narration, the preview and exports all
   use. It applies the speed (Qwen3-TTS is time-stretched, its word times
   scaled to match) and the volume.
+- `src/dialogue.cpp` finds where characters speak, from quotation marks and
+  dialogue dashes, and cuts sentences where speech starts and stops; the
+  synthesizer reads those pieces in two voices of the same engine and joins
+  each sentence's pieces back into one, trimming the silence where they
+  meet and moving their word times along.
 - `src/voicesettings.cpp` lists each engine's voices, languages and tuning,
   with ranges and recommended values, and remembers them per engine.
 - `src/book.cpp` splits paragraphs into sentences and words, leaving out of
