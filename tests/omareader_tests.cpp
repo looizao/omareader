@@ -1859,7 +1859,8 @@ private slots:
         int found = 0;
         for (const QString name : {"src/SettingsPanel.qml", "src/ExportDialog.qml", "src/ReaderView.qml",
                                    "src/NarrationBar.qml", "src/HelpOverlay.qml", "src/StatsPanel.qml",
-                                   "src/LibraryView.qml", "src/stats.cpp",
+                                   "src/LibraryView.qml", "src/CollectionPicker.qml",
+                                   "src/CollectionDialog.qml", "src/stats.cpp",
                                    "src/LanguageNotice.qml"}) {
             QFile source(QString(OMAREADER_SOURCE) + "/" + name);
             QVERIFY(source.open(QIODevice::ReadOnly));
@@ -3645,6 +3646,150 @@ private slots:
         QCOMPARE(PastedTitle::fromAgentReply(QString(300, 'a')).size(), 100);
     }
 
+    // A library saved before collections and sorting loads as it was, and
+    // saving it again keeps every book as it was written.
+    void libraryLoadsOlderLibrariesUnchanged() {
+        QTemporaryDir dir;
+        const QString file = dir.filePath("library.json");
+        const QByteArray old = R"({"version": 1, "books": [
+            {"path": "/books/b.epub", "title": "Bravo", "author": "Ann", "format": "epub", "cover": "",
+             "source": "", "chapter": 2, "paragraph": 4, "sentence": 30, "sentenceCount": 100,
+             "offset": 12, "anchor": "Where we were.", "opened": "2026-11-20T10:00:00Z"},
+            {"path": "/books/a.epub", "title": "Alpha", "author": "Bob", "format": "epub", "cover": "",
+             "source": "", "chapter": 0, "paragraph": 0, "sentence": 0, "sentenceCount": 0,
+             "offset": -1, "anchor": "", "opened": "2026-11-22T10:00:00Z"}]})";
+        write(file, old);
+        const QJsonArray before = QJsonDocument::fromJson(old).object().value("books").toArray();
+        Library library(file, dir.filePath("covers"));
+        QCOMPARE(library.count(), 2);
+        QCOMPARE(library.collectionNames(), QStringList());
+        QCOMPARE(library.sortOrder(), QString("recent"));
+        QCOMPARE(library.collection(), QString());
+        // Most recently opened first, every book on the shelf.
+        QCOMPARE(library.shelf().size(), 2);
+        QCOMPARE(library.shelf().first().toMap().value("title").toString(), QString("Alpha"));
+        QCOMPARE(library.entry("/books/b.epub").anchor, QString("Where we were."));
+        QCOMPARE(library.entry("/books/b.epub").sentence, 30);
+        QVERIFY(library.save());
+        QFile saved(file);
+        QVERIFY(saved.open(QIODevice::ReadOnly));
+        const QJsonObject root = QJsonDocument::fromJson(saved.readAll()).object();
+        QCOMPARE(root.value("version").toInt(), 1);
+        QVERIFY(!root.contains("collections"));
+        const QJsonArray after = root.value("books").toArray();
+        QCOMPARE(after.size(), 2);
+        // Saved in the same order, so each book compares with its old self.
+        QCOMPARE(after.at(0).toObject(), before.at(1).toObject());
+        QCOMPARE(after.at(1).toObject(), before.at(0).toObject());
+    }
+
+    void libraryKeepsBooksInCollections() {
+        QTemporaryDir dir;
+        const QString file = dir.filePath("library.json");
+        QString cat, dune, emma, notes;
+        {
+            Library library(file, dir.filePath("covers"));
+            // A second apart, as the library keeps the time it was opened.
+            cat = library.addText("Cat's Cradle", "A text.", {}, "Kurt Vonnegut");
+            QTest::qWait(1000);
+            dune = library.addText("Dune", "A text.", {}, "Frank Herbert");
+            QTest::qWait(1000);
+            emma = library.addText("Émile", "A text.", {}, "Jean-Jacques Rousseau");
+            QTest::qWait(1000);
+            notes = library.addText("notes", "A text.");
+            QSignalSpy changed(&library, &Library::changed);
+
+            QCOMPARE(library.addCollection("  Science   fiction "), QString("Science fiction"));
+            QCOMPARE(library.addCollection("science FICTION"), QString("Science fiction")); // the same one
+            QCOMPARE(library.addCollection("   "), QString());
+            QCOMPARE(library.addCollection("Classics"), QString("Classics"));
+            QCOMPARE(library.addCollection("Empty"), QString("Empty"));
+            QCOMPARE(library.collectionNames(), (QStringList{"Classics", "Empty", "Science fiction"}));
+            QCOMPARE(changed.count(), 3);
+
+            library.setInCollection(cat, "science fiction", true);
+            library.setInCollection(dune, "Science fiction", true);
+            library.setInCollection(dune, "Science fiction", true); // once is enough
+            library.setInCollection(emma, "Classics", true);
+            // A book can be in several, and a new name starts a collection.
+            library.setInCollection(dune, "To read", true);
+            QCOMPARE(library.entry(dune).collections, (QStringList{"Science fiction", "To read"}));
+            QCOMPARE(library.entry(cat).collections, QStringList{"Science fiction"});
+            QCOMPARE(library.collectionNames(), (QStringList{"Classics", "Empty", "Science fiction", "To read"}));
+            const QVariantList counts = library.collectionList();
+            QCOMPARE(counts.at(1).toMap().value("count").toInt(), 0);
+            QCOMPARE(counts.at(2).toMap().value("count").toInt(), 2);
+            library.setInCollection(dune, "To read", false);
+            QCOMPARE(library.entry(dune).collections, QStringList{"Science fiction"});
+            library.setInCollection("/not/in/the/library", "Classics", true);
+            QCOMPARE(library.collectionList().at(0).toMap().value("count").toInt(), 1);
+            library.setSortOrder("title");
+        }
+
+        // Kept with the library: collections, even empty ones, and the order.
+        Library library(file, dir.filePath("covers"));
+        QCOMPARE(library.collectionNames(), (QStringList{"Classics", "Empty", "Science fiction", "To read"}));
+        QCOMPARE(library.entry(cat).collections, QStringList{"Science fiction"});
+        QCOMPARE(library.sortOrder(), QString("title"));
+        auto titles = [&] {
+            QStringList list;
+            for (const QVariant &book : library.shelf())
+                list << book.toMap().value("title").toString();
+            return list;
+        };
+        QCOMPARE(titles(), (QStringList{"Cat's Cradle", "Dune", "Émile", "notes"}));
+        QCOMPARE(library.shelf().at(1).toMap().value("collections").toStringList(), QStringList{"Science fiction"});
+
+        // One collection at a time.
+        library.setCollection("science fiction");
+        QCOMPARE(library.collection(), QString("Science fiction"));
+        QCOMPARE(titles(), (QStringList{"Cat's Cradle", "Dune"}));
+        library.setCollection("No such collection");
+        QCOMPARE(library.collection(), QString());
+        QCOMPARE(titles().size(), 4);
+
+        // The filter ignores case and accents, and wants every word.
+        library.setFilter("emile");
+        QCOMPARE(titles(), QStringList{"Émile"});
+        library.setFilter("ROUSSEAU émile");
+        QCOMPARE(titles(), QStringList{"Émile"});
+        library.setFilter("herbert cradle");
+        QCOMPARE(titles(), QStringList());
+        library.setFilter("  ");
+        QCOMPARE(titles().size(), 4);
+
+        // By author, books with none last; by progress, furthest first.
+        library.setSortOrder("author");
+        QCOMPARE(titles(), (QStringList{"Dune", "Émile", "Cat's Cradle", "notes"}));
+        library.savePosition(emma, 0, 0, 1, 2);
+        library.savePosition(cat, 0, 0, 1, 3);
+        library.setSortOrder("progress");
+        QCOMPARE(titles().mid(0, 2), (QStringList{"Émile", "Cat's Cradle"}));
+        library.setSortOrder("sideways");
+        QCOMPARE(library.sortOrder(), QString("progress"));
+        library.setSortOrder("recent");
+        QCOMPARE(titles(), (QStringList{"notes", "Émile", "Dune", "Cat's Cradle"}));
+
+        // Renaming takes the books along and refuses another's name.
+        library.setCollection("Science fiction");
+        QVERIFY(!library.renameCollection("Science fiction", "classics"));
+        QVERIFY(!library.renameCollection("Science fiction", " "));
+        QVERIFY(library.renameCollection("science fiction", "SF"));
+        QCOMPARE(library.collection(), QString("SF"));
+        QCOMPARE(library.entry(dune).collections, QStringList{"SF"});
+        QVERIFY(library.renameCollection("SF", "sf")); // only its case
+        QCOMPARE(library.collectionNames(), (QStringList{"Classics", "Empty", "sf", "To read"}));
+
+        // Deleting one keeps its books; forgetting a book keeps its collections.
+        library.removeCollection("sf");
+        QCOMPARE(library.collection(), QString());
+        QCOMPARE(library.count(), 4);
+        QVERIFY(library.entry(dune).collections.isEmpty());
+        library.remove(emma);
+        QCOMPARE(library.collectionNames(), (QStringList{"Classics", "Empty", "To read"}));
+        QCOMPARE(library.collectionList().at(0).toMap().value("count").toInt(), 0);
+    }
+
     void libraryKeepsPastedText() {
         QTemporaryDir dir;
         const QString file = dir.filePath("library.json");
@@ -4579,6 +4724,173 @@ private slots:
                  qPrintable(QString("the cross is %1, %2 px off the button's centre").arg(offset.x()).arg(offset.y())));
         // And it is a cross, not a dot: about 12 px each way.
         QVERIFY2(cross.width() >= 7 && cross.height() >= 7, qPrintable(QString("cross is %1x%2").arg(cross.width()).arg(cross.height())));
+    }
+
+    // The shelves above the books: picking collections for a book, moving
+    // between collections, filtering and sorting, all from the keyboard.
+    void libraryShelvesFilterAndSortBooks() {
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        // A moment apart, so the most recent is never in doubt.
+        const QString dune = app.library.addText("Dune", "A text.", {}, "Kim Herbert");
+        QTest::qWait(5);
+        app.library.addText("Emma", "A text.", {}, "Jane Austen");
+        QTest::qWait(5);
+        app.library.addText("Persuasion", "A text.", {}, "Jane Austen");
+        QVERIFY(app.show());
+        QTRY_COMPARE(app.items("shelfTab").size(), 1);
+        auto shelf = [&] {
+            QStringList titles;
+            for (const QVariant &book : app.library.shelf())
+                titles << book.toMap().value("title").toString();
+            return titles;
+        };
+        QCOMPARE(shelf(), (QStringList{"Persuasion", "Emma", "Dune"}));
+
+        // C opens the picker for the selected book, the first one; a name
+        // there starts a collection with it.
+        QTest::keyClick(app.window, Qt::Key_Right);
+        QTest::keyClick(app.window, Qt::Key_Right);
+        QTest::keyClick(app.window, Qt::Key_C);
+        QObject *picker = app.window->findChild<QObject *>("collectionPicker");
+        QVERIFY(picker);
+        QTRY_VERIFY(picker->property("opened").toBool());
+        QCOMPARE(picker->property("path").toString(), dune);
+        for (const char c : QByteArray("Science fiction"))
+            QTest::keyClick(app.window, c);
+        QTest::keyClick(app.window, Qt::Key_Return);
+        QTRY_COMPARE(app.library.entry(dune).collections, QStringList{"Science fiction"});
+        QCOMPARE(app.items("collectionChoice").size(), 1);
+        app.grab("library-collection-picker");
+        // Up goes back to the list, where space ticks and unticks.
+        QTest::keyClick(app.window, Qt::Key_Up);
+        QTest::keyClick(app.window, Qt::Key_Space);
+        QTRY_VERIFY(app.library.entry(dune).collections.isEmpty());
+        QTest::keyClick(app.window, Qt::Key_Space);
+        QTRY_COMPARE(app.library.entry(dune).collections, QStringList{"Science fiction"});
+        QTest::keyClick(app.window, Qt::Key_Escape);
+        // Gone, not only closing: a modal popup holds the keys until then.
+        QTRY_VERIFY(!picker->property("visible").toBool());
+        QTRY_COMPARE(app.items("shelfTab").size(), 2);
+
+        // ] shows the next collection, drawn filled in the accent.
+        QTest::keyClick(app.window, ']');
+        QTRY_COMPARE(app.library.collection(), QString("Science fiction"));
+        QCOMPARE(shelf(), QStringList{"Dune"});
+        const QImage shot = app.grab("library-collection");
+        const QList<QQuickItem *> tabs = app.items("shelfTab");
+        QCOMPARE(tabs.size(), 2);
+        auto accent = [&](const QRect &r) {
+            int count = 0;
+            for (int y = r.top(); y <= r.bottom(); ++y)
+                for (int x = r.left(); x <= r.right(); ++x) {
+                    const QColor c = shot.pixelColor(x, y);
+                    count += c.red() > 200 && c.green() > 170 && c.blue() < 80;
+                }
+            return count;
+        };
+        const QRect all = app.area(shot, tabs.at(0)), chosen = app.area(shot, tabs.at(1));
+        QVERIFY2(accent(chosen) > chosen.width() * chosen.height() / 2, "the shown collection isn't filled in the accent");
+        QCOMPARE(accent(all), 0);
+        // Its name is written in dark letters across the middle of the tab.
+        QRect letters;
+        for (int y = chosen.top() + 3; y <= chosen.bottom() - 3; ++y)
+            for (int x = chosen.left() + 3; x <= chosen.right() - 3; ++x)
+                if (qGray(shot.pixel(x, y)) < 80)
+                    letters |= QRect(x, y, 1, 1);
+        QVERIFY2(letters.isValid(), "no name drawn on the tab");
+        const QPointF offset = QRectF(letters).center() - QRectF(chosen).center();
+        QVERIFY2(qAbs(offset.x()) <= 2.5 && qAbs(offset.y()) <= 2.5,
+                 qPrintable(QString("the name is %1, %2 px off the tab's centre").arg(offset.x()).arg(offset.y())));
+        QVERIFY(letters.width() > chosen.width() / 2);
+        if (!qEnvironmentVariableIsEmpty("OMAREADER_SCREENSHOTS"))
+            shot.copy(chosen.adjusted(-8, -8, 8, 8)).scaled(chosen.width() * 4, chosen.height() * 4)
+                .save(qEnvironmentVariable("OMAREADER_SCREENSHOTS") + "/library-collection-tab-zoom.png");
+        // Round the ends, back to every book.
+        QTest::keyClick(app.window, ']');
+        QTRY_COMPARE(app.library.collection(), QString());
+
+        // / filters; the letters go to the field, not to the shortcuts.
+        QTest::keyClick(app.window, Qt::Key_Slash);
+        for (const char c : QByteArray("jane pers"))
+            QTest::keyClick(app.window, c);
+        QTRY_COMPARE(app.library.filter(), QString("jane pers"));
+        QCOMPARE(app.library.sortOrder(), QString("recent"));
+        QCOMPARE(shelf(), QStringList{"Persuasion"});
+        QTest::keyClick(app.window, 'x');
+        QTRY_COMPARE(app.items("emptyShelfTitle").size(), 1);
+        QCOMPARE(app.items("emptyShelfTitle").first()->property("text").toString(), QString("Nothing matches “jane persx”"));
+        app.grab("library-nothing-matches");
+        // Esc clears it and goes back to the books.
+        QTest::keyClick(app.window, Qt::Key_Escape);
+        QTRY_COMPARE(app.library.filter(), QString());
+        QCOMPARE(shelf().size(), 3);
+
+        // S steps through the orders, and the library keeps the choice.
+        QTest::keyClick(app.window, Qt::Key_S);
+        QTRY_COMPARE(app.library.sortOrder(), QString("title"));
+        QCOMPARE(shelf(), (QStringList{"Dune", "Emma", "Persuasion"}));
+        QTest::keyClick(app.window, Qt::Key_S);
+        QTRY_COMPARE(app.library.sortOrder(), QString("author"));
+        QCOMPARE(shelf(), (QStringList{"Emma", "Persuasion", "Dune"}));
+        app.grab("library-sorted");
+        // The filter and the order sit level with the tabs, and a narrow
+        // window still leaves the tabs room.
+        QQuickItem *filter = app.items("libraryFilter").value(0), *sort = app.items("librarySort").value(0);
+        QVERIFY(filter && sort);
+        const QList<QQuickItem *> level = app.items("shelfTab");
+        QCOMPARE(filter->height(), level.first()->height());
+        QCOMPARE(sort->height(), level.first()->height());
+        QCOMPARE(filter->mapToScene({0, 0}).y(), level.first()->mapToScene({0, 0}).y());
+        app.window->resize(800, 600);
+        app.grab("library-narrow");
+        QVERIFY(app.items("shelfTabs").first()->width() >= 120);
+        QVERIFY(sort->mapToScene({sort->width(), 0}).x() <= 800 - 32);
+        QQuickItem *newButton = app.items("newCollectionButton").value(0);
+        QVERIFY(newButton);
+        QVERIFY(newButton->mapToScene({0, 0}).x() >= app.items("shelfTabs").first()->mapToScene({app.items("shelfTabs").first()->width(), 0}).x());
+        QVERIFY(newButton->mapToScene({newButton->width(), 0}).x() <= filter->mapToScene({0, 0}).x());
+
+        // New collection asks for a name.
+        auto centre = [](QQuickItem *item) { return item->mapToScene(QPointF(item->width() / 2, item->height() / 2)).toPoint(); };
+        QTest::mouseClick(app.window, Qt::LeftButton, {}, centre(newButton));
+        QObject *dialog = app.window->findChild<QObject *>("collectionDialog");
+        QVERIFY(dialog);
+        QTRY_VERIFY(dialog->property("opened").toBool());
+        for (const char c : QByteArray("Classics"))
+            QTest::keyClick(app.window, c);
+        QTest::keyClick(app.window, Qt::Key_Return);
+        QTRY_VERIFY(!dialog->property("visible").toBool());
+        QCOMPARE(app.library.collectionNames(), (QStringList{"Classics", "Science fiction"}));
+        // A right-click on its tab offers to rename or delete it; Esc closes that.
+        QTRY_COMPARE(app.items("shelfTab").size(), 3);
+        QTest::mouseClick(app.window, Qt::RightButton, {}, centre(app.items("shelfTab").at(1)));
+        QObject *menu = app.window->findChild<QObject *>("collectionMenu");
+        QTRY_VERIFY(menu->property("opened").toBool());
+        QCOMPARE(menu->property("name").toString(), QString("Classics"));
+        QCOMPARE(app.library.collection(), QString("Classics"));
+        // Under the pointer, on its tab.
+        QQuickItem *menuItem = qobject_cast<QQuickItem *>(menu->property("contentItem").value<QObject *>());
+        QVERIFY(menuItem);
+        const QPointF menuAt = menuItem->mapToScene({0, 0});
+        const QPointF tabAt = app.items("shelfTab").at(1)->mapToScene({0, 0});
+        QVERIFY2(menuAt.y() >= tabAt.y() && menuAt.x() >= tabAt.x() - 20,
+                 qPrintable(QString("the menu is at %1, %2").arg(menuAt.x()).arg(menuAt.y())));
+        app.grab("library-collection-menu");
+        QTest::keyClick(app.window, Qt::Key_Escape);
+        QTRY_VERIFY(!menu->property("visible").toBool());
+        // Deleting asks first, and keeps the books.
+        QVERIFY(QMetaObject::invokeMethod(dialog, "startDelete", Q_ARG(QVariant, QString("Science fiction"))));
+        QTRY_VERIFY(dialog->property("opened").toBool());
+        app.grab("library-delete-collection");
+        QTest::keyClick(app.window, Qt::Key_Return);
+        QTRY_VERIFY(!dialog->property("visible").toBool());
+        QCOMPARE(app.library.collectionNames(), QStringList{"Classics"});
+        QCOMPARE(app.library.count(), 3);
+        Library reloaded(dir.path() + "/library.json", dir.path() + "/covers");
+        QCOMPARE(reloaded.sortOrder(), QString("author"));
+        QCOMPARE(reloaded.collectionNames(), QStringList{"Classics"});
+        QVERIFY(reloaded.entry(dune).collections.isEmpty());
     }
 
     void statsPanelShowsTimeSpentAndLeft() {

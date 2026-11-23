@@ -4,6 +4,7 @@
 
 #include <QDateTime>
 #include <QObject>
+#include <QStringList>
 #include <QVariantList>
 
 // The books you've opened and where you stopped in each, kept in
@@ -31,17 +32,52 @@ struct LibraryEntry {
     // splits the book's paragraphs differently; empty for older positions.
     QString anchor;
     QDateTime opened;
+    // The collections the book is in, by name.
+    QStringList collections;
 };
 
 class Library : public QObject {
     Q_OBJECT
     Q_PROPERTY(QVariantList books READ books NOTIFY changed)
     Q_PROPERTY(int count READ count NOTIFY changed)
+    // The books the library shows: those in the chosen collection that
+    // match the filter, in the chosen order.
+    Q_PROPERTY(QVariantList shelf READ shelf NOTIFY changed)
+    // Every collection, in alphabetical order, each with its name and how
+    // many books it holds.
+    Q_PROPERTY(QVariantList collections READ collectionList NOTIFY changed)
+    // The collection shown; empty for every book.
+    Q_PROPERTY(QString collection READ collection WRITE setCollection NOTIFY changed)
+    // recent, title, author or progress; kept with the library.
+    Q_PROPERTY(QString sortOrder READ sortOrder WRITE setSortOrder NOTIFY changed)
+    // Words the shown books' titles, authors or sites must contain.
+    Q_PROPERTY(QString filter READ filter WRITE setFilter NOTIFY changed)
 
 public:
     explicit Library(const QString &file = {}, const QString &coverDirectory = {}, QObject *parent = nullptr);
 
+    // Every book, most recently opened first.
     QVariantList books() const;
+    QVariantList shelf() const;
+    QStringList collectionNames() const { return m_collections; }
+    QVariantList collectionList() const;
+    QString collection() const { return m_collection; }
+    void setCollection(const QString &name);
+    QString sortOrder() const { return m_sortOrder; }
+    void setSortOrder(const QString &order);
+    QString filter() const { return m_filter; }
+    void setFilter(const QString &filter);
+
+    // Adds a collection and returns its name as kept, or the name of the one
+    // that already has it; empty when the name is blank.
+    Q_INVOKABLE QString addCollection(const QString &name);
+    // Renames a collection, taking its books along. Fails for a blank name
+    // or one another collection has.
+    Q_INVOKABLE bool renameCollection(const QString &name, const QString &newName);
+    // Deletes a collection. Its books stay in the library.
+    Q_INVOKABLE void removeCollection(const QString &name);
+    // Puts a book in a collection, or takes it out.
+    Q_INVOKABLE void setInCollection(const QString &path, const QString &name, bool in);
     const QList<LibraryEntry> &entries() const { return m_entries; }
     int count() const { return int(m_entries.size()); }
     LibraryEntry entry(const QString &path) const;
@@ -73,10 +109,16 @@ private:
     void load();
     QString storeCover(const Book &book) const;
     int indexOf(const QString &path) const;
+    int collectionIndex(const QString &name) const;
     void sort();
+    QVariantMap bookMap(const LibraryEntry &e) const;
 
     QString m_file;
     QString m_coverDirectory;
     QString m_textDirectory;
     QList<LibraryEntry> m_entries;
+    QStringList m_collections;
+    QString m_collection;
+    QString m_sortOrder = "recent";
+    QString m_filter;
 };

@@ -42,13 +42,17 @@ ApplicationWindow {
                 pasteDialog.close()
             else if (urlDialog.opened)
                 urlDialog.dismiss()
+            else if (!reader.hasBook && libraryView.closeDialogs())
+                return
             else if (win.helpVisible)
                 win.helpVisible = false
             else if (win.message !== "")
                 win.dismissMessage()
             else if (exporter.result !== "")
                 exporter.clearResult()
-            else if (reader.hasBook)
+            else if (!reader.hasBook)
+                libraryView.clearFilter()
+            else
                 readerView.closePanels()
         }
     }
@@ -61,6 +65,7 @@ ApplicationWindow {
         LayoutMirroring.childrenInherit: true
 
         LibraryView {
+            id: libraryView
             anchors.fill: parent
             visible: !reader.hasBook
             focus: visible

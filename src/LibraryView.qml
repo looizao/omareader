@@ -3,13 +3,25 @@ import QtQuick.Controls
 import QtQuick.Controls.Material
 import QtQuick.Layouts
 
-// The books you've opened, most recent first.
+// The books you've opened, most recent first unless sorted otherwise, and
+// the collections they are kept in.
 FocusScope {
     id: root
 
     // Whether a dialog for adding text or a web page is up, which owns the
     // keys then.
     property bool dialogOpen: false
+    // Whether the library's own dialogs leave its keys free.
+    readonly property bool keysFree: root.visible && !root.dialogOpen && !removeDialog.opened
+                                     && !picker.opened && !collectionDialog.opened && !collectionMenu.opened
+    readonly property var sortOrders: [
+        {id: "recent", label: qsTr("Recently opened")},
+        {id: "title", label: qsTr("Title")},
+        {id: "author", label: qsTr("Author")},
+        {id: "progress", label: qsTr("Progress")}
+    ]
+    // Every book first, then each collection.
+    readonly property var shelves: [{name: "", count: library.count}].concat(library.collections)
     signal addTextRequested(bool fromClipboard)
     // An empty address opens the dialog empty.
     signal addPageRequested(string address)
@@ -17,23 +29,23 @@ FocusScope {
 
     Shortcut {
         sequence: "N"
-        enabled: root.visible && !root.dialogOpen && !removeDialog.opened
+        enabled: root.keysFree
         onActivated: root.addTextRequested(false)
     }
     Shortcut {
         sequence: "I"
-        enabled: root.visible && !root.dialogOpen && !removeDialog.opened
+        enabled: root.keysFree
         onActivated: root.statsRequested()
     }
     Shortcut {
         sequence: "U"
-        enabled: root.visible && !root.dialogOpen && !removeDialog.opened
+        enabled: root.keysFree
         onActivated: root.addPageRequested("")
     }
     // A copied link means its page; any other text is pasted as it is.
     Shortcut {
         sequences: [StandardKey.Paste]
-        enabled: root.visible && !root.dialogOpen && !removeDialog.opened
+        enabled: root.keysFree
         onActivated: {
             const address = webImport.clipboardAddress()
             if (address !== "")
@@ -41,6 +53,77 @@ FocusScope {
             else
                 root.addTextRequested(true)
         }
+    }
+
+    Shortcut {
+        sequences: ["/", StandardKey.Find]
+        enabled: root.keysFree && library.count > 0
+        onActivated: {
+            filterField.forceActiveFocus()
+            filterField.selectAll()
+        }
+    }
+    Shortcut {
+        sequence: "S"
+        enabled: root.keysFree && library.count > 0
+        onActivated: root.nextSortOrder()
+    }
+    Shortcut {
+        sequence: "C"
+        enabled: root.keysFree && grid.count > 0
+        onActivated: picker.start(library.shelf[grid.currentIndex])
+    }
+    Shortcut {
+        sequence: "["
+        enabled: root.keysFree && library.count > 0
+        onActivated: root.showShelf(-1)
+    }
+    Shortcut {
+        sequence: "]"
+        enabled: root.keysFree && library.count > 0
+        onActivated: root.showShelf(1)
+    }
+
+    function nextSortOrder() {
+        for (let i = 0; i < root.sortOrders.length; ++i)
+            if (root.sortOrders[i].id === library.sortOrder) {
+                library.sortOrder = root.sortOrders[(i + 1) % root.sortOrders.length].id
+                return
+            }
+        library.sortOrder = "recent"
+    }
+
+    // Moves to the shelf before or after the one shown, round the ends.
+    function showShelf(step) {
+        let i = 0
+        for (let j = 0; j < root.shelves.length; ++j)
+            if (root.shelves[j].name === library.collection)
+                i = j
+        i = (i + step + root.shelves.length) % root.shelves.length
+        library.collection = root.shelves[i].name
+        shelfTabs.positionViewAtIndex(i, ListView.Contain)
+        grid.currentIndex = 0
+    }
+
+    // Esc closes the library's own dialogs, which the window's Esc reaches
+    // first; false when none is open.
+    function closeDialogs() {
+        for (const popup of [picker, collectionDialog, collectionMenu, removeDialog])
+            if (popup.opened) {
+                popup.close()
+                return true
+            }
+        return false
+    }
+
+    // Esc empties the filter and goes back to the books; false when there
+    // is nothing to undo.
+    function clearFilter() {
+        if (!root.keysFree || (filterField.text === "" && !filterField.activeFocus))
+            return false
+        filterField.clear()
+        grid.forceActiveFocus()
+        return true
     }
 
     // Asks before a book leaves the library, since a click on the card's
@@ -59,13 +142,13 @@ FocusScope {
             root.openCurrent()
             event.accepted = true
         } else if (event.key === Qt.Key_Delete) {
-            root.confirmRemove(library.books[grid.currentIndex])
+            root.confirmRemove(library.shelf[grid.currentIndex])
             event.accepted = true
         }
     }
 
     function openCurrent() {
-        const book = library.books[grid.currentIndex]
+        const book = library.shelf[grid.currentIndex]
         if (book)
             reader.open(book.path)
     }
@@ -153,6 +236,158 @@ FocusScope {
             }
         }
 
+        // The shelves, the filter and the order, once there are books.
+        RowLayout {
+            Layout.fillWidth: true
+            visible: library.count > 0
+            spacing: 16
+
+            ListView {
+                id: shelfTabs
+                objectName: "shelfTabs"
+                // As wide as its tabs, scrolling once they don't fit.
+                Layout.fillWidth: true
+                Layout.preferredWidth: contentWidth
+                Layout.maximumWidth: contentWidth
+                Layout.minimumWidth: Math.min(120, contentWidth)
+                Layout.preferredHeight: 34
+                orientation: ListView.Horizontal
+                spacing: 6
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                model: root.shelves
+                delegate: Rectangle {
+                    id: tab
+                    objectName: "shelfTab"
+                    required property var modelData
+                    required property int index
+                    readonly property bool chosen: modelData.name === library.collection
+                    width: tabLabel.implicitWidth + 28
+                    height: 34
+                    radius: Math.min(theme.radius, height / 2)
+                    color: chosen ? theme.accent : tabHover.hovered ? Colors.raised : Colors.surface
+                    border.color: chosen ? theme.accent : Colors.line
+                    Label {
+                        id: tabLabel
+                        anchors.centerIn: parent
+                        text: tab.modelData.name === ""
+                              ? qsTr("All books · %1").arg(tab.modelData.count.toLocaleString(Qt.locale(), 'f', 0))
+                              : qsTr("%1 · %2").arg(tab.modelData.name).arg(tab.modelData.count.toLocaleString(Qt.locale(), 'f', 0))
+                        color: tab.chosen ? theme.accentForeground : Colors.body
+                        font.pixelSize: 13
+                    }
+                    HoverHandler { id: tabHover }
+                    MouseArea {
+                        anchors.fill: parent
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        onClicked: mouse => {
+                            library.collection = tab.modelData.name
+                            grid.currentIndex = 0
+                            grid.forceActiveFocus()
+                            if (mouse.button === Qt.RightButton && tab.modelData.name !== "") {
+                                collectionMenu.name = tab.modelData.name
+                                collectionMenu.popup(tab, mouse.x, mouse.y)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Button {
+                id: newCollectionButton
+                objectName: "newCollectionButton"
+                Layout.preferredHeight: 34
+                topInset: 0
+                bottomInset: 0
+                flat: true
+                focusPolicy: Qt.NoFocus
+                text: qsTr("New collection")
+                onClicked: collectionDialog.startNew()
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Right-click a collection to rename or delete it; [ and ] move between them")
+            }
+            Item { Layout.fillWidth: true }
+
+            // Drawn to the tabs' height: Material's own field is much
+            // taller, and its placeholder floats up out of a short box.
+            TextField {
+                id: filterField
+                objectName: "libraryFilter"
+                Layout.fillWidth: true
+                Layout.preferredWidth: 240
+                Layout.maximumWidth: 240
+                Layout.minimumWidth: 120
+                implicitHeight: 34
+                topInset: 0
+                bottomInset: 0
+                topPadding: 0
+                bottomPadding: 0
+                leftPadding: 34
+                rightPadding: 12
+                verticalAlignment: TextInput.AlignVCenter
+                font.pixelSize: 13
+                color: Colors.text
+                onTextChanged: library.filter = text
+                Keys.onDownPressed: grid.forceActiveFocus()
+                Keys.onReturnPressed: grid.forceActiveFocus()
+                Keys.onEnterPressed: grid.forceActiveFocus()
+                Accessible.name: qsTr("Filter by title or author")
+                background: Rectangle {
+                    radius: Math.min(theme.radius, height / 2)
+                    color: Colors.surface
+                    border.color: filterField.activeFocus ? theme.accent : Colors.line
+                    SearchIcon {
+                        x: 12
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 13
+                        height: 13
+                        color: Colors.muted
+                    }
+                    Label {
+                        x: filterField.leftPadding
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: parent.width - x - filterField.rightPadding
+                        visible: filterField.text === ""
+                        text: qsTr("Filter by title or author (/)")
+                        color: Colors.muted
+                        font.pixelSize: 13
+                        elide: Text.ElideRight
+                    }
+                }
+            }
+
+            Label {
+                visible: root.width >= 900
+                text: qsTr("Sort by")
+                color: Colors.muted
+                font.pixelSize: 13
+            }
+            ChoiceBox {
+                id: sortBox
+                objectName: "librarySort"
+                Layout.preferredWidth: 190
+                Layout.minimumWidth: 150
+                implicitHeight: 34
+                topInset: 0
+                bottomInset: 0
+                font.pixelSize: 13
+                focusPolicy: Qt.NoFocus
+                model: root.sortOrders
+                selected: library.sortOrder
+                onChosen: value => {
+                    library.sortOrder = value
+                    grid.forceActiveFocus()
+                }
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Change the order (S)")
+                background: Rectangle {
+                    radius: Math.min(theme.radius, height / 2)
+                    color: sortBox.hovered ? Colors.raised : Colors.surface
+                    border.color: sortBox.popup.visible ? theme.accent : Colors.line
+                }
+            }
+        }
+
         GridView {
             id: grid
             Layout.fillWidth: true
@@ -160,7 +395,7 @@ FocusScope {
             visible: count > 0
             clip: true
             focus: true
-            model: library.books
+            model: library.shelf
             cellWidth: 196
             cellHeight: 344
             keyNavigationEnabled: true
@@ -230,10 +465,14 @@ FocusScope {
 
                 MouseArea {
                     anchors.fill: parent
-                    onClicked: {
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                    onClicked: mouse => {
                         grid.currentIndex = card.index
                         grid.forceActiveFocus()
-                        reader.open(card.modelData.path)
+                        if (mouse.button === Qt.RightButton)
+                            picker.start(card.modelData)
+                        else
+                            reader.open(card.modelData.path)
                     }
                 }
 
@@ -287,8 +526,41 @@ FocusScope {
             }
         }
 
+        // A collection with nothing in it yet, or a filter nothing matches.
         Item {
-            visible: grid.count === 0
+            visible: grid.count === 0 && library.count > 0
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            Column {
+                anchors.centerIn: parent
+                width: Math.min(520, parent.width)
+                spacing: 12
+                Label {
+                    objectName: "emptyShelfTitle"
+                    width: parent.width
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.Wrap
+                    text: library.filter.trim() !== "" ? qsTr("Nothing matches “%1”").arg(library.filter.trim())
+                          : qsTr("Nothing in “%1” yet").arg(library.collection)
+                    font.family: "serif"
+                    font.pixelSize: 26
+                    color: Colors.text
+                }
+                Label {
+                    width: parent.width
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.Wrap
+                    text: library.filter.trim() !== ""
+                          ? (library.collection !== "" ? qsTr("Only “%1” is searched. Esc clears the filter.").arg(library.collection)
+                                                       : qsTr("Esc clears the filter."))
+                          : qsTr("Go to All books, then press C on a book, or right-click it, to put it here.")
+                    color: Colors.muted
+                }
+            }
+        }
+
+        Item {
+            visible: library.count === 0
             Layout.fillWidth: true
             Layout.fillHeight: true
             Column {
@@ -316,7 +588,7 @@ FocusScope {
         Label {
             Layout.fillWidth: true
             visible: grid.count > 0
-            text: qsTr("Enter opens · N adds text · U adds a web page · Delete forgets a book (the file stays, pasted text goes to the trash) · ? shows every shortcut")
+            text: qsTr("Enter opens · C puts a book in collections · / filters · S sorts · Delete forgets a book (the file stays, pasted text goes to the trash) · ? shows every shortcut")
             color: Colors.muted
             font.pixelSize: 12
             horizontalAlignment: Text.AlignHCenter
@@ -392,6 +664,39 @@ FocusScope {
                     onClicked: removeDialog.accept()
                 }
             }
+        }
+    }
+
+    CollectionPicker {
+        id: picker
+        onClosed: grid.forceActiveFocus()
+    }
+
+    CollectionDialog {
+        id: collectionDialog
+        onClosed: grid.forceActiveFocus()
+    }
+
+    // A collection's own actions, on a right-click of its tab.
+    Menu {
+        id: collectionMenu
+        objectName: "collectionMenu"
+        property string name: ""
+        // Drawn here: the offscreen renderer drops Material's elevated
+        // backgrounds, and this one matches the dialogs.
+        background: Rectangle {
+            implicitWidth: 200
+            color: Colors.surface
+            radius: theme.radius
+            border.color: Colors.line
+        }
+        MenuItem {
+            text: qsTr("Rename…")
+            onTriggered: collectionDialog.startRename(collectionMenu.name)
+        }
+        MenuItem {
+            text: qsTr("Delete collection")
+            onTriggered: collectionDialog.startDelete(collectionMenu.name)
         }
     }
 }

@@ -90,6 +90,24 @@ smaller, quieter notes the voice skips, so a paragraph that runs over the
 page break reads as one. `omareader text --spoken` prints a book as the voice
 reads it.
 
+## Organising the library
+
+As the library grows, collections and sorting keep the book you want close
+at hand. Press C on a book (or right-click its card) to tick the collections
+it belongs in, or type a name to start a new one with it; a book can sit in
+any number of them. The tabs above the books show every book or one
+collection at a time: click one, or move between them with `[` and `]`.
+Right-click a collection's tab to rename or delete it. Deleting a collection
+keeps its books in the library.
+
+Press / (or Ctrl+F) to filter the books shown by title, author or site; case
+and accents don't matter, so "jose" finds "José", and Esc clears it. Press S,
+or use Sort by, to order the books by when you last opened them (the
+default), title, author or how far you've read. The order and the
+collections are kept with the rest of the library in
+`~/.local/share/omareader/omareader/library.json`; your book files are never
+touched.
+
 ## Pasted text
 
 For an article, a note or a message with no book file, press N in the library
@@ -362,6 +380,10 @@ it was read on keep theirs.
 | U, Ctrl+V with a link | In the library: add a web page |
 | B or Backspace | Back to the library |
 | Enter, Delete | In the library: open, remove a book after a confirmation (the file stays; pasted text goes to the trash) |
+| C, right-click a book | In the library: put the selected book in collections |
+| `[` / `]` | In the library: previous / next collection |
+| / or Ctrl+F | In the library: filter by title, author or site |
+| S | In the library: change the order |
 | Esc | Close panels and messages |
 | ? | Show every shortcut |
 | Q | Quit |
@@ -416,7 +438,8 @@ omareader skill install                  # agent skill for ~/.claude/skills
   decodes the audio; `src/narrator.cpp` plays the sentences as one stream and
   maps the playback position to the word being heard.
 - `src/library.cpp` keeps pasted text as small JSON files the loader reads
-  like plain text; `src/titleagent.cpp` asks a coding agent for a title.
+  like plain text, and the collections, filter and order the library is
+  shown in; `src/titleagent.cpp` asks a coding agent for a title.
 - `src/webimport.cpp` fetches a web page the user asked for, and only that
   page; `src/article.cpp` parses it without running anything, scores its
   blocks as Mozilla's Readability does to find the article, and writes it
