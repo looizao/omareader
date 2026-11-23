@@ -453,9 +453,9 @@ bool reads(const QString &engine, const QString &language) {
 VoiceSuggestion VoiceSuggestion::forBook(const QString &bookLanguage, const VoiceSettings &current,
                                          const QStringList &installedEngines) {
     VoiceSuggestion s;
-    // With the voice not installed, the window already says so; and with no
-    // language known, there is nothing to compare.
-    if (bookLanguage.isEmpty() || !installedEngines.contains(current.engine))
+    // With no language known, there is nothing to compare; and a voice that
+    // reads it but isn't installed, the window already says so.
+    if (bookLanguage.isEmpty())
         return s;
     const QString voiceReads = readsIn(current);
     // Qwen3-TTS set to detect the language reads any it knows.
@@ -470,7 +470,7 @@ VoiceSuggestion VoiceSuggestion::forBook(const QString &bookLanguage, const Voic
         s.language = settingFor(engine, bookLanguage);
         return s;
     };
-    if (reads(current.engine, bookLanguage))
+    if (installedEngines.contains(current.engine) && reads(current.engine, bookLanguage))
         return switchTo(current.engine == Engine::Qwen ? SetLanguage : OtherVoice, current.engine);
     for (const QString &engine : Engine::all())
         if (engine != current.engine && installedEngines.contains(engine) && reads(engine, bookLanguage))

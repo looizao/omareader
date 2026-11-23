@@ -1603,6 +1603,9 @@ private slots:
                    "배들에게 그의 불빛이 필요했기 때문이다."},
             {"hi", "बूढ़ा प्रकाशस्तंभ रक्षक हर शाम सीढ़ियाँ चढ़ता था। वह थका हुआ था, लेकिन उसने कभी एक भी रात नहीं "
                    "छोड़ी, क्योंकि चट्टानों के पास से गुजरने वाले जहाजों को उसकी रोशनी की ज़रूरत थी।"},
+            {"bg", "Старият пазач на фара всяка вечер се изкачваше по стълбите. Той беше уморен, но никога не "
+                   "пропусна нито една нощ, защото корабите, които минаваха покрай скалите, имаха нужда от "
+                   "светлината му."},
             {"pl", "Stary latarnik co wieczór wspinał się po schodach. Był zmęczony, ale nigdy nie opuścił ani "
                    "jednej nocy, bo statki płynące obok skał potrzebowały jego światła. Kiedy przyszła burza, fale "
                    "były wyższe niż dom, a wiatr nie ustawał."},
@@ -1638,10 +1641,12 @@ private slots:
         }
         // A long text is sure; a line or two never is, nor a language with
         // no list of little words, nor code.
-        QVERIFY(Language::guess(storyIn("pt").repeated(3)).confidence >= Language::StrongGuess);
-        QVERIFY(Language::guess(storyIn("en").repeated(3)).confidence >= Language::StrongGuess);
+        QVERIFY(Language::guess(storyIn("pt").repeated(3)).confidence > Language::guess(storyIn("pt").left(150)).confidence);
         QVERIFY(Language::guess("The house is on the hill.").code.isEmpty());
         QVERIFY(Language::guess(storyIn("pl")).code.isEmpty());
+        // Cyrillic without Russian's or Ukrainian's own letters could be
+        // Bulgarian, Serbian or another: no guess.
+        QVERIFY(Language::guess(storyIn("bg")).code.isEmpty());
         QVERIFY(Language::guess("for (int i = 0; i < n; ++i) { x[i] = y[i] * 2; } return x;").code.isEmpty());
         QVERIFY(Language::guess("").code.isEmpty());
     }
@@ -1649,21 +1654,31 @@ private slots:
     void bookLanguageComesFromItsMetadataFirst() {
         QTemporaryDir dir;
         const QStringList portuguese(3, storyIn("pt"));
-        auto load = [&](const QString &name, const QString &tag, const QStringList &paragraphs) {
+        auto load = [&](const QString &name, const QString &tag, const QStringList &paragraphs, bool other = false) {
             const QString path = dir.filePath(name);
-            Fixtures::writeLanguageEpub(path, tag, paragraphs);
+            Fixtures::writeLanguageEpub(path, tag, paragraphs, other);
             QString error;
             auto book = BookLoader::load(path, &error);
             return book ? std::pair{book->language, book->languageSource} : std::pair{QString("failed"), error};
         };
         QCOMPARE(load("a.epub", "pt-BR", portuguese), std::pair(QString("pt"), QString("metadata")));
-        // Made from an English template: the text overrules it.
-        QCOMPARE(load("b.epub", "en", portuguese), std::pair(QString("pt"), QString("text")));
+        // The metadata comes first, whatever the text looks like.
+        QCOMPARE(load("b.epub", "en", portuguese), std::pair(QString("en"), QString("metadata")));
+        // Another vocabulary's <language>, with elements inside, is skipped
+        // and the book still opens.
+        QCOMPARE(load("g.epub", "pt", portuguese, true), std::pair(QString("pt"), QString("metadata")));
+        QCOMPARE(load("h.epub", "", portuguese, true), std::pair(QString("pt"), QString("text")));
         // Too little text to be sure: the metadata stands.
         QCOMPARE(load("c.epub", "pt", {"Hello there."}), std::pair(QString("pt"), QString("metadata")));
         QCOMPARE(load("d.epub", "", {storyIn("es")}), std::pair(QString("es"), QString("text")));
         QCOMPARE(load("e.epub", "und", {storyIn("fr")}), std::pair(QString("fr"), QString("text")));
         QCOMPARE(load("f.epub", "", {"Hi."}), std::pair(QString(), QString()));
+        // A short book is read whole: a Russian preface doesn't speak for
+        // an English body twice its length.
+        QStringList mixed(2, storyIn("ru"));
+        for (int i = 0; i < 4; ++i)
+            mixed << storyIn("en");
+        QCOMPARE(load("i.epub", "", mixed), std::pair(QString("en"), QString("text")));
 
         // The other formats' metadata.
         QString error;
@@ -1680,8 +1695,15 @@ private slots:
         QVERIFY(BookLoader::load(dir.filePath("u.md"), &error)->language.isEmpty());
         write(dir.filePath("t.html"), "<!DOCTYPE html><html lang='it-IT'><head><title>T</title></head><body><p>Hello.</p></body></html>");
         QCOMPARE(BookLoader::load(dir.filePath("t.html"), &error)->language, QString("it"));
-        write(dir.filePath("t.txt"), "Title: Contes\nAuthor: Someone\nLanguage: French\n\nHello.\n");
+        // Only the root's own lang: not data-lang, nor one commented out.
+        write(dir.filePath("u.html"), "<!-- <html lang=\"en\"> --><html data-lang=\"en\" lang=\"pt-BR\"><body><p>Hi.</p></body></html>");
+        QCOMPARE(BookLoader::load(dir.filePath("u.html"), &error)->language, QString("pt"));
+        write(dir.filePath("t.txt"), "The Project Gutenberg eBook of Contes\n\nTitle: Contes\nAuthor: Someone\n"
+                                     "Language: French\n\n*** START OF THE PROJECT GUTENBERG EBOOK CONTES ***\n\nHello.\n");
         QCOMPARE(BookLoader::load(dir.filePath("t.txt"), &error)->language, QString("fr"));
+        // In any other text, such a line is prose.
+        write(dir.filePath("u.txt"), "A note\n\nLanguage: Spanish was what she studied.\n");
+        QCOMPARE(BookLoader::load(dir.filePath("u.txt"), &error)->languageSource, QString());
     }
 
     void voiceSuggestionOffersOnlyInstalledVoices() {
@@ -1690,18 +1712,26 @@ private slots:
         VoiceSettings heart = VoiceSettings::recommended(Engine::Kokoro);
         heart.voice = "af_heart";
         const QStringList kokoro{Engine::Kokoro}, both{Engine::Kokoro, Engine::Qwen}, qwen{Engine::Qwen};
+        VoiceSuggestion s;
 
         // Nothing to say: the voice reads the language, it isn't known, or
         // the voice isn't installed (the window says that already).
         QCOMPARE(VoiceSuggestion::forBook("en", heart, kokoro).kind, VoiceSuggestion::None);
         QCOMPARE(VoiceSuggestion::forBook({}, heart, kokoro).kind, VoiceSuggestion::None);
-        QCOMPARE(VoiceSuggestion::forBook("pt", heart, qwen).kind, VoiceSuggestion::None);
+        QCOMPARE(VoiceSuggestion::forBook("en", heart, qwen).kind, VoiceSuggestion::None);
+        // The selected engine missing, an installed one that reads the
+        // book is still offered.
+        s = VoiceSuggestion::forBook("pt", heart, qwen);
+        QCOMPARE(s.kind, VoiceSuggestion::OtherEngine);
+        QCOMPARE(s.engine, Engine::Qwen);
+        QCOMPARE(s.language, QString("Portuguese"));
+        QCOMPARE(VoiceSuggestion::forBook("pt", heart, {}).kind, VoiceSuggestion::NoVoice);
         VoiceSettings emma = heart;
         emma.voice = "bf_emma";
         QCOMPARE(VoiceSuggestion::forBook("en", emma, kokoro).kind, VoiceSuggestion::None);
 
         // Another Kokoro voice, of the same sex as the one replaced.
-        VoiceSuggestion s = VoiceSuggestion::forBook("pt", heart, kokoro);
+        s = VoiceSuggestion::forBook("pt", heart, kokoro);
         QCOMPARE(s.kind, VoiceSuggestion::OtherVoice);
         QCOMPARE(s.engine, Engine::Kokoro);
         QCOMPARE(s.voice, QString("pf_dora"));

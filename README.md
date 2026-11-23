@@ -152,8 +152,8 @@ the controls says so and offers a voice that does, with one click: another
 Kokoro voice, Qwen3-TTS set to that language, or the other engine if it is
 installed. It only offers voices already on your computer, and says which
 engine would read the book if none is. The language comes from the book's
-metadata, or, when it has none or the text plainly says otherwise, from its
-commonest words and its script, all worked out offline. Dismissing the
+metadata, or, when it has none, from its script and its commonest words,
+all worked out offline. Dismissing the
 notice keeps it away for that book; `omareader info` shows the language it
 found.
 

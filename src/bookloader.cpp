@@ -1002,8 +1002,11 @@ bool BookLoader::loadEpub(Book &book, QString *error) {
                 book.title = xml.readElementText().simplified();
             } else if (name == u"creator" && book.author.isEmpty()) {
                 book.author = xml.readElementText().simplified();
-            } else if (name == u"language" && book.language.isEmpty()) {
-                book.language = Language::fromTag(xml.readElementText());
+            } else if (name == u"language" && xml.namespaceUri() == u"http://purl.org/dc/elements/1.1/"
+                       && book.language.isEmpty()) {
+                // Only Dublin Core's: other vocabularies have a <language>
+                // of their own, with elements inside.
+                book.language = Language::fromTag(xml.readElementText(QXmlStreamReader::SkipChildElements));
             } else if (name == u"meta" && a.value("name") == u"cover") {
                 coverId = a.value("content").toString();
             } else if (name == u"item") {
@@ -1138,7 +1141,7 @@ bool BookLoader::loadFb2(Book &book, const QByteArray &data, QString *error) {
             continue;
         }
         if (inTitleInfo && name == "lang") {
-            book.language = Language::fromTag(xml.readElementText());
+            book.language = Language::fromTag(xml.readElementText(QXmlStreamReader::SkipChildElements));
             continue;
         }
         if (inTitleInfo && stack.contains("author") && book.author.isEmpty()) {
@@ -1225,7 +1228,7 @@ bool BookLoader::loadDocx(Book &book, QString *error) {
                 else if (core.name() == u"creator")
                     book.author = core.readElementText().simplified();
                 else if (core.name() == u"language")
-                    book.language = Language::fromTag(core.readElementText());
+                    book.language = Language::fromTag(core.readElementText(QXmlStreamReader::SkipChildElements));
             }
     }
     QXmlStreamReader xml(document);
@@ -1291,7 +1294,7 @@ bool BookLoader::loadOdt(Book &book, QString *error) {
                 else if ((meta.name() == u"creator" || meta.name() == u"initial-creator") && book.author.isEmpty())
                     book.author = meta.readElementText().simplified();
                 else if (meta.name() == u"language")
-                    book.language = Language::fromTag(meta.readElementText());
+                    book.language = Language::fromTag(meta.readElementText(QXmlStreamReader::SkipChildElements));
             }
     }
     QXmlStreamReader xml(content);
@@ -1497,20 +1500,27 @@ std::shared_ptr<Book> BookLoader::load(const QString &path, QString *error) {
             chapter.paragraphs = htmlParagraphs(data, &title);
             book->title = title;
             book->chapters.append(chapter);
-            static const QRegularExpression lang(R"(<html\b[^>]*?\blang\s*=\s*["']?([A-Za-z0-9_-]+))",
+            // The root's own lang attribute, not data-lang or one in a
+            // comment before it.
+            static const QRegularExpression comment(R"(<!--.*?-->)", QRegularExpression::DotMatchesEverythingOption);
+            static const QRegularExpression lang(R"(<html\b[^>]*?(?<![\w-])lang\s*=\s*["']?([A-Za-z0-9_-]+))",
                                                  QRegularExpression::CaseInsensitiveOption);
-            book->language = Language::fromTag(lang.match(QString::fromUtf8(data.left(4000))).captured(1));
+            const QString head = QString::fromUtf8(data.left(8000)).remove(comment);
+            book->language = Language::fromTag(lang.match(head).captured(1));
             ok = true;
         } else {
             const QString text = decodeText(data);
             static const QRegularExpression titleLine(R"(^Title:\s*(.+)$)", QRegularExpression::MultilineOption);
             static const QRegularExpression authorLine(R"(^Author:\s*(.+)$)", QRegularExpression::MultilineOption);
-            // Project Gutenberg's header says "Language: English".
+            // Project Gutenberg's header says "Language: English"; in any
+            // other text, or past the header, such a line is the book's prose.
             static const QRegularExpression languageLine(R"(^Language:\s*(.+)$)", QRegularExpression::MultilineOption);
             const QString head = text.left(4000);
             book->title = titleLine.match(head).captured(1).trimmed();
             book->author = authorLine.match(head).captured(1).trimmed();
-            book->language = Language::fromTag(languageLine.match(head).captured(1));
+            const qsizetype start = head.indexOf("*** START OF");
+            if (head.contains("Project Gutenberg") && start > 0)
+                book->language = Language::fromTag(languageLine.match(head.left(start)).captured(1));
             book->chapters = textChapters(text);
             ok = true;
         }

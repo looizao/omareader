@@ -34,11 +34,14 @@ void writeEpub(const QString &path, const QByteArray &png) {
     });
 }
 
-void writeLanguageEpub(const QString &path, const QString &language, const QStringList &paragraphs) {
+void writeLanguageEpub(const QString &path, const QString &language, const QStringList &paragraphs,
+                       bool otherVocabulary) {
     QByteArray body;
     for (const QString &p : paragraphs)
         body += "<p>" + p.toHtmlEscaped().toUtf8() + "</p>";
-    const QByteArray tag = language.isEmpty() ? QByteArray() : "<dc:language>" + language.toUtf8() + "</dc:language>";
+    QByteArray tag = language.isEmpty() ? QByteArray() : "<dc:language>" + language.toUtf8() + "</dc:language>";
+    if (otherVocabulary)
+        tag.prepend(R"(<ex:language xmlns:ex="urn:example"><ex:code>en</ex:code></ex:language>)");
     makeZip(path, {
             {"mimetype", "application/epub+zip"},
             {"META-INF/container.xml", R"(<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>)"},

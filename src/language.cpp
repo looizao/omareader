@@ -133,7 +133,7 @@ QString Language::name(const QString &code) {
 
 Language::Guess Language::guess(const QString &text) {
     QHash<int, int> scripts;
-    int letters = 0, kana = 0, ukrainian = 0;
+    int letters = 0, kana = 0, ukrainian = 0, russian = 0, persianOrUrdu = 0, marathi = 0;
     for (const QChar c : text) {
         if (!c.isLetter())
             continue;
@@ -142,9 +142,17 @@ Language::Guess Language::guess(const QString &text) {
         ++scripts[script];
         if (script == QChar::Script_Hiragana || script == QChar::Script_Katakana)
             ++kana;
-        // Letters Ukrainian has and Russian doesn't.
+        // Letters only one of the languages sharing a script has: Ukrainian's
+        // і, ї, є and ґ, Russian's ы and э; Persian's and Urdu's additions to
+        // Arabic; Marathi's ळ.
         if (QStringLiteral("іїєґІЇЄҐ").contains(c))
             ++ukrainian;
+        else if (QStringLiteral("ыэЫЭ").contains(c))
+            ++russian;
+        else if (QStringLiteral("پچژگکیٹڈڑںےھ").contains(c))
+            ++persianOrUrdu;
+        else if (c == QChar(0x0933))
+            ++marathi;
     }
     if (letters < 20)
         return {};
@@ -166,8 +174,20 @@ Language::Guess Language::guess(const QString &text) {
         const double share = double(scripts.value(script)) / letters;
         if (share <= 0.5)
             continue;
-        if (script == QChar::Script_Cyrillic && ukrainian > scripts.value(script) / 100)
-            return {"uk", share};
+        const int count = scripts.value(script);
+        if (script == QChar::Script_Cyrillic) {
+            // Bulgarian, Serbian and others write Cyrillic too, so with
+            // neither Ukrainian's letters nor Russian's it could be any.
+            if (ukrainian > count / 100)
+                return {"uk", share};
+            if (russian > count / 200)
+                return {"ru", share};
+            return {};
+        }
+        if (script == QChar::Script_Arabic && persianOrUrdu > count / 200)
+            return {};
+        if (script == QChar::Script_Devanagari && marathi > count / 200)
+            return {};
         return {code, share};
     }
     if (double(scripts.value(QChar::Script_Latin)) / letters > 0.5)
@@ -182,7 +202,8 @@ QString Language::sample(const Book &book, int maxWords) {
     if (count == 0)
         return {};
     constexpr int Stretch = 8; // sentences in a row
-    const int stretches = std::max(1, std::min(count / Stretch, maxWords / 120));
+    // Enough stretches to cover a short book whole.
+    const int stretches = std::max(1, std::min((count + Stretch - 1) / Stretch, maxWords / 120));
     QStringList parts;
     int words = 0;
     for (int i = 0; i < stretches && words < maxWords; ++i) {
@@ -199,12 +220,11 @@ QString Language::sample(const Book &book, int maxWords) {
 }
 
 void Language::identify(Book &book) {
-    const Guess text = guess(sample(book));
-    if (!book.language.isEmpty() && (text.code.isEmpty() || text.code == book.language
-                                     || text.confidence < StrongGuess)) {
+    if (!book.language.isEmpty()) {
         book.languageSource = "metadata";
         return;
     }
+    const Guess text = guess(sample(book));
     book.language = text.code;
     book.languageSource = text.code.isEmpty() ? QString() : QStringLiteral("text");
 }

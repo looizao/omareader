@@ -21,15 +21,15 @@ QString name(const QString &code);
 
 struct Guess {
     QString code; // empty when the text doesn't say clearly enough
-    // How sure the guess is, from 0 to 1. Above StrongGuess, the text
-    // overrules what the book's metadata says.
+    // How sure the guess is, from 0 to 1.
     double confidence = 0;
 };
-constexpr double StrongGuess = 0.6;
 
 // Guesses from the text alone: the writing system first (Han, kana, Hangul,
 // Cyrillic, Devanagari...), and for text in Latin letters, how often each
-// language's commonest little words ("the", "de", "und") turn up.
+// language's commonest little words ("the", "de", "und") turn up. A script
+// several languages share names one only on letters that are that
+// language's own (Russian's ы and э), and none otherwise.
 Guess guess(const QString &text);
 
 // A sample of the book's words for guess(), spread across its chapters so a
@@ -37,8 +37,7 @@ Guess guess(const QString &text);
 QString sample(const Book &book, int maxWords = 4000);
 
 // Settles book.language and book.languageSource: the metadata's language
-// unless the text says, strongly, that it is another one (books made from
-// templates often keep the template's "en"), and otherwise the text's.
+// when it gives one, and otherwise the text's guess.
 void identify(Book &book);
 
 }
