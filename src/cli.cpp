@@ -251,12 +251,14 @@ int text(const QStringList &arguments) {
     Command command("text", "Print a book's text as omareader reads it.");
     command.parser.addPositionalArgument("book", "The book file");
     command.parser.addOption({"chapter", "Only this chapter, counting from 1", "number"});
+    command.parser.addOption({"spoken", "The text as the voice reads it: without footnotes, citation markers, "
+                                        "links and other clutter, one sentence per line"});
     command.json();
     if (!command.parse(arguments))
         return command.parser.isSet("help") ? 0 : 1;
     const QStringList positional = command.parser.positionalArguments();
     if (positional.size() != 1)
-        return fail("Use: omareader text <book> [--chapter N] [--json]");
+        return fail("Use: omareader text <book> [--chapter N] [--spoken] [--json]");
     const auto book = loadBook(positional.first());
     if (!book)
         return 1;
@@ -270,12 +272,41 @@ int text(const QStringList &arguments) {
         from = chapter - 1;
         to = chapter;
     }
+    if (command.parser.isSet("spoken")) {
+        const int first = book->chapterFirstSentence.at(from);
+        const int last = to < book->chapters.size() ? book->chapterFirstSentence.at(to) : book->sentenceCount();
+        QJsonArray sentences;
+        int paragraph = -1, chapter = from;
+        for (int s = first; s < last; ++s) {
+            if (!book->sentences.at(s).speakable())
+                continue;
+            const Sentence &sentence = book->sentences.at(s);
+            const QString text = book->sentenceText(s);
+            if (command.parser.isSet("json")) {
+                sentences.append(QJsonObject{{"chapter", sentence.chapter + 1}, {"text", text}});
+                continue;
+            }
+            // A blank line between paragraphs, and two between chapters.
+            if (paragraph >= 0 && (sentence.chapter != chapter || sentence.paragraph != paragraph))
+                out() << Qt::endl << (sentence.chapter != chapter ? "\n" : "");
+            chapter = sentence.chapter;
+            paragraph = sentence.paragraph;
+            out() << text << Qt::endl;
+        }
+        if (command.parser.isSet("json"))
+            printJson({{"title", book->title}, {"author", book->author}, {"sentences", sentences}});
+        return 0;
+    }
     if (command.parser.isSet("json")) {
         QJsonArray chapters;
         for (int c = from; c < to; ++c) {
             QJsonArray paragraphs;
-            for (const auto &p : book->chapters.at(c).paragraphs)
-                paragraphs.append(QJsonObject{{"text", p.text}, {"heading", p.level}});
+            for (const auto &p : book->chapters.at(c).paragraphs) {
+                QJsonObject paragraph{{"text", p.text}, {"heading", p.level}};
+                if (p.note)
+                    paragraph.insert("note", true);
+                paragraphs.append(paragraph);
+            }
             chapters.append(QJsonObject{{"number", c + 1}, {"title", book->chapters.at(c).title}, {"paragraphs", paragraphs}});
         }
         printJson({{"title", book->title}, {"author", book->author}, {"chapters", chapters}});
@@ -752,7 +783,7 @@ QString usage() {
            "Commands:\n"
            "  open [book]                     Open the window (the default)\n"
            "  info <book> [--json]            Show a book's metadata and chapters\n"
-           "  text <book> [--chapter N]       Print a book's text as omareader reads it\n"
+           "  text <book> [--chapter N]       Print a book's text as omareader shows it, or --spoken as heard\n"
            "  notes <book> [--json]           List a book's bookmarks, highlights and notes\n"
            "  export <book> [--split]         Read a book aloud into MP3 or M4B files\n"
            "  fetch <url> [--json]            Print the article a web page adds (uses the network)\n"

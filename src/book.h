@@ -26,6 +26,8 @@ struct Paragraph {
     QString text;
     int level = 0; // 1-6 for headings, 0 for body text
     QList<TextStyle> styles;
+    // A footnote found at the foot of a PDF's page: shown, but not read aloud.
+    bool note = false;
 };
 
 struct Chapter {
@@ -44,7 +46,11 @@ struct Sentence {
     int paragraph = 0;
     int start = 0; // character range inside the paragraph
     int end = 0;
+    // The words the voice reads, which leaves out the clutter in skipped.
     QList<WordSpan> words;
+    // Character ranges inside the paragraph, within this sentence, that are
+    // shown but not read aloud: citation markers, links and the like.
+    QList<QPair<int, int>> skipped;
     bool speakable() const { return !words.isEmpty(); }
 };
 
@@ -67,6 +73,7 @@ struct Book {
 
     void segment();
     int sentenceCount() const { return int(sentences.size()); }
+    // The sentence as the voice reads it, without its skipped clutter.
     QString sentenceText(int index) const;
     QStringList sentenceWords(int index) const;
     // The sentence that holds the character at offset, or the nearest one
@@ -82,6 +89,16 @@ namespace Text {
 // word boundaries so each stays a comfortable size for the voice.
 QList<QPair<int, int>> sentenceRanges(const QString &text, int maxLength = 320);
 QList<WordSpan> words(const QString &text, int start, int end);
+// The parts of a paragraph that sound bad spoken and say nothing a listener
+// misses: footnote and citation markers ("failure.1 While", "[12]",
+// "[Bro96]"), web addresses, bracketed editorial asides ("[sic]") and
+// parenthesised cross-references ("(see Figure 2-3)", "(p. 12)"). Sorted
+// [start, end) ranges that don't overlap. Code-like brackets ("x[2]",
+// "range [0, 1]") and numbers that belong to words ("GPT4") stay.
+QList<QPair<int, int>> clutter(const QString &text);
+// The text with ranges taken out, and the spaces and punctuation left
+// around each gap tidied ("see https://x.org." becomes "see.").
+QString withoutRanges(const QString &text, const QList<QPair<int, int>> &ranges);
 QString normalizeWord(const QString &word);
 // The text as a search compares it: lower case, accents dropped, curly
 // quotes, dashes and odd spaces made plain. offsets gets, for each character

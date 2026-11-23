@@ -80,6 +80,16 @@ Every format becomes the same reflowable text in your chosen size, spacing,
 column width and typeface. Books are never modified or copied; the library
 only remembers where they are and where you stopped.
 
+What sounds bad spoken stays on the page but isn't read aloud: footnote and
+citation markers ("failure.1", "[12]", "[Bro96]", "(Smith et al., 2020)"),
+web addresses, editorial asides such as "[sic]" and "[citation needed]",
+and cross-references such as "(see Figure 2-3)" or "(p. 12)". The highlight
+passes over them. In PDFs, page numbers and running heads and feet are left
+out of the text, and footnotes are gathered from the foot of each page into
+smaller, quieter notes the voice skips, so a paragraph that runs over the
+page break reads as one. `omareader text --spoken` prints a book as the voice
+reads it.
+
 ## Pasted text
 
 For an article, a note or a message with no book file, press N in the library
@@ -306,7 +316,8 @@ exits 0 or 1 with errors on stderr, and `--json` prints one JSON object.
 
 ```sh
 omareader info book.epub --json          # metadata and chapters
-omareader text book.epub --chapter 3     # the text as omareader reads it
+omareader text book.epub --chapter 3     # the text as omareader shows it
+omareader text book.pdf --spoken         # as the voice reads it, clutter left out
 omareader notes book.epub --json         # its bookmarks, highlights and notes
 omareader fetch https://example.com/post # a web page's article, without adding it
 omareader lookup running                 # what the installed dictionaries say
@@ -338,6 +349,9 @@ omareader skill install                  # agent skill for ~/.claude/skills
   scaled to match) and the volume.
 - `src/voicesettings.cpp` lists each engine's voices, languages and tuning,
   with ranges and recommended values, and remembers them per engine.
+- `src/book.cpp` splits paragraphs into sentences and words, leaving out of
+  the words the clutter `Text::clutter` finds (citation markers, links,
+  cross-references), so the voice never reads it and the highlight skips it.
 - `src/speech.cpp` matches the spoken words back onto the words on the page and
   decodes the audio; `src/narrator.cpp` plays the sentences as one stream and
   maps the playback position to the word being heard.

@@ -308,6 +308,83 @@ private slots:
         QCOMPARE(book.sentenceWords(3), QStringList{"Fourth"});
     }
 
+    // What clutter() leaves out, as the pieces of text it covers.
+    static QStringList clutterIn(const QString &text) {
+        QStringList pieces;
+        for (const auto &range : Text::clutter(text))
+            pieces << text.mid(range.first, range.second - range.first);
+        return pieces;
+    }
+
+    void clutterFindsMarkersLinksAndAsides() {
+        QCOMPARE(clutterIn("A single point of failure.1 While replication helps,23 it costs."),
+                 (QStringList{"1", "23"}));
+        QCOMPARE(clutterIn("This is a common pattern1 . For example"), QStringList{"1"});
+        QCOMPARE(clutterIn("It gained a cult following,[5] and wide use [12, 14]. Others agree [3–7]."),
+                 (QStringList{"[5]", "[12, 14]", "[3–7]"}));
+        QCOMPARE(clutterIn("Good enough is best [You95], as argued before [GHJV95; KP99]."),
+                 (QStringList{"[You95]", "[GHJV95; KP99]"}));
+        QCOMPARE(clutterIn("He wrote it [sic] himself [citation needed]. Then [...] it ended.[a]"),
+                 (QStringList{"[sic]", "[citation needed]", "[...]", "[a]"}));
+        QCOMPARE(clutterIn("See https://example.com/a(b)c, or (www.example.org/x). Read oreil.ly/2R1CB."),
+                 (QStringList{"https://example.com/a(b)c", "www.example.org/x", "oreil.ly/2R1CB"}));
+        // A PDF breaks long addresses across lines, after a hyphen or inside the path.
+        QCOMPARE(clutterIn("At https://aws.amazon.com/builders- library/avoiding-overload. Then"),
+                 QStringList{"https://aws.amazon.com/builders- library/avoiding-overload"});
+        QCOMPARE(clutterIn("At https://brooker.co.za/blog/co ntrol.html today"),
+                 QStringList{"https://brooker.co.za/blog/co ntrol.html"});
+        QCOMPARE(clutterIn("A sidecar (see Figure 6-5) runs beside it (Chapter 11), as in (pp. 12–15)."),
+                 (QStringList{"(see Figure 6-5)", "(Chapter 11)", "(pp. 12–15)"}));
+        QCOMPARE(clutterIn("It was trained from scratch (Zhu et al., 2017) and tuned (Smith, 2020; Lee and Park, 2019)."),
+                 (QStringList{"(Zhu et al., 2017)", "(Smith, 2020; Lee and Park, 2019)"}));
+        // A footnote number after a reference that goes, goes with it.
+        QCOMPARE(clutterIn("by one pixel (see Figure 4-12).49 Then"), (QStringList{"(see Figure 4-12)", "49"}));
+    }
+
+    void clutterLeavesCodeNumbersAndWords() {
+        for (const QString &text : {
+                 QString("Read argv[2] and x[i] from the list."),
+                 QString("Scale it to the range [0, 1] first."),
+                 QString("The logits computed from the last layer are [1, 2]."),
+                 QString("The tensor has a shape of [4]."),
+                 QString("Tokens: Hello [11] --> , [1644] --> Ar"),
+                 QString(">jobs [1] 5036 Running foo"),
+                 QString("GPT4 and x86 and base64 stay whole words."),
+                 QString("As Appendix A.1 shows, and Fig.1 too, Python 3.10 is out."),
+                 QString("It shipped with (Windows 2000) back then."),
+                 QString("Children [with ADHD] do well with structure."),
+                 QString("For more, see examples (see examples above) and oreilly.com today."),
+                 QString("For a complete list, see [110]."),
+                 QString("Write to support@example.com for help.")})
+            QVERIFY2(Text::clutter(text).isEmpty(), qPrintable(text + " → " + clutterIn(text).join(" | ")));
+    }
+
+    void clutterIsShownButNotRead() {
+        Book book;
+        const QString text = "Replication helps.1 See https://example.com/x for more [12].";
+        book.chapters = {{"One", {{text, 0}, {"https://example.com/only", 0}, {"1 A footnote the voice skips.", 0, {}, true}}}};
+        book.segment();
+        QCOMPARE(book.chapters[0].paragraphs[0].text, text); // the text shown is untouched
+        QCOMPARE(book.sentenceCount(), 4);
+        // The footnote number ends the first sentence, as the voice hears it.
+        QCOMPARE(book.sentenceText(0), QString("Replication helps."));
+        QCOMPARE(book.sentenceText(1), QString("See for more."));
+        QCOMPARE(book.sentenceWords(1), (QStringList{"See", "for", "more"}));
+        // The words keep their places in the text, for the highlight.
+        const WordSpan more = book.sentences[1].words.last();
+        QCOMPARE(text.mid(more.start, more.length), QString("more"));
+        QCOMPARE(book.sentences[1].skipped.size(), 2);
+        // A sentence of nothing but clutter, and a footnote, aren't read at all.
+        QVERIFY(!book.sentences[2].speakable());
+        QVERIFY(!book.sentences[3].speakable());
+        QCOMPARE(book.wordCount(), 5);
+        // Sentences with nothing skipped read as they are shown.
+        Book plain;
+        plain.chapters = {{"One", {{"It was, as they say ( quietly ) , over.", 0}}}};
+        plain.segment();
+        QCOMPARE(plain.sentenceText(0), QString("It was, as they say ( quietly ) , over."));
+    }
+
     // Formats.
 
     void htmlBecomesParagraphs() {
@@ -585,6 +662,82 @@ private slots:
         QCOMPARE(second, (QStringList{"2 Middle", "The middle chapter begins here.",
                                       "Snow came with the fifth page.", "Sun returned on the last one."}));
         QCOMPARE(chapters[1].paragraphs[0].level, 2);
+    }
+
+    void pdfFootnotesAreKeptAsNotesTheVoiceSkips() {
+        // A page whose paragraph runs over the break, with two footnotes at
+        // its foot, and a numbered heading low on the next page.
+        QStringList pages;
+        pages << "Replication keeps a copy of the data on several machines, which\n"
+                 "removes a single point of failure.1 While replication helps,2 it\n"
+                 "also brings problems of its own, which the rest of this chap-\n"
+                 "ter describes in some detail, starting with the leader and its\n"
+                 "followers.\n"
+                 "The leader takes every write and sends it on to the others, so\n"
+                 "the followers apply the writes in the same order as the leader\n"
+                 "does, and readers can ask any of them\n"
+                 "1 Some systems call it a primary, and the\n"
+                 "followers secondaries.\n"
+                 "2 See the next chapter.\n"
+                 "7\n";
+        pages << "for the latest data they have.\n"
+                 "Another paragraph follows here on the second page, and it is\n"
+                 "long enough to read as plain text.\n"
+                 "Some more text comes on this page, and then a heading after it.\n"
+                 "It runs on for a few lines, with nothing like a note marker here.\n"
+                 "One more line of reading text.\n"
+                 "2 Leaders and Followers\n"
+                 "The heading above is in the outline, and stays a heading.\n";
+        const QList<PdfOutlineItem> outline{{1, 0, "Replication"}, {2, 1, "2 Leaders and Followers"}};
+        const auto chapters = BookLoader::pdfChapters(pages.join('\f'), outline);
+        QCOMPARE(chapters.size(), 1);
+        const auto &paragraphs = chapters[0].paragraphs;
+        QStringList notes, text;
+        for (const auto &p : paragraphs)
+            (p.note ? notes : text) << p.text;
+        QCOMPARE(notes, (QStringList{"1 Some systems call it a primary, and the followers secondaries.",
+                                     "2 See the next chapter."}));
+        QVERIFY2(text.at(1).endsWith("readers can ask any of them for the latest data they have."), qPrintable(text.at(1)));
+        QVERIFY(text.contains("2 Leaders and Followers"));
+        QVERIFY(text.contains("The heading above is in the outline, and stays a heading."));
+
+        Book book;
+        book.chapters = chapters;
+        book.segment();
+        for (int i = 0; i < book.sentenceCount(); ++i) {
+            const Sentence &s = book.sentences.at(i);
+            QCOMPARE(s.speakable(), !paragraphs.at(s.paragraph).note);
+        }
+        QVERIFY2(book.sentenceText(0).endsWith("removes a single point of failure."), qPrintable(book.sentenceText(0)));
+        QVERIFY2(book.sentenceText(1).startsWith("While replication helps, it also"), qPrintable(book.sentenceText(1)));
+    }
+
+    void pdfDropsPageNumbersAndRunningHeadsNamingTheSection() {
+        // The book's chapters are its parts; the running heads name the
+        // section ("CHAPTER 22. CONTROL PLANES") a level down.
+        QStringList pages;
+        pages << "Part one\nThe part starts with words on its first page.\n";
+        for (int page = 2; page <= 5; ++page)
+            pages << QString("CHAPTER 22. CONTROL PLANES AND DATA PLANES\n%1 fill this page of the section.\n%2\n")
+                         .arg(QStringList{"", "", "Words", "Lines", "Figures", "Tables"}.at(page))
+                         .arg(page == 2 ? "Page 2 of 9" : page == 3 ? "- 3 -" : QString::number(page));
+        const QList<PdfOutlineItem> outline{{1, 0, "Part one"}, {2, 1, "Control planes and data planes"}};
+        const auto chapters = BookLoader::pdfChapters(pages.join('\f'), outline);
+        QStringList text;
+        for (const auto &p : chapters.last().paragraphs)
+            text << p.text;
+        QCOMPARE(text, (QStringList{"Part one", "The part starts with words on its first page.",
+                                    "Words fill this page of the section.", "Lines fill this page of the section.",
+                                    "Figures fill this page of the section.", "Tables fill this page of the section."}));
+        // A line of code that merely names a short section stays.
+        QStringList code{"Intro\nThe spec starts here.\n",
+                         "OpenAPI\nFor example, this is how part of the endpoint could be defined in the spec\n"
+                         "openapi: 3.0.0\ninfo: version 1 of the catalog service and its endpoints.\n"};
+        const auto spec = BookLoader::pdfChapters(code.join('\f'), {{1, 0, "Intro"}, {2, 1, "OpenAPI"}});
+        bool kept = false;
+        for (const auto &p : spec.last().paragraphs)
+            kept = kept || p.text.contains("openapi: 3.0.0");
+        QVERIFY(kept);
     }
 
     void epubLoadsWithTocTitlesAndCover() {
@@ -1770,6 +1923,37 @@ private slots:
         QCOMPARE(finished.size(), 1);
         QVERIFY(exporter.error().isEmpty()); // cancelling is not an error
         QVERIFY(QDir(options.folder).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden).isEmpty());
+    }
+
+    void exportReadsTheTextWithoutItsClutter() {
+        if (Exporter::findFfmpeg().isEmpty())
+            QSKIP("ffmpeg is not installed");
+        QTemporaryDir dir;
+        const QString spoken = dir.filePath("spoken.txt");
+        qputenv("FAKE_KOKO_TEXT", spoken.toUtf8());
+        write(dir.filePath("a.txt"), "clutter");
+        Book book;
+        book.path = dir.filePath("a.txt");
+        book.title = "Clutter";
+        book.format = "txt";
+        book.chapters = {{"One",
+                          {{"It helps.1 Read more at https://example.com/x today [4].", 0},
+                           {"1 A note the voice skips.", 0, {}, true},
+                           {"The end.", 0}}}};
+        book.segment();
+        Exporter exporter;
+        QSignalSpy finished(&exporter, &Exporter::finished);
+        Exporter::Options options;
+        options.synthesis.kokoro = fakeKoko(dir);
+        options.folder = dir.filePath("out");
+        QVERIFY(exporter.start(std::make_shared<Book>(book), options));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 20000);
+        unsetenv("FAKE_KOKO_TEXT");
+        QVERIFY2(finished.first().at(0).toBool(), qPrintable(finished.first().at(1).toString()));
+        QFile file(spoken);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QCOMPARE(QString::fromUtf8(file.readAll()).trimmed().split('\n'),
+                 (QStringList{"It helps.", "Read more at today.", "The end."}));
     }
 
     void exportKeepsTheSettingsItStartedWith() {
@@ -3393,6 +3577,59 @@ private slots:
         QTRY_VERIFY(app.items("sleepLabel").isEmpty());
     }
 
+    void readerDrawsFootnotesSmallerAndQuieter() {
+        QSettings().remove("reader");
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        QVERIFY(app.show());
+        const QString path = dir.filePath("notes.txt");
+        write(path, "notes");
+        Book book;
+        book.path = path;
+        book.title = "Footnoted";
+        book.format = "pdf";
+        const QString words = "Hollow hills hold old halls";
+        book.chapters = {{"One", {{words, 0}, {words, 0, {}, true}}}};
+        book.segment();
+        app.reader.openBook(std::make_shared<Book>(book));
+        QTRY_COMPARE(app.items("bookParagraph").size(), 2);
+        QTest::mouseMove(app.window, QPoint(1050, 650));
+
+        // The rows the text's ink covers, and its brightest pixel.
+        const QImage shot = app.grab("footnote");
+        struct Ink { int top = -1, bottom = -1, brightest = 0; };
+        auto ink = [&](QQuickItem *item) {
+            Ink found;
+            const QRect area = app.area(shot, item).intersected(shot.rect());
+            for (int y = area.top(); y <= area.bottom(); ++y)
+                for (int x = area.left(); x <= area.right(); ++x) {
+                    const int light = qGray(shot.pixel(x, y));
+                    if (light > 90) {
+                        found.top = found.top < 0 ? y : found.top;
+                        found.bottom = y;
+                    }
+                    found.brightest = qMax(found.brightest, light);
+                }
+            return found;
+        };
+        Ink body, note;
+        for (QQuickItem *item : app.items("bookParagraph"))
+            (item->property("index").toInt() == 0 ? body : note) = ink(item);
+        QVERIFY2(body.top >= 0 && note.top >= 0, "a paragraph isn't drawn");
+        const int bodyHeight = body.bottom - body.top, noteHeight = note.bottom - note.top;
+        QVERIFY2(noteHeight < bodyHeight * 0.9,
+                 qPrintable(QString("the note is %1 px tall, the text %2 px").arg(noteHeight).arg(bodyHeight)));
+        // Drawn in the muted colour (#8b8b94), the text in the body's (#d6d6da).
+        QVERIFY2(body.brightest > 190, qPrintable(QString::number(body.brightest)));
+        QVERIFY2(note.brightest < 160, qPrintable(QString::number(note.brightest)));
+        if (!qEnvironmentVariableIsEmpty("OMAREADER_SCREENSHOTS")) {
+            const QRect both = app.area(shot, app.items("bookParagraph").first())
+                                   .united(app.area(shot, app.items("bookParagraph").last()));
+            shot.copy(QRect(both.left() + both.width() / 4, both.top(), both.width() / 2, both.height()))
+                .scaled(both.width(), both.height() * 2).save(qEnvironmentVariable("OMAREADER_SCREENSHOTS") + "/footnote-zoom.png");
+        }
+    }
+
     void readerDrawsHighlightsNotesAndBookmarks() {
         QSettings().remove("reader");
         QTemporaryDir dir;
@@ -4718,6 +4955,7 @@ private:
         write(koko, QByteArray("#!/bin/sh\n"
                                "[ -n \"${FAKE_KOKO_LOG:-}\" ] && echo \"$*\" >> \"$FAKE_KOKO_LOG\"\n"
                                "while [ $# -gt 0 ]; do case \"$1\" in file) input=\"$2\"; shift;; --output) pattern=\"$2\"; shift;; esac; shift; done\n"
+                               "[ -n \"${FAKE_KOKO_TEXT:-}\" ] && cat \"$input\" >> \"$FAKE_KOKO_TEXT\"\n"
                                "i=0\n"
                                "while IFS= read -r line; do\n"
                                "  out=$(printf '%s' \"$pattern\" | sed \"s/{line}/$i/\")\n"

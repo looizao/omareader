@@ -665,8 +665,10 @@ QList<Chapter> BookLoader::pdfChapters(const QString &output, const QList<PdfOut
         pages.removeLast();
     const int pageCount = int(pages.size());
 
-    static const QRegularExpression pageNumber(R"(^\s*(\d{1,4}|[ivxlc]{1,6})\s*$)",
-                                               QRegularExpression::CaseInsensitiveOption);
+    // "12", "xiv", "Page 12", "Page 12 of 300", "- 12 -".
+    static const QRegularExpression pageNumber(
+        R"(^\s*(?:(?:page\s+)?(?:\d{1,4}|[ivxlc]{1,6})(?:\s+of\s+\d{1,4})?|[-–—]\s*\d{1,4}\s*[-–—])\s*$)",
+        QRegularExpression::CaseInsensitiveOption);
     static const QRegularExpression numbersOnly(R"(^[\d\s.,:;%+\-−–()×x/=]+$)");
     auto endsSentence = [](const QString &t) {
         static const QRegularExpression end(R"([.!?…:"”’)\]]\s*$)");
@@ -676,6 +678,12 @@ QList<Chapter> BookLoader::pdfChapters(const QString &output, const QList<PdfOut
         QString key = line.toLower();
         key.remove(QRegularExpression(R"([\d\s.,:;\-–—|]+)"));
         return key;
+    };
+    // The same without the word that numbers it, so "CHAPTER 22. CONTROL
+    // PLANES" matches a chapter called "Control planes".
+    auto titleKey = [&](const QString &line) {
+        static const QRegularExpression numbering(R"(^(?:chapter|part|section|appendix|lesson|unit)|(?:chapter|part)$)");
+        return runningKey(line).remove(numbering);
     };
 
     QList<QStringList> pageLines;
@@ -777,6 +785,33 @@ QList<Chapter> BookLoader::pdfChapters(const QString &output, const QList<PdfOut
         std::sort(lengths.begin(), lengths.end());
         const int typical = lengths.isEmpty() ? 60 : lengths.at(lengths.size() / 2);
 
+        // Footnotes sit at the foot of the page, each starting with the
+        // number that marks it in the text above ("1 See Chapter 3 in the
+        // SRE book."). They are kept as notes, shown but not read aloud. A
+        // numbered heading lower down ("2 Working with text") must not pass
+        // for one, so the notes stay within the lower half of the page.
+        int noteStart = int(lines.size());
+        {
+            static const QRegularExpression startsNote(R"(^(\d{1,3}) (?!\d)\S.*\p{L}.*$)");
+            static const QRegularExpression marker(R"((?:\p{L}{2}[.,;:!?”’"')\]]|\p{L})(\d{1,3})(?=\s|$))");
+            QList<int> filled;
+            for (int i = 0; i < lines.size(); ++i)
+                if (!lines.at(i).isEmpty())
+                    filled.append(i);
+            QSet<int> markers;
+            for (int k = 0; k < filled.size(); ++k) {
+                const QString &line = lines.at(filled.at(k));
+                const auto start = startsNote.match(line);
+                if (k >= 3 && k * 2 >= filled.size() && start.hasMatch() && markers.contains(start.captured(1).toInt())
+                    && !isHeading(line)) {
+                    noteStart = filled.at(k);
+                    break;
+                }
+                for (auto it = marker.globalMatch(line); it.hasNext();)
+                    markers.insert(it.next().captured(1).toInt());
+            }
+        }
+
         QStringList paragraphs;
         QString current;
         auto flush = [&] {
@@ -784,20 +819,63 @@ QList<Chapter> BookLoader::pdfChapters(const QString &output, const QList<PdfOut
                 paragraphs.append(current);
             current.clear();
         };
-        for (int i = 0; i < lines.size(); ++i) {
+        // A running head can also just repeat the title of the chapter or
+        // section the page is in, even one too short for it to recur three
+        // times: any level of the outline, past the page its entry points to.
+        // A section's title must be long enough not to be mistaken for a
+        // line of code that names it ("OpenAPI" and "openapi: 3.0.0").
+        QSet<QString> sectionKeys;
+        {
+            QHash<int, std::pair<int, QString>> latest; // level -> page, title
+            for (const auto &item : outline) {
+                if (item.page - 1 > pageIndex)
+                    break;
+                latest.insert(item.level, {item.page - 1, item.title});
+                for (auto it = latest.begin(); it != latest.end();)
+                    it = it.key() > item.level ? latest.erase(it) : std::next(it);
+            }
+            for (const auto &section : std::as_const(latest))
+                if (section.first != pageIndex && titleKey(section.second).size() >= 8)
+                    sectionKeys.insert(titleKey(section.second));
+            if (pageIndex != starts.value(nextStart - 1).first && !titleKey(chapters.last().title).isEmpty())
+                sectionKeys.insert(titleKey(chapters.last().title));
+        }
+        // The notes, each with the lines that continue it.
+        QStringList notes;
+        auto isFurniture = [&](int i) {
             const QString &line = lines.at(i);
-            // A running head can also just repeat the chapter's title, even
-            // in a section too short for it to recur three times.
-            const QString chapterKey = runningKey(chapters.last().title);
-            const bool repeatsTitle = !chapterKey.isEmpty() && runningKey(line) == chapterKey
-                                      && pageIndex != starts.value(nextStart - 1).first;
+            const bool repeatsTitle = sectionKeys.contains(titleKey(line));
             // Next to figures pdftotext can place a running head mid-page,
             // so short lines count wherever they are.
-            const bool furniture = (edges.contains(i) || line.size() <= 40)
-                                   && ((edgeCounts.value(runningKey(line)) >= repeatThreshold
-                                        && !isHeading(line))
-                                       || repeatsTitle);
-            if (line.isEmpty() || pageNumber.match(line).hasMatch() || furniture) {
+            return line.isEmpty() || pageNumber.match(line).hasMatch()
+                   || ((edges.contains(i) || line.size() <= 40)
+                       && ((edgeCounts.value(runningKey(line)) >= repeatThreshold && !isHeading(line))
+                           || repeatsTitle));
+        };
+        // The notes end where a heading starts the text again.
+        int noteEnd = noteStart;
+        while (noteEnd < lines.size() && !isHeading(lines.at(noteEnd)))
+            ++noteEnd;
+        static const QRegularExpression letter(R"(\p{L})");
+        for (int i = noteStart; i < noteEnd; ++i) {
+            const QString &line = lines.at(i);
+            if (isFurniture(i) || !line.contains(letter))
+                continue;
+            static const QRegularExpression startsNote(R"(^\d{1,3} (?!\d)\S)");
+            if (notes.isEmpty() || startsNote.match(line).hasMatch())
+                notes.append(line);
+            else if (notes.last().endsWith('-') && line.at(0).isLower())
+                notes.last() = notes.last().left(notes.last().size() - 1) + line;
+            else
+                notes.last() += ' ' + line;
+        }
+        for (int i = 0; i < lines.size(); ++i) {
+            if (i == noteStart)
+                i = noteEnd;
+            if (i >= lines.size())
+                break;
+            const QString &line = lines.at(i);
+            if (isFurniture(i)) {
                 flush();
                 continue;
             }
@@ -852,20 +930,25 @@ QList<Chapter> BookLoader::pdfChapters(const QString &output, const QList<PdfOut
             }
             if (!hasReadableText(p))
                 continue;
-            // A paragraph that runs over the page break continues here.
+            // A paragraph that runs over the page break continues here, past
+            // the previous page's footnotes.
             if (firstOnPage && p.at(0).isLower()) {
                 QList<Paragraph> *previous = !target.isEmpty() ? &target
                                            : chapters.size() > 1 ? &chapters[chapters.size() - 2].paragraphs
                                                                  : nullptr;
-                if (previous && !previous->isEmpty() && previous->last().level == 0
-                    && !endsSentence(previous->last().text)) {
-                    QString &tail = previous->last().text;
+                int last = previous ? int(previous->size()) - 1 : -1;
+                while (last >= 0 && previous->at(last).note)
+                    --last;
+                if (last >= 0 && previous->at(last).level == 0 && !endsSentence(previous->at(last).text)) {
+                    QString &tail = (*previous)[last].text;
                     tail = tail.endsWith('-') ? tail.left(tail.size() - 1) + p : tail + ' ' + p;
                     continue;
                 }
             }
             target.append({p, 0});
         }
+        for (const QString &note : std::as_const(notes))
+            target.append({note, 0, {}, true});
     }
     dropEmptyChapters(chapters);
     return chapters;

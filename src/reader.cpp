@@ -234,7 +234,7 @@ void Reader::setChapter(int chapter, int anchorParagraph) {
         QVariantList styles;
         for (const TextStyle &style : p.styles)
             styles.append(QVariantMap{{"start", style.start}, {"length", style.length}, {"flags", style.flags}});
-        m_paragraphs.append(QVariantMap{{"text", p.text}, {"level", p.level}, {"styles", styles}});
+        m_paragraphs.append(QVariantMap{{"text", p.text}, {"level", p.level}, {"styles", styles}, {"note", p.note}});
     }
     if (m_annotations)
         m_annotations->setChapter(chapter);

@@ -101,3 +101,7 @@ release once per push, not once per commit.
   icons on the `background` instead, as the library's remove button does.
 - Tests point `HOME` and `XDG_*` at temp directories so they never see the
   real library or the installed model; keep it that way.
+- A raw string ends at the first `)"`, so a regex written as
+  `R"((?:a|b))"` loses its last parenthesis and fails to compile at run
+  time, matching nothing, with no warning. Check a new pattern with
+  `isValid()` or a test that it matches.

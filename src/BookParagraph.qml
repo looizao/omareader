@@ -18,6 +18,8 @@ Item {
     required property var modelData
 
     readonly property int level: modelData.level
+    // A footnote: set smaller and quieter, as the voice passes it by.
+    readonly property bool note: !!modelData.note
     readonly property bool narrating: narrator.active && narrator.chapter === reader.chapter
     readonly property bool reading: narrating && narrator.paragraph === root.index
     readonly property bool focusing: narrating && reader.focusMode
@@ -75,11 +77,12 @@ Item {
         selectByMouse: false
         activeFocusOnPress: false
         horizontalAlignment: root.level > 0 ? Text.AlignLeft : Text.AlignJustify
-        color: root.level > 0 ? Colors.text : Colors.body
+        color: root.level > 0 ? Colors.text : root.note ? Colors.muted : Colors.body
         font.family: reader.serif ? "serif" : "sans-serif"
         font.pixelSize: root.level === 1 ? Math.round(reader.fontSize * 1.6)
                       : root.level === 2 ? Math.round(reader.fontSize * 1.4)
                       : root.level > 2 ? Math.round(reader.fontSize * 1.15)
+                      : root.note ? Math.round(reader.fontSize * 0.82)
                       : reader.fontSize
         font.weight: root.level > 0 ? Font.DemiBold : Font.Normal
     }
