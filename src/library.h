@@ -66,6 +66,8 @@ public:
 
 signals:
     void changed();
+    // A book left the library.
+    void removed(const QString &path);
 
 private:
     void load();

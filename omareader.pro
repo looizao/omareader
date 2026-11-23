@@ -37,6 +37,7 @@ HEADERS += \
     src/qwen.h \
     src/reader.h \
     src/speech.h \
+    src/stats.h \
     src/synthesizer.h \
     src/theme.h \
     src/titleagent.h \
@@ -63,6 +64,7 @@ SOURCES += \
     src/qwen.cpp \
     src/reader.cpp \
     src/speech.cpp \
+    src/stats.cpp \
     src/synthesizer.cpp \
     src/theme.cpp \
     src/titleagent.cpp \

@@ -11,6 +11,7 @@ FocusScope {
 
     // Main owns the export dialog, so its progress shows from the library too.
     signal exportRequested()
+    signal statsRequested()
 
     // The view keeps the spoken word in sight until the user scrolls away.
     property bool following: true
@@ -34,6 +35,8 @@ FocusScope {
                                            && !contents.opened && !settings.opened
 
     function wake() {
+        // Moving the mouse or pressing a key is reading time.
+        stats.noteActivity()
         root.awake = true
         idle.restart()
     }
@@ -315,6 +318,7 @@ FocusScope {
     Shortcut { sequence: "Ctrl+,"; enabled: root.visible && !contents.opened && !noteEditor.opened && !pronunciationEditor.opened; onActivated: settings.opened ? settings.close() : settings.open() }
     Shortcut { sequence: "A"; enabled: root.visible && !contents.opened && !noteEditor.opened && !pronunciationEditor.opened; onActivated: settings.opened ? settings.close() : settings.open() }
     Shortcut { sequence: "E"; enabled: root.keysEnabled; onActivated: root.exportRequested() }
+    Shortcut { sequence: "I"; enabled: root.keysEnabled; onActivated: root.statsRequested() }
     Shortcut { sequences: ["Backspace", "B"]; enabled: root.keysEnabled; onActivated: { root.closePanels(); reader.closeBook() } }
 
     ColumnLayout {
@@ -393,6 +397,18 @@ FocusScope {
                     onClicked: root.exportRequested()
                     ToolTip.visible: hovered && enabled
                     ToolTip.text: qsTr("Export as audio (E)")
+                }
+                ToolButton {
+                    objectName: "statsButton"
+                    onClicked: root.statsRequested()
+                    ToolTip.visible: hovered && enabled
+                    ToolTip.text: qsTr("Reading statistics (I)")
+                    StatsIcon {
+                        anchors.centerIn: parent
+                        width: 14
+                        height: 14
+                        color: Colors.text
+                    }
                 }
                 ToolButton {
                     objectName: "focusButton"

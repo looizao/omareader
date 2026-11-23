@@ -36,7 +36,9 @@ ApplicationWindow {
         sequence: "Escape"
         context: Qt.ApplicationShortcut
         onActivated: {
-            if (pasteDialog.opened)
+            if (statsPanel.opened)
+                statsPanel.close()
+            else if (pasteDialog.opened)
                 pasteDialog.close()
             else if (urlDialog.opened)
                 urlDialog.dismiss()
@@ -62,9 +64,10 @@ ApplicationWindow {
             anchors.fill: parent
             visible: !reader.hasBook
             focus: visible
-            dialogOpen: pasteDialog.opened || urlDialog.opened
+            dialogOpen: pasteDialog.opened || urlDialog.opened || statsPanel.opened
             onAddTextRequested: fromClipboard => pasteDialog.start(fromClipboard)
             onAddPageRequested: address => urlDialog.start(address)
+            onStatsRequested: statsPanel.toggle()
         }
 
         ReaderView {
@@ -73,6 +76,7 @@ ApplicationWindow {
             visible: reader.hasBook
             focus: visible
             onExportRequested: exportDialog.open()
+            onStatsRequested: statsPanel.toggle()
         }
 
         DropArea {
@@ -212,6 +216,10 @@ ApplicationWindow {
         UrlDialog {
             id: urlDialog
             objectName: "urlDialog"
+        }
+
+        StatsPanel {
+            id: statsPanel
         }
 
         HelpOverlay {

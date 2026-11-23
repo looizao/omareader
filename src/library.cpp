@@ -234,6 +234,7 @@ void Library::remove(const QString &path) {
         QFile::moveToTrash(path);
     save();
     emit changed();
+    emit removed(path);
 }
 
 // Compiled as part of this file, not on its own; see omareader.pro.

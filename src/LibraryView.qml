@@ -13,11 +13,17 @@ FocusScope {
     signal addTextRequested(bool fromClipboard)
     // An empty address opens the dialog empty.
     signal addPageRequested(string address)
+    signal statsRequested()
 
     Shortcut {
         sequence: "N"
         enabled: root.visible && !root.dialogOpen && !removeDialog.opened
         onActivated: root.addTextRequested(false)
+    }
+    Shortcut {
+        sequence: "I"
+        enabled: root.visible && !root.dialogOpen && !removeDialog.opened
+        onActivated: root.statsRequested()
     }
     Shortcut {
         sequence: "U"
@@ -80,6 +86,14 @@ FocusScope {
             }
             Rectangle { width: 8; height: 8; radius: 4; color: theme.accent; Layout.alignment: Qt.AlignBaseline }
             Item { Layout.fillWidth: true }
+            Button {
+                objectName: "libraryStatsButton"
+                flat: true
+                text: qsTr("Statistics")
+                onClicked: root.statsRequested()
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Reading statistics (I)")
+            }
             Button {
                 objectName: "addPageButton"
                 flat: true

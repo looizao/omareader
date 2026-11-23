@@ -18,5 +18,13 @@
   "%n minute(s)": {
     "one": "%n minute",
     "other": "%n minutes"
+  },
+  "Read on %n day(s) since %1": {
+    "one": "Read on %n day since %1",
+    "other": "Read on %n days since %1"
+  },
+  "%n day(s)": {
+    "one": "%n day",
+    "other": "%n days"
   }
 }

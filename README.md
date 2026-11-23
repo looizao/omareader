@@ -292,6 +292,22 @@ smooth. It is built in a hidden folder and renamed into place at the end, so
 a cancelled export leaves nothing behind and an earlier export is never
 replaced. Exports need `ffmpeg`.
 
+## Reading statistics
+
+Press I (or the bars button in the title bar, or Statistics in the library)
+to see where your reading time goes. For the open book: the time spent with
+it, read on screen and heard aloud, how long the rest of it takes at the
+voice's current speed, and how many days you have read it on. For every book:
+today, the last seven days as bars, the days in a row you have read, the time
+in all, and, in the library, the books with the most time.
+
+Time counts while the voice plays, or while the window is in front and you
+scroll, press keys or move the mouse; a book left open and untouched stops
+counting five minutes after the last input. The numbers live in
+`~/.local/share/omareader/omareader/stats.json` and never leave your
+computer. Removing a book from the library forgets its time, though the days
+it was read on keep theirs.
+
 ## Keyboard
 
 | Key | Action |
@@ -318,6 +334,7 @@ replaced. Exports need `ffmpeg`.
 | N | Bookmarks, highlights and notes |
 | A | Voice and appearance |
 | E | Export as audio |
+| I | Reading statistics: time spent and time left |
 | + / − | Bigger / smaller text |
 | O | Open a book |
 | N, Ctrl+V | In the library: add pasted text |
@@ -397,6 +414,9 @@ omareader skill install                  # agent skill for ~/.claude/skills
 - `src/annotations.cpp` keeps the bookmarks, highlights and notes: it finds
   each one's words in the book again, and merges the files other computers
   leave in the sync folder, the latest change to each one winning.
+- `src/stats.cpp` counts the time spent with each book and on each day,
+  read or heard, in short slices while a book is open, and leaves out the
+  time nobody was there.
 - `src/exporter.cpp` synthesises the book for exports and pipes the
   samples into `ffmpeg`, then joins the chapters into one file with chapter
   markers, or keeps them as a folder of tracks.

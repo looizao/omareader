@@ -51,6 +51,7 @@
 #include "qwen.h"
 #include "reader.h"
 #include "speech.h"
+#include "stats.h"
 #include "synthesizer.h"
 #include "theme.h"
 #include "titleagent.h"
@@ -66,9 +67,10 @@ public:
     AppWindow(const QString &dir)
         : library(dir + "/library.json", dir + "/covers"), reader(&library, &narrator, nullptr),
           annotations(dir + "/annotations", "this-computer"), lookup(QStringList{dir + "/dictionaries"}),
-          pronunciations(dir + "/pronunciations.json") {
+          pronunciations(dir + "/pronunciations.json"), stats(dir + "/stats.json") {
         reader.setExporter(&exporter);
         reader.setAnnotations(&annotations);
+        reader.setStats(&stats);
         qmlRegisterType<ReadingHighlight>("Omareader", 1, 0, "ReadingHighlight");
         qmlRegisterUncreatableType<Narrator>("Omareader", 1, 0, "Narrator", "Use the narrator context property.");
         qmlRegisterUncreatableType<Exporter>("Omareader", 1, 0, "Exporter", "Use the exporter context property.");
@@ -85,6 +87,7 @@ public:
         context->setContextProperty("webImport", &webImport);
         context->setContextProperty("lookup", &lookup);
         context->setContextProperty("pronunciations", &pronunciations);
+        context->setContextProperty("stats", &stats);
     }
 
     bool show(QSize size = {1100, 720}) {
@@ -140,6 +143,7 @@ public:
     WebImport webImport;
     WordLookup lookup;
     Pronunciations pronunciations;
+    ReadingStats stats;
     QQmlApplicationEngine engine;
     QQuickWindow *window = nullptr;
 };
@@ -1579,7 +1583,8 @@ private slots:
         static const QRegularExpression call("\\b(?:qsTr|tr)\\(\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
         int found = 0;
         for (const QString name : {"src/SettingsPanel.qml", "src/ExportDialog.qml", "src/ReaderView.qml",
-                                   "src/NarrationBar.qml", "src/HelpOverlay.qml"}) {
+                                   "src/NarrationBar.qml", "src/HelpOverlay.qml", "src/StatsPanel.qml",
+                                   "src/LibraryView.qml", "src/stats.cpp"}) {
             QFile source(QString(OMAREADER_SOURCE) + "/" + name);
             QVERIFY(source.open(QIODevice::ReadOnly));
             const QString text = QString::fromUtf8(source.readAll());
@@ -2366,6 +2371,244 @@ private slots:
         QCOMPARE(reader.audioMinutes(1.0), 1);
         reader.exportAudio(); // the tests' home has no model, so it says so
         QVERIFY(exporter.error().contains("omareader setup"));
+    }
+
+    // Reading statistics.
+
+    void statsCountReadingAndListeningPerBookAndDay() {
+        QTemporaryDir dir;
+        QDateTime clock(QDate(2026, 11, 23), QTime(15, 0));
+        ReadingStats stats(dir.filePath("stats.json"));
+        stats.setClock([&] { return clock; });
+        stats.setActive(true);
+        stats.setBook("/books/a.epub", "A");
+        clock = clock.addSecs(120);
+        stats.noteActivity();
+        stats.checkpoint();
+        QCOMPARE(stats.book("/books/a.epub").reading, 120000);
+        QCOMPARE(stats.book("/books/a.epub").listening, 0);
+        // While the voice plays, time is heard, not read, window or not.
+        stats.setListening(true);
+        stats.setActive(false);
+        clock = clock.addSecs(180);
+        stats.checkpoint();
+        QCOMPARE(stats.book("/books/a.epub").listening, 180000);
+        QCOMPARE(stats.book("/books/a.epub").reading, 120000);
+        stats.setListening(false);
+        stats.setActive(true);
+        // Another book gets its own time; the day gets both.
+        stats.setBook("/books/b.epub", "B");
+        clock = clock.addSecs(60);
+        stats.noteActivity();
+        stats.setBook({});
+        QCOMPARE(stats.book("/books/b.epub").reading, 60000);
+        QCOMPARE(stats.day(clock.date()).reading, 180000);
+        QCOMPARE(stats.day(clock.date()).listening, 180000);
+        QCOMPARE(stats.book("/books/a.epub").days, 1);
+        QCOMPARE(stats.book("/books/a.epub").first, clock.date());
+        // No book open, nothing counts.
+        clock = clock.addSecs(600);
+        stats.noteActivity();
+        stats.checkpoint();
+        QCOMPARE(stats.day(clock.date()).reading, 180000);
+    }
+
+    void statsStopCountingWhenIdleOrBehind() {
+        QTemporaryDir dir;
+        QDateTime clock(QDate(2026, 11, 23), QTime(10, 0));
+        ReadingStats stats(dir.filePath("stats.json"));
+        stats.setClock([&] { return clock; });
+        stats.setActive(true);
+        stats.setBook("/books/a.epub", "A");
+        // Left alone for an hour: only the minutes after the last input count.
+        for (int i = 0; i < 120; ++i) {
+            clock = clock.addSecs(30);
+            stats.checkpoint();
+        }
+        QCOMPARE(stats.book("/books/a.epub").reading, ReadingStats::IdleLimit);
+        // Coming back doesn't count the hour away.
+        stats.noteActivity();
+        clock = clock.addSecs(60);
+        stats.checkpoint();
+        QCOMPARE(stats.book("/books/a.epub").reading, ReadingStats::IdleLimit + 60000);
+        // Behind other windows nothing is read.
+        stats.setActive(false);
+        clock = clock.addSecs(120);
+        stats.noteActivity();
+        stats.checkpoint();
+        QCOMPARE(stats.book("/books/a.epub").reading, ReadingStats::IdleLimit + 60000);
+        // A night asleep with the voice on counts a few minutes at most.
+        stats.setListening(true);
+        clock = clock.addSecs(8 * 3600);
+        stats.checkpoint();
+        QCOMPARE(stats.book("/books/a.epub").listening, ReadingStats::IdleLimit);
+        // A clock set back counts nothing.
+        clock = clock.addSecs(-3600);
+        stats.checkpoint();
+        QCOMPARE(stats.book("/books/a.epub").listening, ReadingStats::IdleLimit);
+    }
+
+    void statsSplitTimeAtMidnight() {
+        QTemporaryDir dir;
+        QDateTime clock(QDate(2026, 11, 23), QTime(23, 58));
+        ReadingStats stats(dir.filePath("stats.json"));
+        stats.setClock([&] { return clock; });
+        stats.setBook("/books/a.epub", "A");
+        stats.setListening(true);
+        clock = clock.addSecs(4 * 60);
+        stats.checkpoint();
+        QCOMPARE(stats.day(QDate(2026, 11, 23)).listening, 120000);
+        QCOMPARE(stats.day(QDate(2026, 11, 24)).listening, 120000);
+        QCOMPARE(stats.book("/books/a.epub").days, 2);
+        QCOMPARE(stats.book("/books/a.epub").first, QDate(2026, 11, 23));
+        QCOMPARE(stats.book("/books/a.epub").last, QDate(2026, 11, 24));
+    }
+
+    void statsAreSavedAndForgotten() {
+        QTemporaryDir dir;
+        const QString file = dir.filePath("data/stats.json");
+        QDateTime clock(QDate(2026, 11, 23), QTime(9, 0));
+        {
+            ReadingStats stats(file);
+            stats.setClock([&] { return clock; });
+            stats.setBook("/books/a.epub", "A");
+            stats.setListening(true);
+            clock = clock.addSecs(90);
+            stats.checkpoint();
+            stats.setListening(false);
+            stats.setBook("/books/b.epub", "B");
+            stats.setListening(true);
+            clock = clock.addSecs(30);
+        } // closing counts the last moments and saves them
+        QVERIFY(QFile::exists(file));
+        QVERIFY(!QFile::exists(file + ".tmp"));
+        QFile saved(file);
+        QVERIFY(saved.open(QIODevice::ReadOnly));
+        QVERIFY(QJsonDocument::fromJson(saved.readAll()).isObject());
+        ReadingStats stats(file);
+        stats.setClock([&] { return clock; });
+        QCOMPARE(stats.book("/books/a.epub").listening, 90000);
+        QCOMPARE(stats.book("/books/a.epub").title, QString("A"));
+        QCOMPARE(stats.book("/books/b.epub").listening, 30000);
+        QCOMPARE(stats.day(clock.date()).listening, 120000);
+        // Forgetting a book keeps the day's time.
+        stats.forget("/books/a.epub");
+        QCOMPARE(stats.book("/books/a.epub").listening, 0);
+        ReadingStats again(file);
+        QCOMPARE(again.book("/books/a.epub").listening, 0);
+        QCOMPARE(again.book("/books/b.epub").listening, 30000);
+        QCOMPARE(again.day(clock.date()).listening, 120000);
+        // A damaged file starts empty rather than failing.
+        write(file, "{not json");
+        ReadingStats damaged(file);
+        QCOMPARE(damaged.book("/books/b.epub").listening, 0);
+    }
+
+    void statsOverviewShowsHabits() {
+        QTemporaryDir dir;
+        const QString file = dir.filePath("stats.json");
+        // Two days before today, a gap, then yesterday and today.
+        write(file, R"({"version": 1,
+            "books": [{"path": "/b/long.epub", "title": "Long", "reading": 600000, "listening": 3000000},
+                      {"path": "/b/short.epub", "title": "Short", "reading": 120000, "listening": 0},
+                      {"path": "/b/none.epub", "title": "None", "reading": 0, "listening": 0}],
+            "days": {"2026-11-20": {"reading": 600000, "listening": 0},
+                     "2026-11-22": {"reading": 120000, "listening": 1800000},
+                     "2026-11-23": {"reading": 0, "listening": 1200000},
+                     "2026-11-01": {"reading": 60000, "listening": 0}}})");
+        QDateTime clock(QDate(2026, 11, 23), QTime(20, 0));
+        ReadingStats stats(file);
+        stats.setClock([&] { return clock; });
+        QVariantMap overview = stats.overview();
+        QCOMPARE(overview.value("today").toLongLong(), 1200);
+        QCOMPARE(overview.value("week").toLongLong(), 600 + 1920 + 1200);
+        QCOMPARE(overview.value("total").toLongLong(), 600 + 1920 + 1200 + 60);
+        QCOMPARE(overview.value("streak").toInt(), 2);
+        const QVariantList days = overview.value("days").toList();
+        QCOMPARE(days.size(), 7);
+        QCOMPARE(days.first().toMap().value("date").toString(), QString("2026-11-17"));
+        QCOMPARE(days.last().toMap().value("listening").toLongLong(), 1200);
+        QVERIFY(!days.last().toMap().value("label").toString().isEmpty());
+        const QVariantList books = overview.value("books").toList();
+        QCOMPARE(books.size(), 2);
+        QCOMPARE(books.first().toMap().value("title").toString(), QString("Long"));
+        QCOMPARE(books.first().toMap().value("total").toLongLong(), 3600);
+        // Tomorrow, before reading, the streak still stands.
+        clock = clock.addDays(1);
+        QCOMPARE(stats.overview().value("streak").toInt(), 2);
+        clock = clock.addDays(1);
+        QCOMPARE(stats.overview().value("streak").toInt(), 0);
+    }
+
+    void statsDurationsReadShort() {
+        QCOMPARE(ReadingStats::duration(0), QString("0 min"));
+        QCOMPARE(ReadingStats::duration(29), QString("0 min"));
+        QCOMPARE(ReadingStats::duration(90), QString("2 min"));
+        QCOMPARE(ReadingStats::duration(59 * 60), QString("59 min"));
+        QCOMPARE(ReadingStats::duration(3600), QString("1 h"));
+        QCOMPARE(ReadingStats::duration(3 * 3600 + 5 * 60), QString("3 h 5 min"));
+        QCOMPARE(ReadingStats::duration(-5), QString("0 min"));
+    }
+
+    void readerCountsTimeForTheOpenBook() {
+        QTemporaryDir dir;
+        Library library(dir.filePath("library.json"), dir.filePath("covers"));
+        Narrator narrator;
+        Reader reader(&library, &narrator, nullptr);
+        QDateTime clock(QDate(2026, 11, 23), QTime(12, 0));
+        ReadingStats stats(dir.filePath("stats.json"));
+        stats.setClock([&] { return clock; });
+        stats.setActive(true);
+        reader.setStats(&stats);
+        Book book = sampleBook(dir.filePath("a.txt"));
+        reader.openBook(std::make_shared<Book>(book));
+        clock = clock.addSecs(60);
+        reader.goToChapter(1); // a move through the book is reading
+        stats.checkpoint();
+        QCOMPARE(stats.book(book.path).reading, 60000);
+        QCOMPARE(stats.current().value("reading").toLongLong(), 60);
+        QCOMPARE(stats.book(book.path).title, QString("Sample"));
+        narrator.showForTests(Narrator::Playing, 0, 0);
+        clock = clock.addSecs(120);
+        narrator.showForTests(Narrator::Paused, 0, 0);
+        QCOMPARE(stats.book(book.path).listening, 120000);
+        reader.closeBook();
+        QVERIFY(stats.current().isEmpty());
+        clock = clock.addSecs(120);
+        stats.checkpoint();
+        QCOMPARE(stats.book(book.path).reading, 60000);
+        // Removing the book from the library takes its time with it.
+        library.remove(book.path);
+        QCOMPARE(stats.book(book.path).listening, 0);
+        QCOMPARE(stats.day(clock.date()).listening, 120000);
+    }
+
+    void readerSaysHowLongTheRestOfTheBookTakes() {
+        QTemporaryDir dir;
+        Library library(dir.filePath("library.json"), dir.filePath("covers"));
+        Narrator narrator;
+        const double speed = narrator.speed();
+        narrator.setSpeed(1.0);
+        Reader reader(&library, &narrator, nullptr);
+        QCOMPARE(reader.minutesLeft(), 0);
+        write(dir.filePath("b.txt"), "b");
+        Book book;
+        book.path = dir.filePath("b.txt");
+        book.title = "Words";
+        // 320 words, then 480: five minutes in all at 160 a minute.
+        book.chapters = {{"One", {{QString("word ").repeated(319) + "end.", 0}}},
+                         {"Two", {{QString("word ").repeated(479) + "end.", 0}}}};
+        book.segment();
+        reader.openBook(std::make_shared<Book>(book));
+        QCOMPARE(book.wordCount(), 800);
+        QCOMPARE(reader.minutesLeft(), 5);
+        QSignalSpy changed(&reader, &Reader::progressChanged);
+        reader.goToChapter(1);
+        QCOMPARE(reader.minutesLeft(), 3);
+        narrator.setSpeed(2.0);
+        QVERIFY(changed.size() >= 2); // the speed changes the time left too
+        QCOMPARE(reader.minutesLeft(), 2);
+        narrator.setSpeed(speed);
     }
 
     // Searching the open book.
@@ -3835,6 +4078,113 @@ private slots:
                  qPrintable(QString("the cross is %1, %2 px off the button's centre").arg(offset.x()).arg(offset.y())));
         // And it is a cross, not a dot: about 12 px each way.
         QVERIFY2(cross.width() >= 7 && cross.height() >= 7, qPrintable(QString("cross is %1x%2").arg(cross.width()).arg(cross.height())));
+    }
+
+    void statsPanelShowsTimeSpentAndLeft() {
+        QSettings().remove("reader");
+        QTemporaryDir dir;
+        write(dir.path() + "/stats.json", R"({"version": 1, "books": [],
+            "days": {"2026-11-21": {"reading": 900000, "listening": 0},
+                     "2026-11-22": {"reading": 300000, "listening": 1500000}}})");
+        AppWindow app(dir.path());
+        // Installed, as main() does, so counted strings take their English forms.
+        QCoreApplication::installTranslator(&app.translator);
+        const auto uninstall = qScopeGuard([&] { QCoreApplication::removeTranslator(&app.translator); });
+        QDateTime clock(QDate(2026, 11, 23), QTime(18, 0));
+        app.stats.setClock([&] { return clock; });
+        app.stats.setActive(true);
+        QVERIFY(app.show());
+        QVERIFY(app.reader.addText("Habits", QString("Some words to read every day. ").repeated(400)));
+        QTRY_VERIFY(app.reader.hasBook());
+        app.stats.noteActivity();
+        // Twenty minutes read, then forty heard.
+        for (int i = 0; i < 5; ++i) {
+            clock = clock.addSecs(240);
+            app.stats.noteActivity();
+        }
+        app.narrator.showForTests(Narrator::Playing, 0, 0);
+        for (int i = 0; i < 10; ++i) {
+            clock = clock.addSecs(240);
+            app.stats.checkpoint();
+        }
+        app.narrator.showForTests(Narrator::Stopped, 0, 0);
+        QTRY_COMPARE(app.items("statsButton").size(), 1);
+        QQuickItem *button = app.items("statsButton").first();
+        QTest::mouseMove(app.window, QPoint(20, 300));
+
+        // The title bar's icon: bars centred on their button.
+        QImage shot = app.grab("stats-button");
+        QRect area = app.area(shot, button);
+        if (!qEnvironmentVariableIsEmpty("OMAREADER_SCREENSHOTS"))
+            shot.copy(area.adjusted(-8, -8, 8, 8)).scaled(area.width() * 8, area.height() * 8)
+                .save(qEnvironmentVariable("OMAREADER_SCREENSHOTS") + "/stats-button-zoom.png");
+        const QRect bars = brightBoxInCircle(shot, area, 150);
+        QVERIFY2(bars.isValid(), "no bars drawn on the button");
+        const QPointF offset = QRectF(bars).center() - QRectF(area).center();
+        QVERIFY2(qAbs(offset.x()) <= 1.5 && qAbs(offset.y()) <= 1.5,
+                 qPrintable(QString("the bars are %1, %2 px off the button's centre").arg(offset.x()).arg(offset.y())));
+        QVERIFY2(bars.width() >= 10 && bars.height() >= 10, qPrintable(QString("bars are %1x%2").arg(bars.width()).arg(bars.height())));
+
+        QTest::keyClick(app.window, Qt::Key_I);
+        QObject *panel = app.window->findChild<QObject *>("statsPanel");
+        QVERIFY(panel);
+        QTRY_VERIFY(panel->property("opened").toBool());
+        auto value = [&](const QString &name) {
+            const QList<QQuickItem *> found = app.items(name);
+            return found.isEmpty() ? QString("<none>") : found.first()->property("value").toString();
+        };
+        QTRY_COMPARE(value("statsBookTotal"), QString("1 h"));
+        QCOMPARE(value("statsTimeLeft"), ReadingStats::duration(app.reader.minutesLeft() * 60));
+        QVERIFY(app.reader.minutesLeft() > 0);
+        QCOMPARE(value("statsToday"), QString("1 h"));
+        QCOMPARE(value("statsStreak"), QString("3 days"));
+        QCOMPARE(app.items("statsBookDays").size(), 1);
+        QCOMPARE(app.items("statsBookDays").first()->property("text").toString(),
+                 "Read on 1 day since " + QLocale().toString(QDate(2026, 11, 23), QLocale::ShortFormat));
+
+        // Today's bar: heard in the full accent twice as tall as read in
+        // the faded one, and the tallest of the week.
+        shot = app.grab("stats-panel");
+        const QList<QQuickItem *> heard = app.items("statsListeningBar");
+        const QList<QQuickItem *> read = app.items("statsReadingBar");
+        QCOMPARE(heard.size(), 7);
+        QCOMPARE(read.size(), 7);
+        QCOMPARE(heard.last()->height(), heard.last()->parentItem()->height() * 40 / 60);
+        QCOMPARE(read.last()->height(), heard.last()->height() / 2);
+        QCOMPARE(heard.at(4)->height(), 0.0);
+        auto accent = [&](const QRect &r) {
+            int count = 0;
+            for (int y = r.top(); y <= r.bottom(); ++y)
+                for (int x = r.left(); x <= r.right(); ++x) {
+                    const QColor c = shot.pixelColor(x, y);
+                    count += c.red() > 200 && c.green() > 170 && c.blue() < 80;
+                }
+            return count;
+        };
+        const QRect heardArea = app.area(shot, heard.last()).adjusted(2, 2, -2, -2);
+        QVERIFY2(accent(heardArea) > heardArea.width() * heardArea.height() * 9 / 10,
+                 "today's listening isn't drawn in the accent");
+        const QRect readArea = app.area(shot, read.last()).adjusted(2, 2, -2, -2);
+        QCOMPARE(accent(readArea), 0); // faded, not the full accent
+        QVERIFY(brightPixels(shot, readArea, 60) > readArea.width() * readArea.height() / 2);
+        // A day with nothing has no bar.
+        QCOMPARE(accent(app.area(shot, heard.at(4)->parentItem())), 0);
+
+        // I again closes it; the library shows every book and where the time went.
+        QTest::keyClick(app.window, Qt::Key_I);
+        QTRY_VERIFY(!panel->property("opened").toBool());
+        app.reader.closeBook();
+        QTRY_COMPARE(app.items("libraryStatsButton").size(), 1);
+        QQuickItem *libraryButton = app.items("libraryStatsButton").first();
+        app.grab("stats-library"); // waits for the library to settle where it is clicked
+        QTest::mouseClick(app.window, Qt::LeftButton, {},
+                          libraryButton->mapToScene(QPointF(libraryButton->width() / 2, libraryButton->height() / 2)).toPoint());
+        QTRY_VERIFY(panel->property("opened").toBool());
+        QTRY_VERIFY(app.items("statsBook").isEmpty());
+        QCOMPARE(value("statsToday"), QString("1 h"));
+        app.grab("stats-panel-library");
+        QTest::keyClick(app.window, Qt::Key_Escape);
+        QTRY_VERIFY(!panel->property("opened").toBool());
     }
 
     void narrationBarShowsTheSleepTimer() {

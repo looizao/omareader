@@ -32,6 +32,7 @@ Rectangle {
         ["N", qsTr("Bookmarks, highlights and notes")],
         ["A", qsTr("Voice and appearance")],
         ["E", qsTr("Export as audio")],
+        ["I", qsTr("Reading statistics: time spent and time left")],
         ["+ / −", qsTr("Bigger / smaller text")],
         ["O", qsTr("Open a book")],
         ["N", qsTr("Add pasted text to the library")],

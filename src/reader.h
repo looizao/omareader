@@ -14,6 +14,7 @@ class Exporter;
 class FilePicker;
 class Library;
 class Narrator;
+class ReadingStats;
 
 // The open book and what the window shows of it: the current chapter's
 // paragraphs, the reading position, and the reading appearance. Exposed to
@@ -34,6 +35,8 @@ class Reader : public QObject {
     Q_PROPERTY(int anchorParagraph READ anchorParagraph NOTIFY chapterChanged)
     Q_PROPERTY(double progress READ progress NOTIFY progressChanged)
     Q_PROPERTY(int minutesLeftInChapter READ minutesLeftInChapter NOTIFY progressChanged)
+    // How long the rest of the book takes to hear at the voice's speed.
+    Q_PROPERTY(int minutesLeft READ minutesLeft NOTIFY progressChanged)
     // Whether a bookmark marks the paragraph the reading position is in.
     Q_PROPERTY(bool bookmarked READ bookmarked NOTIFY bookmarkedChanged)
     Q_PROPERTY(int fontSize READ fontSize WRITE setFontSize NOTIFY appearanceChanged)
@@ -85,6 +88,7 @@ public:
     int anchorParagraph() const { return m_anchorParagraph; }
     double progress() const;
     int minutesLeftInChapter() const;
+    int minutesLeft() const;
     BookPtr book() const { return m_book; }
     int sentence() const { return m_sentence; }
     bool bookmarked() const;
@@ -156,6 +160,8 @@ public:
     void setExporter(Exporter *exporter) { m_exporter = exporter; }
     // The open book's bookmarks, highlights and notes.
     void setAnnotations(Annotations *annotations);
+    // Where the time spent with each book is counted.
+    void setStats(ReadingStats *stats);
     // Bookmarks the sentence being read, or the one at the top of the view,
     // or removes the bookmark already in its paragraph.
     Q_INVOKABLE void toggleBookmark();
@@ -215,7 +221,11 @@ private:
     FilePicker *m_picker;
     Exporter *m_exporter = nullptr;
     Annotations *m_annotations = nullptr;
+    ReadingStats *m_stats = nullptr;
     BookPtr m_book;
+    // How many words the book has before each sentence, and in all at the
+    // end, so the time left is a subtraction.
+    QList<int> m_wordsBefore;
     QFutureWatcher<std::pair<std::shared_ptr<Book>, QString>> m_loader;
     QString m_loadingPath;
     bool m_loading = false;

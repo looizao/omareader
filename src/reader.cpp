@@ -6,6 +6,7 @@
 #include "filepicker.h"
 #include "library.h"
 #include "narrator.h"
+#include "stats.h"
 
 #include <QClipboard>
 #include <QDir>
@@ -56,8 +57,11 @@ Reader::Reader(Library *library, Narrator *narrator, FilePicker *picker, QObject
         connect(m_picker, &FilePicker::openSelected, this, [this](const QUrl &url) { open(url.toString()); });
         connect(m_picker, &FilePicker::failed, this, &Reader::setError);
     }
-    if (m_narrator)
+    if (m_narrator) {
         connect(m_narrator, &Narrator::positionChanged, this, &Reader::followNarrator);
+        // The time left is at the voice's speed.
+        connect(m_narrator, &Narrator::speedChanged, this, &Reader::progressChanged);
+    }
     connect(this, &Reader::progressChanged, this, &Reader::bookmarkedChanged);
 }
 
@@ -121,6 +125,27 @@ int Reader::minutesLeftInChapter() const {
     // Both voices speak about 160 words a minute at normal speed.
     const double speed = m_narrator ? m_narrator->speed() : 1.0;
     return int(std::ceil(words / (160.0 * speed)));
+}
+
+int Reader::minutesLeft() const {
+    if (!m_book || m_wordsBefore.size() != m_book->sentenceCount() + 1)
+        return 0;
+    const int words = m_wordsBefore.last() - m_wordsBefore.at(qBound(0, m_sentence, m_book->sentenceCount()));
+    // Both voices speak about 160 words a minute at normal speed.
+    const double speed = m_narrator ? m_narrator->speed() : 1.0;
+    return int(std::ceil(words / (160.0 * speed)));
+}
+
+void Reader::setStats(ReadingStats *stats) {
+    m_stats = stats;
+    if (!m_stats)
+        return;
+    if (m_narrator)
+        connect(m_narrator, &Narrator::stateChanged, m_stats,
+                [this] { m_stats->setListening(m_narrator->state() == Narrator::Playing); });
+    // A book removed from the library takes its time with it.
+    if (m_library)
+        connect(m_library, &Library::removed, m_stats, &ReadingStats::forget);
 }
 
 bool Reader::isUrlOrPath(const QString &text) {
@@ -215,6 +240,18 @@ void Reader::openBook(BookPtr book) {
     if (m_narrator)
         m_narrator->setBook(book);
     m_book = std::move(book);
+    m_wordsBefore.clear();
+    if (m_book) {
+        m_wordsBefore.reserve(m_book->sentenceCount() + 1);
+        int words = 0;
+        for (const Sentence &s : m_book->sentences) {
+            m_wordsBefore.append(words);
+            words += int(s.words.size());
+        }
+        m_wordsBefore.append(words);
+    }
+    if (m_stats)
+        m_stats->setBook(m_book ? m_book->path : QString(), m_book ? m_book->title : QString());
     int chapter = 0, paragraph = 0;
     m_sentence = 0;
     if (m_library && m_book) {
@@ -253,6 +290,9 @@ void Reader::closeBook() {
         m_narrator->setBook(nullptr);
     }
     m_book.reset();
+    m_wordsBefore.clear();
+    if (m_stats)
+        m_stats->setBook({});
     if (m_annotations)
         m_annotations->setBook(nullptr);
     clearSearch();
@@ -291,6 +331,8 @@ void Reader::goToChapter(int chapter) {
     setChapter(chapter, 0);
     emit progressChanged();
     m_saveTimer.start();
+    if (m_stats)
+        m_stats->noteActivity();
 }
 
 void Reader::goTo(int chapter, int paragraph, int offset) {
@@ -304,6 +346,8 @@ void Reader::goTo(int chapter, int paragraph, int offset) {
     setChapter(chapter, paragraph);
     emit progressChanged();
     m_saveTimer.start();
+    if (m_stats)
+        m_stats->noteActivity();
 }
 
 void Reader::setAnnotations(Annotations *annotations) {
@@ -366,6 +410,8 @@ void Reader::setVisibleParagraph(int paragraph) {
     m_anchorParagraph = paragraph;
     emit progressChanged();
     m_saveTimer.start();
+    if (m_stats)
+        m_stats->noteActivity();
 }
 
 void Reader::readFrom(int paragraph, int offset) {

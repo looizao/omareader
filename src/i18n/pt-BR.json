@@ -370,5 +370,34 @@
   "Add a word": "Adicionar uma palavra",
   "Said as “%1” · change (P)": "Dito como “%1” · mudar (P)",
   "Fix how it's said (P)": "Corrigir a pronúncia (P)",
-  "Fix how the word being read, or the one under the mouse, is said": "Corrigir a pronúncia da palavra sendo lida, ou da que está sob o mouse"
+  "Fix how the word being read, or the one under the mouse, is said": "Corrigir a pronúncia da palavra sendo lida, ou da que está sob o mouse",
+  "Reading statistics": "Estatísticas de leitura",
+  "Reading statistics (I)": "Estatísticas de leitura (I)",
+  "Reading statistics: time spent and time left": "Estatísticas de leitura: tempo dedicado e tempo restante",
+  "Statistics": "Estatísticas",
+  "Close (Esc)": "Fechar (Esc)",
+  "With this book": "Com este livro",
+  "Reading": "Lendo",
+  "Listening": "Ouvindo",
+  "Left at %1×": "Restante a %1×",
+  "%1% read · %2 left in this chapter": "%1% lido · faltam %2 neste capítulo",
+  "Read on %n day(s) since %1": {
+    "one": "Lido em %n dia desde %1",
+    "many": "Lido em %n de dias desde %1",
+    "other": "Lido em %n dias desde %1"
+  },
+  "Every book": "Todos os livros",
+  "Today": "Hoje",
+  "Last 7 days": "Últimos 7 dias",
+  "%n day(s)": {
+    "one": "%n dia",
+    "many": "%n de dias",
+    "other": "%n dias"
+  },
+  "In a row": "Seguidos",
+  "In all": "No total",
+  "Reading %1 · listening %2": "Lendo %1 · ouvindo %2",
+  "Most time": "Mais tempo",
+  "Counted while the voice plays, or while the window is in front and you scroll or press keys. Kept on this computer only.": "Contado enquanto a voz lê, ou enquanto a janela está em primeiro plano e você rola o texto ou aperta teclas. Fica só neste computador.",
+  "%1 h": "%1 h"
 }

@@ -19,6 +19,7 @@
 #include "portalfilepicker.h"
 #include "pronunciation.h"
 #include "reader.h"
+#include "stats.h"
 #include "theme.h"
 #include "titleagent.h"
 #include "translator.h"
@@ -54,6 +55,8 @@ int main(int argc, char *argv[]) {
 
     Theme theme;
     Library library;
+    // Before the reader, so it outlives it and counts its last moments.
+    ReadingStats stats;
     Narrator narrator;
     PortalFilePicker picker;
     Reader reader(&library, &narrator, &picker);
@@ -63,6 +66,7 @@ int main(int argc, char *argv[]) {
     Annotations annotations;
     annotations.setPicker(&picker);
     reader.setAnnotations(&annotations);
+    reader.setStats(&stats);
     TitleAgent titleAgent;
     WebImport webImport;
     WordLookup lookup;
@@ -85,6 +89,7 @@ int main(int argc, char *argv[]) {
     engine.rootContext()->setContextProperty("webImport", &webImport);
     engine.rootContext()->setContextProperty("lookup", &lookup);
     engine.rootContext()->setContextProperty("pronunciations", &pronunciations);
+    engine.rootContext()->setContextProperty("stats", &stats);
     engine.load(QUrl("qrc:/Main.qml"));
     if (engine.rootObjects().isEmpty())
         return 1;
@@ -98,5 +103,7 @@ int main(int argc, char *argv[]) {
     narrator.stop();
     exporter.cancel();
     reader.saveNow();
+    stats.checkpoint();
+    stats.save();
     return status;
 }
