@@ -34,12 +34,26 @@ void writeEpub(const QString &path, const QByteArray &png) {
     });
 }
 
+void writeLanguageEpub(const QString &path, const QString &language, const QStringList &paragraphs) {
+    QByteArray body;
+    for (const QString &p : paragraphs)
+        body += "<p>" + p.toHtmlEscaped().toUtf8() + "</p>";
+    const QByteArray tag = language.isEmpty() ? QByteArray() : "<dc:language>" + language.toUtf8() + "</dc:language>";
+    makeZip(path, {
+            {"mimetype", "application/epub+zip"},
+            {"META-INF/container.xml", R"(<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>)"},
+            {"content.opf", R"(<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Words</dc:title>)" + tag + R"(</metadata>
+<manifest><item id="c1" href="one.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>)"},
+            {"one.xhtml", "<html><body>" + body + "</body></html>"},
+    });
+}
+
 void writeFb2(const QString &path) {
     QFile file(path);
     file.open(QIODevice::WriteOnly);
     file.write(R"(<?xml version="1.0" encoding="utf-8"?>
 <FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" xmlns:l="http://www.w3.org/1999/xlink">
-<description><title-info><author><first-name>Ivan</first-name><last-name>Example</last-name></author><book-title>Short Tale</book-title></title-info></description>
+<description><title-info><author><first-name>Ivan</first-name><last-name>Example</last-name></author><book-title>Short Tale</book-title><lang>ru</lang></title-info></description>
 <body><section><title><p>Part One</p></title><p>First <emphasis>words</emphasis> here.</p><section><title><p>Inner</p></title><p>Nested text.</p></section></section>
 <section><title><p>Part Two</p></title><p>Last words.</p></section></body>
 <body name="notes"><section><p>A note that is not read.</p></section></body></FictionBook>)");
@@ -48,7 +62,7 @@ void writeFb2(const QString &path) {
 void writeDocx(const QString &path) {
     makeZip(path, {
             {"[Content_Types].xml", "<Types/>"},
-            {"docProps/core.xml", R"(<cp:coreProperties xmlns:cp="x" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Doc Title</dc:title><dc:creator>Doc Author</dc:creator></cp:coreProperties>)"},
+            {"docProps/core.xml", R"(<cp:coreProperties xmlns:cp="x" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Doc Title</dc:title><dc:creator>Doc Author</dc:creator><dc:language>en-GB</dc:language></cp:coreProperties>)"},
             {"word/document.xml", R"(<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
 <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Opening</w:t></w:r></w:p>
 <w:p><w:r><w:t xml:space="preserve">Hello </w:t></w:r><w:r><w:t>world.</w:t></w:r></w:p>
@@ -60,7 +74,7 @@ void writeDocx(const QString &path) {
 void writeOdt(const QString &path) {
     makeZip(path, {
             {"mimetype", "application/vnd.oasis.opendocument.text"},
-            {"meta.xml", R"(<office:document-meta xmlns:office="o" xmlns:dc="http://purl.org/dc/elements/1.1/"><office:meta><dc:title>Odt Title</dc:title></office:meta></office:document-meta>)"},
+            {"meta.xml", R"(<office:document-meta xmlns:office="o" xmlns:dc="http://purl.org/dc/elements/1.1/"><office:meta><dc:title>Odt Title</dc:title><dc:language>de-AT</dc:language></office:meta></office:document-meta>)"},
             {"content.xml", R"(<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:text>
 <text:h text:outline-level="1">Heading</text:h><text:p>Two<text:s/>words<text:tab/>and<text:line-break/>a break.</text:p></office:text></office:body></office:document-content>)"},
     });

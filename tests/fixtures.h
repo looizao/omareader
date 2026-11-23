@@ -4,6 +4,7 @@
 #include <QHash>
 #include <QList>
 #include <QString>
+#include <QStringList>
 #include <functional>
 #include <memory>
 
@@ -11,6 +12,8 @@ class QTcpServer;
 
 namespace Fixtures {
 void writeEpub(const QString &path, const QByteArray &coverPng);
+// A one-chapter EPUB whose metadata gives this language (none when empty).
+void writeLanguageEpub(const QString &path, const QString &language, const QStringList &paragraphs);
 void writeFb2(const QString &path);
 void writeDocx(const QString &path);
 void writeOdt(const QString &path);

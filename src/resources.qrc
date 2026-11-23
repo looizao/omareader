@@ -20,6 +20,7 @@
         <file alias="StatsIcon.qml">StatsIcon.qml</file>
         <file alias="StatsPanel.qml">StatsPanel.qml</file>
         <file alias="AccentButton.qml">AccentButton.qml</file>
+        <file alias="LanguageNotice.qml">LanguageNotice.qml</file>
         <file alias="ChoiceBox.qml">ChoiceBox.qml</file>
         <file alias="ExportDialog.qml">ExportDialog.qml</file>
         <file alias="PasteDialog.qml">PasteDialog.qml</file>

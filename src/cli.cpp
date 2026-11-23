@@ -5,6 +5,7 @@
 #include "dictionary.h"
 #include "exporter.h"
 #include "kokoro.h"
+#include "language.h"
 #include "library.h"
 #include "pronunciation.h"
 #include "qwen.h"
@@ -136,7 +137,7 @@ QString engineOption(const QCommandLineParser &parser, bool *ok) {
 }
 
 int info(const QStringList &arguments) {
-    Command command("info", "Show a book's metadata and chapters.");
+    Command command("info", "Show a book's metadata, language and chapters.");
     command.parser.addPositionalArgument("book", "The book file");
     command.json();
     if (!command.parse(arguments))
@@ -167,6 +168,8 @@ int info(const QStringList &arguments) {
                    {"author", book->author},
                    {"format", book->format},
                    {"source", book->source},
+                   {"language", book->language},
+                   {"languageSource", book->languageSource},
                    {"hasCover", !book->cover.isEmpty()},
                    {"sentences", book->sentenceCount()},
                    {"words", book->wordCount()},
@@ -178,7 +181,12 @@ int info(const QStringList &arguments) {
         out() << book->author << Qt::endl;
     if (!book->source.isEmpty())
         out() << book->source << Qt::endl;
-    out() << book->format.toUpper() << ", " << book->wordCount() << " words" << Qt::endl << Qt::endl;
+    out() << book->format.toUpper() << ", " << book->wordCount() << " words" << Qt::endl;
+    if (!book->language.isEmpty())
+        out() << "Language: " << Language::name(book->language) << " ("
+              << (book->languageSource == "metadata" ? "from the book's metadata" : "guessed from the text") << ")"
+              << Qt::endl;
+    out() << Qt::endl;
     for (const auto &value : std::as_const(chapters)) {
         const QJsonObject c = value.toObject();
         out() << QString("%1. %2 (%3 words)").arg(c.value("number").toInt(), 3).arg(c.value("title").toString())
@@ -829,7 +837,7 @@ QString usage() {
            "       omareader <command> [options]\n\n"
            "Commands:\n"
            "  open [book]                     Open the window (the default)\n"
-           "  info <book> [--json]            Show a book's metadata and chapters\n"
+           "  info <book> [--json]            Show a book's metadata, language and chapters\n"
            "  text <book> [--chapter N]       Print a book's text as omareader shows it, or --spoken as heard\n"
            "  notes <book> [--json]           List a book's bookmarks, highlights and notes\n"
            "  export <book> [--split]         Read a book aloud into MP3 or M4B files\n"

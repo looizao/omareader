@@ -45,6 +45,7 @@
 #include "fixtures.h"
 #include "highlight.h"
 #include "kokoro.h"
+#include "language.h"
 #include "pronunciation.h"
 #include "library.h"
 #include "narrator.h"
@@ -1552,6 +1553,250 @@ private slots:
         QVERIFY(EngineCatalog::previewText("pt").contains(" "));
     }
 
+    // A paragraph in each language, written for these tests: the same
+    // story of a lighthouse keeper, so every language has the same chance.
+    static QString storyIn(const QString &code) {
+        static const QHash<QString, QString> stories = {
+            {"en", "The old lighthouse keeper climbed the stairs every evening. He was tired, but he never missed a "
+                   "night, because the ships that passed the rocks needed his light. When the storm came, the waves "
+                   "were higher than the house, and the wind would not stop. His daughter stayed with him, and "
+                   "together they kept the lamp burning until the morning. They had little money, but they were "
+                   "proud of the work, and the town remembered them for many years."},
+            {"pt", "O velho faroleiro subia a escada todas as noites. Ele estava cansado, mas nunca faltou uma "
+                   "noite, porque os navios que passavam pelas pedras precisavam da sua luz. Quando a tempestade "
+                   "chegou, as ondas eram mais altas do que a casa, e o vento não parava. A filha ficou com ele, e "
+                   "juntos mantiveram a lâmpada acesa até a manhã. Eles tinham pouco dinheiro, mas tinham orgulho "
+                   "do trabalho, e a cidade se lembrou deles por muitos anos."},
+            {"es", "El viejo farero subía la escalera todas las noches. Estaba cansado, pero nunca faltó una noche, "
+                   "porque los barcos que pasaban por las rocas necesitaban su luz. Cuando llegó la tormenta, las "
+                   "olas eran más altas que la casa, y el viento no paraba. Su hija se quedó con él, y juntos "
+                   "mantuvieron la lámpara encendida hasta la mañana. Tenían poco dinero, pero estaban orgullosos "
+                   "del trabajo, y el pueblo los recordó durante muchos años."},
+            {"fr", "Le vieux gardien du phare montait l'escalier tous les soirs. Il était fatigué, mais il ne "
+                   "manquait jamais une nuit, parce que les bateaux qui passaient près des rochers avaient besoin "
+                   "de sa lumière. Quand la tempête est arrivée, les vagues étaient plus hautes que la maison, et le "
+                   "vent ne s'arrêtait pas. Sa fille est restée avec lui, et ensemble ils ont gardé la lampe allumée "
+                   "jusqu'au matin. Ils avaient peu d'argent, mais ils étaient fiers de leur travail."},
+            {"it", "Il vecchio guardiano del faro saliva le scale ogni sera. Era stanco, ma non mancava mai una "
+                   "notte, perché le navi che passavano vicino agli scogli avevano bisogno della sua luce. Quando "
+                   "arrivò la tempesta, le onde erano più alte della casa, e il vento non si fermava. Sua figlia "
+                   "rimase con lui, e insieme tennero la lampada accesa fino al mattino. Avevano pochi soldi, ma "
+                   "erano orgogliosi del loro lavoro, e la città si ricordò di loro per molti anni."},
+            {"de", "Der alte Leuchtturmwärter stieg jeden Abend die Treppe hinauf. Er war müde, aber er hat nie "
+                   "eine Nacht verpasst, weil die Schiffe, die an den Felsen vorbeifuhren, sein Licht brauchten. Als "
+                   "der Sturm kam, waren die Wellen höher als das Haus, und der Wind hörte nicht auf. Seine Tochter "
+                   "blieb bei ihm, und zusammen ließen sie die Lampe bis zum Morgen brennen. Sie hatten wenig Geld, "
+                   "aber sie waren stolz auf ihre Arbeit, und die Stadt erinnerte sich noch viele Jahre an sie."},
+            {"nl", "De oude vuurtorenwachter klom elke avond de trap op. Hij was moe, maar hij heeft nooit een "
+                   "nacht overgeslagen, omdat de schepen die langs de rotsen voeren zijn licht nodig hadden. Toen "
+                   "de storm kwam, waren de golven hoger dan het huis, en de wind hield niet op. Zijn dochter bleef "
+                   "bij hem, en samen hielden ze de lamp aan tot de ochtend. Ze hadden weinig geld, maar ze waren "
+                   "trots op hun werk, en de stad heeft hen nog lang herinnerd."},
+            {"ru", "Старый смотритель маяка каждый вечер поднимался по лестнице. Он устал, но не пропустил ни "
+                   "одной ночи, потому что кораблям, проходившим мимо скал, был нужен его свет."},
+            {"uk", "Старий доглядач маяка щовечора піднімався сходами. Він був втомлений, але ніколи не пропускав "
+                   "жодної ночі, бо кораблям, що пропливали повз скелі, було потрібне його світло."},
+            {"zh", "老灯塔看守人每天晚上都爬上楼梯。他很累，但从来没有错过一个夜晚，因为经过礁石的船只需要他的灯光。"},
+            {"ja", "年老いた灯台守は毎晩階段を上った。彼は疲れていたが、一晩も休まなかった。岩のそばを通る船には彼の光が"
+                   "必要だったからだ。"},
+            {"ko", "늙은 등대지기는 매일 저녁 계단을 올랐다. 그는 지쳤지만 하룻밤도 거르지 않았다. 바위 옆을 지나는 "
+                   "배들에게 그의 불빛이 필요했기 때문이다."},
+            {"hi", "बूढ़ा प्रकाशस्तंभ रक्षक हर शाम सीढ़ियाँ चढ़ता था। वह थका हुआ था, लेकिन उसने कभी एक भी रात नहीं "
+                   "छोड़ी, क्योंकि चट्टानों के पास से गुजरने वाले जहाजों को उसकी रोशनी की ज़रूरत थी।"},
+            {"pl", "Stary latarnik co wieczór wspinał się po schodach. Był zmęczony, ale nigdy nie opuścił ani "
+                   "jednej nocy, bo statki płynące obok skał potrzebowały jego światła. Kiedy przyszła burza, fale "
+                   "były wyższe niż dom, a wiatr nie ustawał."},
+        };
+        return stories.value(code);
+    }
+
+    void languageTagsBecomeCodes() {
+        QCOMPARE(Language::fromTag("en-US"), QString("en"));
+        QCOMPARE(Language::fromTag("pt_BR"), QString("pt"));
+        QCOMPARE(Language::fromTag(" por "), QString("pt"));
+        QCOMPARE(Language::fromTag("Português"), QString("pt"));
+        QCOMPARE(Language::fromTag("English"), QString("en"));
+        QCOMPARE(Language::fromTag("fre"), QString("fr"));
+        QCOMPARE(Language::fromTag("ger"), QString("de"));
+        QCOMPARE(Language::fromTag("zh-Hant-TW"), QString("zh"));
+        QCOMPARE(Language::fromTag("cmn"), QString("zh"));
+        // Kokoro's espeak codes, as its voices give them.
+        QCOMPARE(Language::fromTag("en-gb"), QString("en"));
+        QCOMPARE(Language::fromTag("fr-fr"), QString("fr"));
+        QCOMPARE(Language::fromTag("pt-br"), QString("pt"));
+        for (const char *none : {"", "und", "mul", "zxx", "Auto", "xx", "klingon"})
+            QVERIFY2(Language::fromTag(none).isEmpty(), none);
+        QCOMPARE(Language::name("pt"), QString("Portuguese"));
+        QVERIFY(Language::name("xx").isEmpty());
+    }
+
+    void languageIsGuessedFromTheText() {
+        for (const char *code : {"en", "pt", "es", "fr", "it", "de", "nl", "ru", "uk", "zh", "ja", "ko", "hi"}) {
+            const Language::Guess guess = Language::guess(storyIn(code));
+            QVERIFY2(guess.code == code, qPrintable(QString("%1 guessed as %2").arg(code, guess.code)));
+            QVERIFY(guess.confidence > 0);
+        }
+        // A long text is sure; a line or two never is, nor a language with
+        // no list of little words, nor code.
+        QVERIFY(Language::guess(storyIn("pt").repeated(3)).confidence >= Language::StrongGuess);
+        QVERIFY(Language::guess(storyIn("en").repeated(3)).confidence >= Language::StrongGuess);
+        QVERIFY(Language::guess("The house is on the hill.").code.isEmpty());
+        QVERIFY(Language::guess(storyIn("pl")).code.isEmpty());
+        QVERIFY(Language::guess("for (int i = 0; i < n; ++i) { x[i] = y[i] * 2; } return x;").code.isEmpty());
+        QVERIFY(Language::guess("").code.isEmpty());
+    }
+
+    void bookLanguageComesFromItsMetadataFirst() {
+        QTemporaryDir dir;
+        const QStringList portuguese(3, storyIn("pt"));
+        auto load = [&](const QString &name, const QString &tag, const QStringList &paragraphs) {
+            const QString path = dir.filePath(name);
+            Fixtures::writeLanguageEpub(path, tag, paragraphs);
+            QString error;
+            auto book = BookLoader::load(path, &error);
+            return book ? std::pair{book->language, book->languageSource} : std::pair{QString("failed"), error};
+        };
+        QCOMPARE(load("a.epub", "pt-BR", portuguese), std::pair(QString("pt"), QString("metadata")));
+        // Made from an English template: the text overrules it.
+        QCOMPARE(load("b.epub", "en", portuguese), std::pair(QString("pt"), QString("text")));
+        // Too little text to be sure: the metadata stands.
+        QCOMPARE(load("c.epub", "pt", {"Hello there."}), std::pair(QString("pt"), QString("metadata")));
+        QCOMPARE(load("d.epub", "", {storyIn("es")}), std::pair(QString("es"), QString("text")));
+        QCOMPARE(load("e.epub", "und", {storyIn("fr")}), std::pair(QString("fr"), QString("text")));
+        QCOMPARE(load("f.epub", "", {"Hi."}), std::pair(QString(), QString()));
+
+        // The other formats' metadata.
+        QString error;
+        Fixtures::writeFb2(dir.filePath("t.fb2"));
+        QCOMPARE(BookLoader::load(dir.filePath("t.fb2"), &error)->language, QString("ru"));
+        Fixtures::writeDocx(dir.filePath("t.docx"));
+        QCOMPARE(BookLoader::load(dir.filePath("t.docx"), &error)->language, QString("en"));
+        Fixtures::writeOdt(dir.filePath("t.odt"));
+        QCOMPARE(BookLoader::load(dir.filePath("t.odt"), &error)->language, QString("de"));
+        write(dir.filePath("t.md"), "---\ntitle: Uno\nlang: \"es-MX\"\n---\n\n# Uno\n\nHello.\n");
+        QCOMPARE(BookLoader::load(dir.filePath("t.md"), &error)->language, QString("es"));
+        // A "lang:" after the front matter is text, not metadata.
+        write(dir.filePath("u.md"), "---\ntitle: Uno\n---\n\nlang: es\n\nHello.\n");
+        QVERIFY(BookLoader::load(dir.filePath("u.md"), &error)->language.isEmpty());
+        write(dir.filePath("t.html"), "<!DOCTYPE html><html lang='it-IT'><head><title>T</title></head><body><p>Hello.</p></body></html>");
+        QCOMPARE(BookLoader::load(dir.filePath("t.html"), &error)->language, QString("it"));
+        write(dir.filePath("t.txt"), "Title: Contes\nAuthor: Someone\nLanguage: French\n\nHello.\n");
+        QCOMPARE(BookLoader::load(dir.filePath("t.txt"), &error)->language, QString("fr"));
+    }
+
+    void voiceSuggestionOffersOnlyInstalledVoices() {
+        QSettings().remove("voice");
+        const auto cleanup = qScopeGuard([] { QSettings().remove("voice"); });
+        VoiceSettings heart = VoiceSettings::recommended(Engine::Kokoro);
+        heart.voice = "af_heart";
+        const QStringList kokoro{Engine::Kokoro}, both{Engine::Kokoro, Engine::Qwen}, qwen{Engine::Qwen};
+
+        // Nothing to say: the voice reads the language, it isn't known, or
+        // the voice isn't installed (the window says that already).
+        QCOMPARE(VoiceSuggestion::forBook("en", heart, kokoro).kind, VoiceSuggestion::None);
+        QCOMPARE(VoiceSuggestion::forBook({}, heart, kokoro).kind, VoiceSuggestion::None);
+        QCOMPARE(VoiceSuggestion::forBook("pt", heart, qwen).kind, VoiceSuggestion::None);
+        VoiceSettings emma = heart;
+        emma.voice = "bf_emma";
+        QCOMPARE(VoiceSuggestion::forBook("en", emma, kokoro).kind, VoiceSuggestion::None);
+
+        // Another Kokoro voice, of the same sex as the one replaced.
+        VoiceSuggestion s = VoiceSuggestion::forBook("pt", heart, kokoro);
+        QCOMPARE(s.kind, VoiceSuggestion::OtherVoice);
+        QCOMPARE(s.engine, Engine::Kokoro);
+        QCOMPARE(s.voice, QString("pf_dora"));
+        VoiceSettings michael = heart;
+        michael.voice = "am_michael";
+        QCOMPARE(VoiceSuggestion::forBook("pt", michael, kokoro).voice, QString("pm_alex"));
+        QCOMPARE(VoiceSuggestion::forBook("fr", michael, kokoro).voice, QString("ff_siwis"));
+
+        // German: only Qwen3-TTS reads it. Installed, switch to it; not,
+        // say so and name it.
+        s = VoiceSuggestion::forBook("de", heart, both);
+        QCOMPARE(s.kind, VoiceSuggestion::OtherEngine);
+        QCOMPARE(s.engine, Engine::Qwen);
+        QCOMPARE(s.voice, VoiceSettings::load(Engine::Qwen).voice);
+        QCOMPARE(s.language, QString("German"));
+        s = VoiceSuggestion::forBook("de", heart, kokoro);
+        QCOMPARE(s.kind, VoiceSuggestion::NoVoice);
+        QCOMPARE(s.engine, Engine::Qwen);
+        QCOMPARE(VoiceSuggestion::forBook("pl", heart, both).kind, VoiceSuggestion::NoVoice);
+        QVERIFY(VoiceSuggestion::forBook("pl", heart, both).engine.isEmpty());
+
+        // Qwen3-TTS keeps its voice and changes the language it reads.
+        VoiceSettings ryan = VoiceSettings::recommended(Engine::Qwen);
+        ryan.voice = "ryan";
+        ryan.language = "English";
+        s = VoiceSuggestion::forBook("pt", ryan, qwen);
+        QCOMPARE(s.kind, VoiceSuggestion::SetLanguage);
+        QCOMPARE(s.voice, QString("ryan"));
+        QCOMPARE(s.language, QString("Portuguese"));
+        // Set to detect the language, it reads any it has.
+        ryan.language = "Auto";
+        QCOMPARE(VoiceSuggestion::forBook("pt", ryan, qwen).kind, VoiceSuggestion::None);
+        QVERIFY(VoiceSuggestion::readsIn(ryan).isEmpty());
+        // Hindi is Kokoro's alone; the user's own Kokoro voice comes first
+        // when it reads it.
+        s = VoiceSuggestion::forBook("hi", ryan, both);
+        QCOMPARE(s.kind, VoiceSuggestion::OtherEngine);
+        QCOMPARE(s.engine, Engine::Kokoro);
+        QCOMPARE(s.voice, QString("hf_alpha"));
+        VoiceSettings saved = VoiceSettings::load(Engine::Kokoro);
+        saved.voice = "hm_omega";
+        saved.save();
+        QCOMPARE(VoiceSuggestion::forBook("hi", ryan, both).voice, QString("hm_omega"));
+        s = VoiceSuggestion::forBook("hi", ryan, qwen);
+        QCOMPARE(s.kind, VoiceSuggestion::NoVoice);
+        QCOMPARE(s.engine, Engine::Kokoro);
+    }
+
+    void narratorSuggestsAVoiceForTheBooksLanguage() {
+        QSettings().remove("voice");
+        QTemporaryDir dir;
+        auto book = std::make_shared<Book>(sampleBook(dir.filePath("farol.txt")));
+        book->language = "pt";
+        {
+            Narrator narrator;
+            narrator.setOverrides(fakeKoko(dir).binary, dir.path());
+            narrator.setVoice("af_heart");
+            QSignalSpy changed(&narrator, &Narrator::languageSuggestionChanged);
+            narrator.setBook(book);
+            QCOMPARE(changed.size(), 1);
+            QVariantMap s = narrator.languageSuggestion();
+            QCOMPARE(s.value("kind").toString(), QString("voice"));
+            QCOMPARE(s.value("bookLanguage").toString(), QString("Portuguese"));
+            QCOMPARE(s.value("voiceName").toString(), QString("Heart"));
+            QCOMPARE(s.value("voiceLanguage").toString(), QString("English"));
+            QCOMPARE(s.value("targetVoice").toString(), QString("pf_dora"));
+            QCOMPARE(s.value("targetVoiceName").toString(), QString("Dora"));
+            narrator.acceptLanguageSuggestion();
+            QCOMPARE(narrator.voice(), QString("pf_dora"));
+            QVERIFY(narrator.languageSuggestion().isEmpty());
+            // Back to a voice that doesn't read it, the notice is back.
+            narrator.setVoice("am_adam");
+            QCOMPARE(narrator.languageSuggestion().value("targetVoice").toString(), QString("pm_alex"));
+            // Dismissed, it stays away for this book, but not for others.
+            narrator.dismissLanguageSuggestion();
+            QVERIFY(narrator.languageSuggestion().isEmpty());
+            narrator.setVoice("af_heart");
+            QVERIFY(narrator.languageSuggestion().isEmpty());
+            auto other = std::make_shared<Book>(sampleBook(dir.filePath("outro.txt")));
+            other->language = "pt";
+            narrator.setBook(other);
+            QCOMPARE(narrator.languageSuggestion().value("kind").toString(), QString("voice"));
+            // No book, no notice.
+            narrator.setBook(nullptr);
+            QVERIFY(narrator.languageSuggestion().isEmpty());
+        }
+        {
+            Narrator narrator;
+            narrator.setBook(book);
+            QVERIFY(narrator.languageSuggestion().isEmpty());
+            narrator.setOverrides({}, {});
+        }
+        QSettings().remove("voice");
+    }
+
     void everyVoiceStringHasAPortugueseTranslation() {
         QFile file(QFINDTESTDATA("../src/i18n/pt-BR.json"));
         QVERIFY(file.open(QIODevice::ReadOnly));
@@ -1584,7 +1829,8 @@ private slots:
         int found = 0;
         for (const QString name : {"src/SettingsPanel.qml", "src/ExportDialog.qml", "src/ReaderView.qml",
                                    "src/NarrationBar.qml", "src/HelpOverlay.qml", "src/StatsPanel.qml",
-                                   "src/LibraryView.qml", "src/stats.cpp"}) {
+                                   "src/LibraryView.qml", "src/stats.cpp",
+                                   "src/LanguageNotice.qml"}) {
             QFile source(QString(OMAREADER_SOURCE) + "/" + name);
             QVERIFY(source.open(QIODevice::ReadOnly));
             const QString text = QString::fromUtf8(source.readAll());
@@ -4242,6 +4488,112 @@ private slots:
         app.grab("stats-panel-library");
         QTest::keyClick(app.window, Qt::Key_Escape);
         QTRY_VERIFY(!panel->property("opened").toBool());
+    }
+
+    void languageNoticeOffersAVoiceAboveTheNarrationBar() {
+        QSettings().remove("reader");
+        QSettings().remove("voice");
+        const auto cleanup = qScopeGuard([] { QSettings().remove("voice"); });
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        app.narrator.setOverrides(fakeKoko(dir).binary, dir.path());
+        app.narrator.setVoice("af_heart");
+        QVERIFY(app.show());
+        QVERIFY(app.items("languageNotice").isEmpty());
+        // Pasted text has no metadata: its words say it is Portuguese.
+        QVERIFY(app.reader.addText("O farol", QStringList(3, storyIn("pt")).join("\n\n")));
+        QTRY_COMPARE(app.items("languageNotice").size(), 1);
+        QQuickItem *notice = app.items("languageNotice").first();
+        QQuickItem *text = app.items("languageNoticeText").value(0);
+        QQuickItem *accept = app.items("languageNoticeAccept").value(0);
+        QQuickItem *dismiss = app.items("languageNoticeDismiss").value(0);
+        QQuickItem *bar = app.items("narrationBar").value(0);
+        QVERIFY(text && accept && dismiss && bar);
+        QCOMPARE(text->property("text").toString(),
+                 QString("This book seems to be written in Portuguese, but Heart reads in English."));
+        QCOMPARE(accept->property("text").toString(), QString("Read with Dora"));
+        QTest::mouseMove(app.window, QPoint(20, 300));
+
+        auto check = [&](const QString &name) {
+            const QImage shot = app.grab(name);
+            const QRect area = app.area(shot, notice);
+            if (!qEnvironmentVariableIsEmpty("OMAREADER_SCREENSHOTS"))
+                shot.copy(area.adjusted(-8, -8, 8, 8)).scaled(area.width() * 2, area.height() * 2)
+                    .save(qEnvironmentVariable("OMAREADER_SCREENSHOTS") + "/" + name + "-zoom.png");
+            // Inside the window and clear of the narration bar.
+            QVERIFY2(QRect(QPoint(0, 0), shot.size()).contains(area), qPrintable(name));
+            const QRect barArea = app.area(shot, bar);
+            QVERIFY2(area.bottom() < barArea.top(),
+                     qPrintable(QString("%1: notice ends at %2, the bar starts at %3").arg(name).arg(area.bottom()).arg(barArea.top())));
+            // Its text is drawn, and the button and the cross sit inside it,
+            // the text clear of them.
+            const QRect textArea = app.area(shot, text);
+            QVERIFY2(brightPixels(shot, textArea) > 100, qPrintable(name));
+            const QRect acceptArea = app.area(shot, accept), dismissArea = app.area(shot, dismiss);
+            QVERIFY(area.contains(acceptArea) && area.contains(dismissArea) && area.contains(textArea));
+            QVERIFY(textArea.right() < acceptArea.left() && acceptArea.right() < dismissArea.left());
+            // The button is filled with the accent, its label on it.
+            int accentFill = 0;
+            for (int y = acceptArea.top(); y <= acceptArea.bottom(); ++y)
+                for (int x = acceptArea.left(); x <= acceptArea.right(); ++x) {
+                    const QColor c = shot.pixelColor(x, y);
+                    accentFill += c.red() > 200 && c.green() > 170 && c.blue() < 80;
+                }
+            QVERIFY2(accentFill > acceptArea.width() * acceptArea.height() / 3, qPrintable(QString::number(accentFill)));
+            // The cross is centred on its button.
+            const QRect cross = brightBoxInCircle(shot, dismissArea, 150);
+            QVERIFY2(cross.isValid(), "no cross drawn");
+            const QPointF offset = QRectF(cross).center() - QRectF(dismissArea).center();
+            QVERIFY2(qAbs(offset.x()) <= 1.5 && qAbs(offset.y()) <= 1.5,
+                     qPrintable(QString("the cross is %1, %2 px off centre").arg(offset.x()).arg(offset.y())));
+        };
+        check("language-notice");
+        // In the narrowest window the text wraps rather than running under the button.
+        app.window->resize(640, 720);
+        QTRY_COMPARE(app.window->width(), 640);
+        check("language-notice-narrow");
+        app.window->resize(1100, 720);
+        QTRY_COMPARE(app.window->width(), 1100);
+
+        // Taking it switches the voice, and the notice goes.
+        QTest::mouseClick(app.window, Qt::LeftButton, {},
+                          accept->mapToScene(QPointF(accept->width() / 2, accept->height() / 2)).toPoint());
+        QTRY_COMPARE(app.narrator.voice(), QString("pf_dora"));
+        QTRY_VERIFY(app.items("languageNotice").isEmpty());
+
+        // Dismissed, it doesn't come back for the book.
+        app.narrator.setVoice("af_heart");
+        QTRY_COMPARE(app.items("languageNotice").size(), 1);
+        QTest::mouseClick(app.window, Qt::LeftButton, {},
+                          dismiss->mapToScene(QPointF(dismiss->width() / 2, dismiss->height() / 2)).toPoint());
+        QTRY_VERIFY(app.items("languageNotice").isEmpty());
+        QCOMPARE(app.narrator.voice(), QString("af_heart"));
+        app.narrator.setOverrides({}, {});
+    }
+
+    void languageNoticeNamesAVoiceToInstall() {
+        QSettings().remove("reader");
+        QSettings().remove("voice");
+        const auto cleanup = qScopeGuard([] { QSettings().remove("voice"); });
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        app.narrator.setOverrides(fakeKoko(dir).binary, dir.path());
+        app.narrator.setVoice("af_heart");
+        QVERIFY(app.show());
+        QVERIFY(app.reader.addText("Der Leuchtturm", QStringList(3, storyIn("de")).join("\n\n")));
+        QTRY_COMPARE(app.items("languageNotice").size(), 1);
+        QCOMPARE(app.items("languageNoticeText").value(0)->property("text").toString(),
+                 QString("This book seems to be written in German, and no installed voice reads it."));
+        // Nothing to switch to, so no button; only how to get a voice.
+        QVERIFY(app.items("languageNoticeAccept").isEmpty());
+        QQuickItem *notice = app.items("languageNotice").first();
+        bool hint = false;
+        for (QQuickItem *item : notice->findChildren<QQuickItem *>())
+            hint |= item->isVisible()
+                    && item->property("text").toString() == "Qwen3-TTS reads it once installed: omareader setup --engine qwen";
+        QVERIFY(hint);
+        app.grab("language-notice-install");
+        app.narrator.setOverrides({}, {});
     }
 
     void narrationBarShowsTheSleepTimer() {

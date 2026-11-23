@@ -108,6 +108,13 @@ class Narrator : public QObject {
     Q_PROPERTY(int sleepMinutes READ sleepMinutes NOTIFY sleepChanged)
     Q_PROPERTY(bool sleepAtChapterEnd READ sleepAtChapterEnd NOTIFY sleepChanged)
     Q_PROPERTY(int sleepSecondsLeft READ sleepSecondsLeft NOTIFY sleepChanged)
+    // When the open book seems to be in a language the voice doesn't read:
+    // {kind: "voice", "language", "engine" or "none", bookLanguage (its
+    // English name), voiceName, voiceLanguage (what the voice reads, in
+    // English), engineName, and what to switch to: targetEngine,
+    // targetEngineName, targetVoice, targetVoiceName, installCommand}.
+    // Empty when they match, nothing is known, or it was dismissed.
+    Q_PROPERTY(QVariantMap languageSuggestion READ languageSuggestion NOTIFY languageSuggestionChanged)
 
 public:
     enum State { Stopped, Preparing, Playing, Paused };
@@ -155,6 +162,7 @@ public:
     int sleepMinutes() const { return m_sleep.minutes(); }
     bool sleepAtChapterEnd() const { return m_sleep.mode() == SleepTimer::ChapterEnd; }
     int sleepSecondsLeft() const;
+    QVariantMap languageSuggestion() const { return m_languageSuggestion; }
 
     void setEngine(const QString &engine);
     void setVoice(const QString &voice);
@@ -186,6 +194,10 @@ public:
     Q_INVOKABLE void sleepAfter(int minutes);
     Q_INVOKABLE void sleepAtEndOfChapter();
     Q_INVOKABLE void cancelSleep();
+    // Switches to the voice the language suggestion names.
+    Q_INVOKABLE void acceptLanguageSuggestion();
+    // Stops suggesting a voice for the open book, for good.
+    Q_INVOKABLE void dismissLanguageSuggestion();
     // For tests: counts listening time as the voice would, with no audio.
     void listenForTests(qint64 ms);
     // For tests: puts the narration at a word in a state, with no audio, so
@@ -213,6 +225,7 @@ signals:
     void previewChanged();
     void finishedBook();
     void sleepChanged();
+    void languageSuggestionChanged();
     // The sleep timer paused the narration.
     void fellAsleep();
     // This much more of the book's audio was played, counted from the frames
@@ -258,6 +271,10 @@ private:
     // Announces the audio played since the last count, once there is at
     // least minimumMs of it.
     void countHeard(qint64 minimumMs);
+    void updateLanguageSuggestion();
+    // What a dismissed suggestion is remembered by: the book's file hash,
+    // or its path when it has none.
+    QString bookKey() const;
 
     BookPtr m_book;
     VoiceSettings m_settings;
@@ -287,6 +304,9 @@ private:
     AudioPlayer m_previewPlayer;
     QTimer m_previewTicker;
     bool m_previewing = false;
+
+    VoiceSuggestion m_suggestion;
+    QVariantMap m_languageSuggestion;
 
     SleepTimer m_sleep;
     // The played frame the sleep timer last counted up to.

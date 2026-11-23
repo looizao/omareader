@@ -1,6 +1,7 @@
 #include "voicesettings.h"
 
 #include "kokoro.h"
+#include "language.h"
 
 #include <QSettings>
 #include <cmath>
@@ -397,4 +398,86 @@ QString VoiceSettings::selectedEngine() {
 void VoiceSettings::setSelectedEngine(const QString &engine) {
     if (Engine::isKnown(engine))
         QSettings().setValue("voice/engine", engine);
+}
+
+QString VoiceSuggestion::readsIn(const VoiceSettings &settings) {
+    if (settings.engine == Engine::Qwen)
+        return Language::fromTag(settings.language);
+    return Language::fromTag(Voices::languageFor(settings.voice));
+}
+
+namespace {
+
+// The engine's voice for the language: the one the user last chose on that
+// engine when it reads it, else one of the same sex as the voice being
+// replaced, else the first.
+QString voiceFor(const QString &engine, const QString &language, const QString &replacing) {
+    const QString saved = VoiceSettings::load(engine).voice;
+    if (engine == Engine::Qwen)
+        return saved; // every Qwen3-TTS voice reads every language it has
+    if (Language::fromTag(Voices::languageFor(saved)) == language)
+        return saved;
+    // Kokoro's ids say the sex second: af_heart, am_michael.
+    const QChar sex = replacing.size() > 1 ? replacing.at(1) : QChar();
+    QString first;
+    for (const EngineVoice &v : EngineCatalog::voices(engine)) {
+        if (Language::fromTag(v.language) != language)
+            continue;
+        if (first.isEmpty())
+            first = v.id;
+        if (v.id.size() > 1 && v.id.at(1) == sex)
+            return v.id;
+    }
+    return first;
+}
+
+// The engine's language setting for the language, for engines that have one.
+QString settingFor(const QString &engine, const QString &language) {
+    for (const EngineLanguage &l : EngineCatalog::languages(engine))
+        if (Language::fromTag(l.id) == language)
+            return l.id;
+    return {};
+}
+
+bool reads(const QString &engine, const QString &language) {
+    if (engine == Engine::Qwen)
+        return !settingFor(engine, language).isEmpty();
+    for (const EngineVoice &v : EngineCatalog::voices(engine))
+        if (Language::fromTag(v.language) == language)
+            return true;
+    return false;
+}
+
+}
+
+VoiceSuggestion VoiceSuggestion::forBook(const QString &bookLanguage, const VoiceSettings &current,
+                                         const QStringList &installedEngines) {
+    VoiceSuggestion s;
+    // With the voice not installed, the window already says so; and with no
+    // language known, there is nothing to compare.
+    if (bookLanguage.isEmpty() || !installedEngines.contains(current.engine))
+        return s;
+    const QString voiceReads = readsIn(current);
+    // Qwen3-TTS set to detect the language reads any it knows.
+    if (voiceReads == bookLanguage || (voiceReads.isEmpty() && reads(current.engine, bookLanguage)))
+        return s;
+    s.bookLanguage = bookLanguage;
+    auto switchTo = [&](Kind kind, const QString &engine) {
+        s.kind = kind;
+        s.engine = engine;
+        s.voice = engine == current.engine && engine == Engine::Qwen ? current.voice
+                                                                     : voiceFor(engine, bookLanguage, current.voice);
+        s.language = settingFor(engine, bookLanguage);
+        return s;
+    };
+    if (reads(current.engine, bookLanguage))
+        return switchTo(current.engine == Engine::Qwen ? SetLanguage : OtherVoice, current.engine);
+    for (const QString &engine : Engine::all())
+        if (engine != current.engine && installedEngines.contains(engine) && reads(engine, bookLanguage))
+            return switchTo(OtherEngine, engine);
+    s.kind = NoVoice;
+    for (const QString &engine : Engine::all())
+        if (!installedEngines.contains(engine) && reads(engine, bookLanguage))
+            s.engine = engine;
+    return s;
 }

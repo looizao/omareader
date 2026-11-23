@@ -1,5 +1,7 @@
 #include "narrator.h"
 
+#include "language.h"
+
 #include <QSettings>
 #include <cmath>
 
@@ -69,6 +71,9 @@ Narrator::Narrator(QObject *parent) : QObject(parent) {
         setError(message);
         stopPreview();
     });
+    // Engine changes announce the voice too.
+    connect(this, &Narrator::voiceChanged, this, &Narrator::updateLanguageSuggestion);
+    connect(this, &Narrator::setupChanged, this, &Narrator::updateLanguageSuggestion);
 }
 
 Narrator::~Narrator() {
@@ -87,6 +92,82 @@ void Narrator::setBook(BookPtr book) {
     m_word = -1;
     emit positionChanged();
     emit wordChanged();
+    updateLanguageSuggestion();
+}
+
+namespace {
+const char *DismissedKey = "voice/languageNoticeDismissed";
+// Enough books for years of reading; the oldest are forgotten first.
+constexpr int DismissedLimit = 500;
+
+QString voiceName(const QString &engine, const QString &voice) {
+    for (const EngineVoice &v : EngineCatalog::voices(engine))
+        if (v.id == voice)
+            return v.name;
+    return voice;
+}
+}
+
+QString Narrator::bookKey() const {
+    if (!m_book)
+        return {};
+    return m_book->fingerprint.isEmpty() ? m_book->path : m_book->fingerprint;
+}
+
+void Narrator::updateLanguageSuggestion() {
+    QStringList installed;
+    if (m_kokoroSetup.ready())
+        installed << Engine::Kokoro;
+    if (m_qwenSetup.ready())
+        installed << Engine::Qwen;
+    const bool dismissed = QSettings().value(DismissedKey).toStringList().contains(bookKey());
+    m_suggestion = m_book && !dismissed ? VoiceSuggestion::forBook(m_book->language, m_settings, installed)
+                                        : VoiceSuggestion{};
+    QVariantMap map;
+    if (m_suggestion.kind != VoiceSuggestion::None) {
+        static const char *kinds[] = {"", "voice", "language", "engine", "none"};
+        map = {{"kind", kinds[m_suggestion.kind]},
+               {"bookLanguage", Language::name(m_suggestion.bookLanguage)},
+               {"voiceName", voiceName(m_settings.engine, m_settings.voice)},
+               {"voiceLanguage", Language::name(VoiceSuggestion::readsIn(m_settings))},
+               {"engineName", Engine::displayName(m_settings.engine)},
+               {"targetEngine", m_suggestion.engine},
+               {"targetEngineName", m_suggestion.engine.isEmpty() ? QString() : Engine::displayName(m_suggestion.engine)},
+               {"targetVoice", m_suggestion.voice},
+               {"targetVoiceName", voiceName(m_suggestion.engine, m_suggestion.voice)},
+               {"installCommand", m_suggestion.kind != VoiceSuggestion::NoVoice || m_suggestion.engine.isEmpty()
+                                      ? QString()
+                                  : m_suggestion.engine == Engine::Qwen ? QStringLiteral("omareader setup --engine qwen")
+                                                                        : QStringLiteral("omareader setup")}};
+    }
+    if (map == m_languageSuggestion)
+        return;
+    m_languageSuggestion = map;
+    emit languageSuggestionChanged();
+}
+
+void Narrator::acceptLanguageSuggestion() {
+    const VoiceSuggestion s = m_suggestion;
+    if (s.kind == VoiceSuggestion::None || s.kind == VoiceSuggestion::NoVoice)
+        return;
+    setEngine(s.engine);
+    setVoice(s.voice);
+    if (!s.language.isEmpty())
+        setLanguage(s.language);
+}
+
+void Narrator::dismissLanguageSuggestion() {
+    const QString key = bookKey();
+    if (key.isEmpty())
+        return;
+    QSettings settings;
+    QStringList dismissed = settings.value(DismissedKey).toStringList();
+    dismissed.removeAll(key);
+    dismissed.append(key);
+    while (dismissed.size() > DismissedLimit)
+        dismissed.removeFirst();
+    settings.setValue(DismissedKey, dismissed);
+    updateLanguageSuggestion();
 }
 
 QString Narrator::problem() const {

@@ -108,3 +108,29 @@ struct VoiceSettings {
     static constexpr double MaximumSpeed = 2.0;
     static double clampSpeed(double speed);
 };
+
+// What to read a book with when the voice doesn't read the book's language.
+// Only engines already installed are suggested, since installing one means a
+// download the user starts themselves.
+struct VoiceSuggestion {
+    enum Kind {
+        None,        // the voice reads the book's language, or that is unknown
+        OtherVoice,  // another voice of the same engine reads it
+        SetLanguage, // the same Qwen3-TTS voice, set to read it
+        OtherEngine, // the other engine, installed, reads it
+        NoVoice,     // no installed voice reads it
+    };
+    Kind kind = None;
+    QString bookLanguage; // the ISO 639-1 code
+    // What to switch to; for NoVoice, an engine that would read it once
+    // installed, if there is one.
+    QString engine;
+    QString voice;
+    QString language; // Qwen only
+
+    // The ISO 639-1 code the voice reads in; empty when it reads whatever it
+    // is given (Qwen3-TTS set to detect the language).
+    static QString readsIn(const VoiceSettings &settings);
+    static VoiceSuggestion forBook(const QString &bookLanguage, const VoiceSettings &current,
+                                   const QStringList &installedEngines);
+};

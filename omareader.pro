@@ -30,6 +30,7 @@ HEADERS += \
     src/filepicker.h \
     src/highlight.h \
     src/kokoro.h \
+    src/language.h \
     src/library.h \
     src/narrator.h \
     src/portalfilepicker.h \
@@ -57,6 +58,7 @@ SOURCES += \
     src/exporter.cpp \
     src/highlight.cpp \
     src/kokoro.cpp \
+    src/language.cpp \
     src/library.cpp \
     src/narrator.cpp \
     src/portalfilepicker.cpp \

@@ -203,6 +203,16 @@ ApplicationWindow {
             }
         }
 
+        // The voice for the book's language, above the messages.
+        LanguageNotice {
+            id: languageNotice
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 104 + (banner.visible ? banner.height + 8 : 0)
+                                  + (exportNotice.visible ? exportNotice.height + 8 : 0)
+            width: Math.min(parent.width - 48, 680)
+        }
+
         ExportDialog {
             id: exportDialog
             objectName: "exportDialog"

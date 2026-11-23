@@ -147,6 +147,16 @@ the book's language. Qwen3-TTS has nine voices that each read English,
 Portuguese, Spanish, French, German, Italian, Russian, Chinese, Japanese and
 Korean; pick the language separately.
 
+When a book seems to be in a language the voice doesn't read, a notice above
+the controls says so and offers a voice that does, with one click: another
+Kokoro voice, Qwen3-TTS set to that language, or the other engine if it is
+installed. It only offers voices already on your computer, and says which
+engine would read the book if none is. The language comes from the book's
+metadata, or, when it has none or the text plainly says otherwise, from its
+commonest words and its script, all worked out offline. Dismissing the
+notice keeps it away for that book; `omareader info` shows the language it
+found.
+
 Press A for the voice settings. Engine, voice, language and speed sit at the
 top, with a preview button and a reset to the recommended settings. Advanced
 opens the rest, each with its range, current value and what it does: pauses
@@ -354,7 +364,7 @@ The commands need no display, so scripts and coding agents can use them. Each
 exits 0 or 1 with errors on stderr, and `--json` prints one JSON object.
 
 ```sh
-omareader info book.epub --json          # metadata and chapters
+omareader info book.epub --json          # metadata, language and chapters
 omareader text book.epub --chapter 3     # the text as omareader shows it
 omareader text book.pdf --spoken         # as the voice reads it, clutter left out
 omareader pronounce SQL sequel           # say SQL as "sequel"; no arguments lists them
