@@ -6,6 +6,8 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonParseError>
+#include <QLockFile>
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <algorithm>
@@ -30,17 +32,40 @@ bool capitals(const QString &written) {
 }
 
 // One entry as a pattern: its words with any run of spaces between them,
-// and either apostrophe for an apostrophe, since books curl them.
+// and either apostrophe for an apostrophe, since books curl them. The
+// pieces between apostrophes are escaped whole, never a UTF-16 unit at a
+// time, which would split an emoji's surrogate pair into an invalid pattern.
 QString patternFor(const QString &written) {
+    static const QRegularExpression apostrophe(QStringLiteral("['’]"));
     QStringList words;
     for (const QString &word : written.split(' ', Qt::SkipEmptyParts)) {
-        QString piece;
-        for (const QChar c : word)
-            piece += c == '\'' || c == QChar(0x2019) ? QStringLiteral("['’]") : QRegularExpression::escape(QString(c));
-        words.append(piece);
+        QStringList pieces;
+        for (const QString &piece : word.split(apostrophe))
+            pieces.append(QRegularExpression::escape(piece));
+        words.append(pieces.join(QStringLiteral("['’]")));
     }
     return words.join(QStringLiteral("\\s+"));
 }
+
+// An entry stands alone as a word: no letter right before or after it, and
+// no apostrophe joining it to one, so "Don" leaves "Don't" alone. The one
+// exception is a possessive's "'s" after it ("Hermione's").
+const QString &before() {
+    static const QString pattern = QStringLiteral("(?<![\\p{L}\\p{N}\\p{M}])(?<![\\p{L}\\p{N}\\p{M}]['’])");
+    return pattern;
+}
+const QString &after() {
+    static const QString pattern = QStringLiteral(
+        "(?![\\p{L}\\p{N}\\p{M}])(?!['’](?!s(?![\\p{L}\\p{N}\\p{M}]))[\\p{L}\\p{N}\\p{M}])");
+    return pattern;
+}
+
+constexpr auto Options = QRegularExpression::CaseInsensitiveOption | QRegularExpression::UseUnicodePropertiesOption;
+// Entries per compiled pattern: one pattern for a long list grows past
+// what the regex engine accepts, and then nothing at all would match.
+constexpr int ChunkSize = 100;
+// How long a change waits for another one (the window, a command) to finish.
+constexpr int LockWaitMs = 2000;
 
 }
 
@@ -61,15 +86,66 @@ bool Lexicon::valid(const QString &written, const QString &spoken) {
 
 Lexicon Lexicon::load(const QString &file) {
     Lexicon lexicon;
-    QFile in(file.isEmpty() ? defaultFile() : file);
-    if (!in.open(QIODevice::ReadOnly))
-        return lexicon;
-    const QJsonArray entries = QJsonDocument::fromJson(in.readAll()).object().value("entries").toArray();
-    for (const auto &value : entries) {
-        const QJsonObject entry = value.toObject();
-        lexicon.set(entry.value("written").toString(), entry.value("spoken").toString());
-    }
+    read(file, &lexicon);
     return lexicon;
+}
+
+bool Lexicon::read(const QString &file, Lexicon *lexicon, QString *error) {
+    *lexicon = Lexicon();
+    QFile in(file.isEmpty() ? defaultFile() : file);
+    if (!in.exists())
+        return true;
+    if (!in.open(QIODevice::ReadOnly)) {
+        if (error)
+            *error = in.errorString();
+        return false;
+    }
+    QJsonParseError parse;
+    const QJsonDocument document = QJsonDocument::fromJson(in.readAll(), &parse);
+    if (parse.error != QJsonParseError::NoError || !document.isObject()) {
+        if (error)
+            *error = parse.error != QJsonParseError::NoError ? parse.errorString() : QStringLiteral("not a JSON object");
+        return false;
+    }
+    for (const auto &value : document.object().value("entries").toArray()) {
+        const QJsonObject entry = value.toObject();
+        lexicon->set(entry.value("written").toString(), entry.value("spoken").toString());
+    }
+    return true;
+}
+
+bool Lexicon::update(const QString &file, const std::function<bool(Lexicon &)> &change, Lexicon *result,
+                     QString *error) {
+    const QString path = file.isEmpty() ? defaultFile() : file;
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    // Read, change and write under a lock, so two changes at once (the
+    // window and a command) can't each save over the other's.
+    QLockFile lock(path + ".lock");
+    lock.setStaleLockTime(10000);
+    if (!lock.tryLock(LockWaitMs)) {
+        if (error)
+            *error = QStringLiteral("another change to %1 is under way").arg(path);
+        return false;
+    }
+    Lexicon lexicon;
+    // A file that is there but can't be read is never saved over: that
+    // would throw away every entry in it.
+    QString readError;
+    if (!read(path, &lexicon, &readError)) {
+        if (error)
+            *error = QStringLiteral("could not read %1: %2").arg(path, readError);
+        return false;
+    }
+    if (!change(lexicon))
+        return false;
+    if (!lexicon.save(path)) {
+        if (error)
+            *error = QStringLiteral("could not save %1").arg(path);
+        return false;
+    }
+    if (result)
+        *result = lexicon;
+    return true;
 }
 
 bool Lexicon::save(const QString &file) const {
@@ -102,7 +178,7 @@ bool Lexicon::set(const QString &written, const QString &spoken) {
         m_entries[at] = entry;
     else
         m_entries.append(entry);
-    m_pattern.reset();
+    m_chunks.reset();
     return true;
 }
 
@@ -111,58 +187,91 @@ bool Lexicon::remove(const QString &written) {
     if (at < 0)
         return false;
     m_entries.removeAt(at);
-    m_pattern.reset();
+    m_chunks.reset();
     return true;
 }
 
 void Lexicon::compile() const {
-    m_groupEntry.clear();
-    if (m_entries.isEmpty()) {
-        m_pattern.reset();
-        return;
-    }
+    auto chunks = std::make_shared<QList<Chunk>>();
     // Longest first, since at any one place the first alternative that
-    // matches is taken: "New York City" before "New York".
+    // matches is taken: "New York City" before "New York". Between equals,
+    // an entry in capitals goes first, so "US" isn't hidden behind "us".
     QList<int> order;
     for (int i = 0; i < m_entries.size(); ++i)
         order.append(i);
     std::stable_sort(order.begin(), order.end(), [this](int a, int b) {
-        return m_entries.at(a).written.size() > m_entries.at(b).written.size();
+        const QString &x = m_entries.at(a).written, &y = m_entries.at(b).written;
+        if (x.size() != y.size())
+            return x.size() > y.size();
+        return capitals(x) && !capitals(y);
     });
     QStringList alternatives;
+    QList<int> entries;
+    auto flush = [&] {
+        if (alternatives.isEmpty())
+            return;
+        chunks->append({QRegularExpression(before() + "(?:" + alternatives.join('|') + ")" + after(), Options), entries});
+        alternatives.clear();
+        entries.clear();
+    };
     for (const int i : std::as_const(order)) {
         const QString &written = m_entries.at(i).written;
         const QString body = patternFor(written);
-        alternatives.append(capitals(written) ? "((?-i:" + body + "))" : "(" + body + ")");
-        m_groupEntry.append(i);
+        const QString alternative = capitals(written) ? "((?-i:" + body + "))" : "(" + body + ")";
+        // An entry the regex engine rejects is left out on its own, rather
+        // than taking every other entry down with it.
+        if (!QRegularExpression(before() + alternative + after(), Options).isValid())
+            continue;
+        alternatives.append(alternative);
+        entries.append(i);
+        if (alternatives.size() >= ChunkSize)
+            flush();
     }
-    const QString word = QStringLiteral("[\\p{L}\\p{N}\\p{M}]");
-    m_pattern = std::make_shared<const QRegularExpression>(
-        "(?<!" + word + ")(?:" + alternatives.join('|') + ")(?!" + word + ")",
-        QRegularExpression::CaseInsensitiveOption | QRegularExpression::UseUnicodePropertiesOption);
+    flush();
+    m_chunks = chunks;
 }
 
 QList<Lexicon::Match> Lexicon::find(const QString &text) const {
     QList<Match> found;
     if (m_entries.isEmpty())
         return found;
-    if (!m_pattern)
+    if (!m_chunks)
         compile();
-    if (!m_pattern || !m_pattern->isValid())
-        return found;
-    auto it = m_pattern->globalMatch(text);
-    while (it.hasNext()) {
-        const auto match = it.next();
-        if (match.capturedLength() == 0)
+    struct Candidate {
+        Match match;
+        bool capitals;
+    };
+    QList<Candidate> candidates;
+    for (const Chunk &chunk : std::as_const(*m_chunks)) {
+        if (!chunk.pattern.isValid())
             continue;
-        for (int group = 1; group <= m_groupEntry.size(); ++group) {
-            if (match.capturedStart(group) < 0)
+        auto it = chunk.pattern.globalMatch(text);
+        while (it.hasNext()) {
+            const auto match = it.next();
+            if (match.capturedLength() == 0)
                 continue;
-            found.append({int(match.capturedStart()), int(match.capturedEnd()),
-                          m_entries.at(m_groupEntry.at(group - 1)).spoken});
-            break;
+            for (int group = 1; group <= chunk.entries.size(); ++group) {
+                if (match.capturedStart(group) < 0)
+                    continue;
+                const Respelling &entry = m_entries.at(chunk.entries.at(group - 1));
+                candidates.append({{int(match.capturedStart()), int(match.capturedEnd()), entry.spoken},
+                                   capitals(entry.written)});
+                break;
+            }
         }
     }
+    // Each pattern's matches are already in order and apart; across them,
+    // the earliest wins, then the longest, then the one in capitals.
+    std::stable_sort(candidates.begin(), candidates.end(), [](const Candidate &a, const Candidate &b) {
+        if (a.match.start != b.match.start)
+            return a.match.start < b.match.start;
+        if (a.match.end != b.match.end)
+            return a.match.end > b.match.end;
+        return a.capitals && !b.capitals;
+    });
+    for (const Candidate &candidate : std::as_const(candidates))
+        if (found.isEmpty() || candidate.match.start >= found.last().end)
+            found.append(candidate.match);
     return found;
 }
 
@@ -322,25 +431,26 @@ QString Pronunciations::spokenFor(const QString &written) const {
 bool Pronunciations::set(const QString &written, const QString &spoken, const QString &original) {
     if (!Lexicon::valid(written, spoken))
         return false;
-    Lexicon lexicon = Lexicon::load(m_file);
-    if (!original.isEmpty() && Lexicon::key(original) != Lexicon::key(written))
-        lexicon.remove(original);
-    lexicon.set(written, spoken);
-    if (!lexicon.save(m_file))
+    Lexicon saved;
+    const bool ok = Lexicon::update(m_file, [&](Lexicon &lexicon) {
+        if (!original.isEmpty() && Lexicon::key(original) != Lexicon::key(written))
+            lexicon.remove(original);
+        return lexicon.set(written, spoken);
+    }, &saved);
+    if (!ok)
         return false;
-    m_lexicon = lexicon;
+    m_lexicon = saved;
     emit changed();
     return true;
 }
 
 bool Pronunciations::remove(const QString &written) {
-    Lexicon lexicon = Lexicon::load(m_file);
-    const bool removed = lexicon.remove(written);
-    if (removed && !lexicon.save(m_file))
+    Lexicon saved;
+    if (!Lexicon::update(m_file, [&](Lexicon &lexicon) { return lexicon.remove(written); }, &saved))
         return false;
-    m_lexicon = lexicon;
+    m_lexicon = saved;
     emit changed();
-    return removed;
+    return true;
 }
 
 void Pronunciations::reload() {

@@ -9,6 +9,7 @@
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
+#include <functional>
 #include <memory>
 
 // How the reader wants names, places and jargon said: each entry is a word
@@ -35,7 +36,16 @@ public:
     static QString defaultFile();
     // An empty lexicon when the file is missing or unreadable.
     static Lexicon load(const QString &file = {});
+    // The same, but false (with why) when the file is there and can't be
+    // read or parsed, as opposed to not there yet.
+    static bool read(const QString &file, Lexicon *lexicon, QString *error = nullptr);
     bool save(const QString &file = {}) const;
+    // Reads the file, applies change and saves the result, all under a lock
+    // so changes from the window and the command line never lose one
+    // another. Fails without saving when the file can't be read, when the
+    // lock stays taken, or when change returns false.
+    static bool update(const QString &file, const std::function<bool(Lexicon &)> &change, Lexicon *result = nullptr,
+                       QString *error = nullptr);
 
     // Entries match whole words, ignoring case, except an entry written in
     // capitals ("US", "SQL"), which matches only in capitals so it leaves
@@ -58,12 +68,17 @@ public:
     QList<Match> find(const QString &text) const;
 
 private:
+    // A compiled share of the entries: capture group k matches
+    // m_entries[entries[k - 1]].
+    struct Chunk {
+        QRegularExpression pattern;
+        QList<int> entries;
+    };
     void compile() const;
 
     QList<Respelling> m_entries;
     // Built on first use and shared by copies until either changes.
-    mutable std::shared_ptr<const QRegularExpression> m_pattern;
-    mutable QList<int> m_groupEntry; // capture group k matches m_entries[m_groupEntry[k - 1]]
+    mutable std::shared_ptr<const QList<Chunk>> m_chunks;
 };
 
 // A sentence as the voice is asked to say it.

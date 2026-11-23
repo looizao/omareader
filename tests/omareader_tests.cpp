@@ -8,6 +8,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLockFile>
 #include <QClipboard>
 #include <QGuiApplication>
 #include <QProcess>
@@ -451,6 +452,69 @@ private slots:
         const QVariantList entries = list.entries();
         QCOMPARE(entries.first().toMap().value("written").toString(), QString("Kubectl"));
         QCOMPARE(Lexicon::load(file).entries().size(), 5);
+    }
+
+    void lexiconStaysWholeWhateverItHolds() {
+        // An entry with an emoji, or a very long list, leaves every other
+        // entry working.
+        Lexicon lexicon;
+        QVERIFY(lexicon.set("Hermione", "Her-my-oh-nee"));
+        QVERIFY(lexicon.set(QString::fromUtf8("A\xF0\x9F\x98\x80"), "ay"));
+        auto said = [&](const QString &text) {
+            QString out = text;
+            const auto found = lexicon.find(text);
+            for (int i = int(found.size()) - 1; i >= 0; --i)
+                out.replace(found[i].start, found[i].end - found[i].start, found[i].spoken);
+            return out;
+        };
+        QCOMPARE(said(QString::fromUtf8("Hermione and A\xF0\x9F\x98\x80 here")), QString("Her-my-oh-nee and ay here"));
+        for (int i = 0; i < 1001; ++i)
+            QVERIFY(lexicon.set(QString("term%1").arg(i), QString("word %1").arg(i)));
+        QCOMPARE(said("term0, term999 and term1000 with Hermione"),
+                 QString("word 0, word 999 and word 1000 with Her-my-oh-nee"));
+
+        // An entry in capitals wins over the same word in any case, whichever came first.
+        Lexicon cases;
+        QVERIFY(cases.set("us", "uss"));
+        QVERIFY(cases.set("US", "you ess"));
+        QVERIFY(cases.set("Don", "Dawn"));
+        QString text = "Tell us about the US. Don't go, Don's car, Don. O'Don stays.";
+        const auto found = cases.find(text);
+        for (int i = int(found.size()) - 1; i >= 0; --i)
+            text.replace(found[i].start, found[i].end - found[i].start, found[i].spoken);
+        // A contraction is one word, and stays; a possessive keeps its ending.
+        QCOMPARE(text, QString("Tell uss about the you ess. Don't go, Dawn's car, Dawn. O'Don stays."));
+    }
+
+    void pronunciationsNeverSaveOverWhatTheyCantRead() {
+        QTemporaryDir dir;
+        const QString file = dir.filePath("pronunciations.json");
+        const QByteArray broken = "{\"entries\": [{\"written\": \"Hermione\", \"spoken\": \"Her-my-oh-nee\"}";
+        write(file, broken);
+        Pronunciations list(file);
+        QVERIFY(!list.set("SQL", "sequel"));
+        QVERIFY(!list.remove("Hermione"));
+        QFile in(file);
+        QVERIFY(in.open(QIODevice::ReadOnly));
+        QCOMPARE(in.readAll(), broken);
+        in.close();
+        Lexicon lexicon;
+        QString error;
+        QVERIFY(!Lexicon::read(file, &lexicon, &error));
+        QVERIFY(!error.isEmpty());
+        QVERIFY(Lexicon::read(dir.filePath("missing.json"), &lexicon));
+        QVERIFY(lexicon.isEmpty());
+
+        // While another change holds the file, this one waits, then gives
+        // up rather than saving over it.
+        QFile::remove(file);
+        QLockFile other(file + ".lock");
+        QVERIFY(other.tryLock(0));
+        QVERIFY(!list.set("SQL", "sequel"));
+        other.unlock();
+        QVERIFY(list.set("SQL", "sequel"));
+        QVERIFY(list.set("Hermione", "Her-my-oh-nee"));
+        QCOMPARE(Lexicon::load(file).entries().size(), 2);
     }
 
     void utteranceRespellsTheTextAndKeepsThePageWords() {

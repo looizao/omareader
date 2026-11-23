@@ -625,21 +625,22 @@ int pronounce(const QStringList &arguments) {
     if (!command.parse(arguments))
         return command.parser.isSet("help") ? 0 : 1;
     const QStringList positional = command.parser.positionalArguments();
-    Lexicon lexicon = Lexicon::load();
+    QString error;
     if (command.parser.isSet("remove")) {
         if (!positional.isEmpty())
             return fail("Use: omareader pronounce --remove <written>");
         const QString written = command.parser.value("remove");
-        if (!lexicon.remove(written))
-            return fail(QString("No pronunciation is saved for \"%1\".").arg(written));
-        if (!lexicon.save())
-            return fail("Could not save " + Lexicon::defaultFile());
+        bool missing = false;
+        if (!Lexicon::update({}, [&](Lexicon &lexicon) { return lexicon.remove(written) || (missing = true, false); },
+                             nullptr, &error))
+            return fail(missing ? QString("No pronunciation is saved for \"%1\".").arg(written) : error);
     } else if (positional.size() == 2) {
-        if (!lexicon.set(positional.at(0), positional.at(1)))
+        if (!Lexicon::valid(positional.at(0), positional.at(1)))
             return fail("Both the written form and how it sounds need a letter or a digit, and the written form "
                         "at most six words.");
-        if (!lexicon.save())
-            return fail("Could not save " + Lexicon::defaultFile());
+        if (!Lexicon::update({}, [&](Lexicon &lexicon) { return lexicon.set(positional.at(0), positional.at(1)); },
+                             nullptr, &error))
+            return fail(error);
     } else if (!positional.isEmpty()) {
         return fail("Use: omareader pronounce [<written> <spoken>] [--remove <written>] [--json]");
     }
