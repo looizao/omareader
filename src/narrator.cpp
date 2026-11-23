@@ -588,10 +588,6 @@ void Narrator::onSentenceFailed(int id) {
     appendReady();
 }
 
-double Narrator::pauseAfter(int sentence) const {
-    return m_book ? Synthesis::pauseAfter(*m_book, sentence, m_settings) : 0;
-}
-
 void Narrator::appendReady() {
     if (!m_book || m_state == Stopped)
         return;
@@ -612,7 +608,7 @@ void Narrator::appendReady() {
         m_player.append(it->audio.samples);
         // The pause belongs to the stream, not to the sentence: the word
         // highlight stays on the last word through it.
-        const qint64 silence = qint64(std::llround(pauseAfter(m_nextToAppend) * Synthesizer::SampleRate));
+        const qint64 silence = Synthesis::pauseFramesAfter(*m_book, m_nextToAppend, m_settings);
         if (silence > 0)
             m_player.append(QByteArray(silence * qint64(sizeof(float)), '\0'));
         m_ready.erase(it);

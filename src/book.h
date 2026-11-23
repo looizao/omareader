@@ -94,6 +94,10 @@ namespace Text {
 // word boundaries so each stays a comfortable size for the voice.
 QList<QPair<int, int>> sentenceRanges(const QString &text, int maxLength = 320);
 QList<WordSpan> words(const QString &text, int start, int end);
+// Whether text ends a sentence: its last mark, past any closing quotes or
+// brackets, is a full stop, a question or exclamation mark, or an ellipsis,
+// rather than the comma or semicolon a long sentence is broken at.
+bool endsSentence(const QString &text);
 // The parts of a paragraph that sound bad spoken and say nothing a listener
 // misses: citation markers ("[12]", "[Bro96]"), web addresses, bracketed
 // editorial asides ("[sic]") and parenthesised cross-references ("(see

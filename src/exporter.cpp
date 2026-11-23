@@ -407,9 +407,9 @@ void Exporter::writeReady() {
                 return;
             writeSamples(it->audio.samples);
             m_ready.erase(it);
-            const double pause = Synthesis::pauseAfter(*m_book, id, m_options.synthesis.voice);
-            if (pause > 0)
-                writeSamples(QByteArray(qsizetype(pause * m_sampleRate) * qsizetype(sizeof(float)), '\0'));
+            const qint64 silence = Synthesis::pauseFramesAfter(*m_book, id, m_options.synthesis.voice);
+            if (silence > 0)
+                writeSamples(QByteArray(silence * qint64(sizeof(float)), '\0'));
         }
         m_doneWords += int(sentence.words.size());
         ++m_next;

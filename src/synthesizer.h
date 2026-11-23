@@ -33,9 +33,15 @@ struct SynthesisOptions {
 };
 
 namespace Synthesis {
-// The silence after a sentence: the paragraph or heading pause when it ends
-// one, otherwise none. Narration and exports pause alike.
+// The silence after a sentence, before the next one the voice reads: the
+// chapter pause where a chapter ends, the heading or paragraph pause where
+// one of those does, and otherwise the sentence pause, unless the sentence
+// is only part of a long one broken for the voice. Narration and exports
+// pause alike.
 double pauseAfter(const Book &book, int sentence, const VoiceSettings &voice);
+// The same pause as silent frames at the engines' sample rate, rounded the
+// same way for narration and exports so both last exactly as long.
+qint64 pauseFramesAfter(const Book &book, int sentence, const VoiceSettings &voice);
 // Everything needed to speak with these voice settings, finding each engine
 // where the user's settings (the koko and model overrides) say it is.
 SynthesisOptions optionsFor(const VoiceSettings &voice);

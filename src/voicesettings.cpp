@@ -50,10 +50,16 @@ QList<TuningParameter> sharedParameters() {
         number("volume", "Volume",
                "Louder or softer than the voice's own level. Past 100% the loudest syllables may be clipped.", 50,
                200, 5, 100, "%"),
+        number("sentencePause", "Pause after a sentence",
+               "Extra silence after each sentence that ends inside a paragraph, on top of the voice's own breath.",
+               0, 1.5, 0.05, 0, "s"),
         number("paragraphPause", "Pause after a paragraph",
                "Silence after each paragraph, so you hear where one ends and the next begins.", 0, 2, 0.05, 0.45, "s"),
         number("headingPause", "Pause after a heading", "Silence after a chapter title or a heading.", 0, 3, 0.05,
                0.9, "s"),
+        number("chapterPause", "Pause after a chapter",
+               "Silence where one chapter ends and the next begins, as between an audiobook's tracks.", 0, 5, 0.05,
+               2, "s"),
     };
 }
 

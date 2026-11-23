@@ -91,6 +91,13 @@ QList<WordSpan> words(const QString &text, int start, int end) {
     return spans;
 }
 
+bool endsSentence(const QString &text) {
+    int i = int(text.size()) - 1;
+    while (i >= 0 && (text.at(i).isSpace() || QStringLiteral("\"'”’»)]}*_").contains(text.at(i))))
+        --i;
+    return i >= 0 && QStringLiteral(".!?…。！？").contains(text.at(i));
+}
+
 namespace {
 // The words before " [3]" that make it a value rather than a citation, as
 // in "the logits are [1, 2]" or "a shape of [4]", or that point at the

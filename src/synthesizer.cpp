@@ -21,13 +21,27 @@ double Synthesis::pauseAfter(const Book &book, int sentence, const VoiceSettings
     if (sentence < 0 || sentence >= book.sentenceCount())
         return 0;
     const Sentence &current = book.sentences.at(sentence);
-    const bool lastInParagraph = sentence + 1 >= book.sentenceCount()
-                                 || book.sentences.at(sentence + 1).paragraph != current.paragraph
-                                 || book.sentences.at(sentence + 1).chapter != current.chapter;
-    if (!lastInParagraph)
-        return 0;
-    const int level = book.chapters.at(current.chapter).paragraphs.at(current.paragraph).level;
-    return level > 0 ? voice.number("headingPause") : voice.number("paragraphPause");
+    // The pause belongs to the gap before the next sentence the voice
+    // reads, so a footnote or a sentence of nothing but clutter in between
+    // doesn't swallow the paragraph or chapter break it sits on.
+    int next = sentence + 1;
+    while (next < book.sentenceCount() && !book.sentences.at(next).speakable())
+        ++next;
+    // The end of the book ends its last chapter too, which leaves an
+    // exported book's last file with the same tail as the others.
+    if (next >= book.sentenceCount() || book.sentences.at(next).chapter != current.chapter)
+        return voice.number("chapterPause");
+    if (book.sentences.at(next).paragraph != current.paragraph) {
+        const int level = book.chapters.at(current.chapter).paragraphs.at(current.paragraph).level;
+        return level > 0 ? voice.number("headingPause") : voice.number("paragraphPause");
+    }
+    // A long sentence broken at a comma or a semicolon is still one
+    // sentence, and a pause in the middle of it would sound like a stumble.
+    return Text::endsSentence(book.sentenceText(sentence)) ? voice.number("sentencePause") : 0;
+}
+
+qint64 Synthesis::pauseFramesAfter(const Book &book, int sentence, const VoiceSettings &voice) {
+    return qint64(std::llround(pauseAfter(book, sentence, voice) * Synthesizer::SampleRate));
 }
 
 SynthesisOptions Synthesis::optionsFor(const VoiceSettings &voice) {

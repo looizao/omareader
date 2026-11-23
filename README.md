@@ -159,12 +159,20 @@ found.
 
 Press A for the voice settings. Engine, voice, language and speed sit at the
 top, with a preview button and a reset to the recommended settings. Advanced
-opens the rest, each with its range, current value and what it does: pauses
-and volume for both engines, a second voice to blend for Kokoro, and for
+opens the rest, each with its range, current value and what it does: volume
+and pauses for both engines, a second voice to blend for Kokoro, and for
 Qwen3-TTS the model, the device, how varied the intonation is, and a take
 number for another reading of the same text. Each engine remembers its own
 settings. Changing one while reading rebuilds the audio ahead from the
 sentence you are on.
+
+The pauses set the silence after a sentence, a paragraph, a heading and a
+chapter, so a long listen breathes like an audiobook. A sentence pause comes
+on top of the voice's own breath, only where a sentence really ends (not
+where a long one is broken for the voice), and a break the voice skips over,
+such as a PDF footnote at the end of a chapter, still gets its pause.
+Exports leave exactly the same silences as reading aloud, so each chapter
+of an exported audiobook ends with the chapter pause.
 
 ### Pronunciation
 

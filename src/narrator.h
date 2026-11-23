@@ -261,7 +261,6 @@ private:
     void restart();
     void settingsChanged();
     void ensureSynthesizer();
-    double pauseAfter(int sentence) const;
     void setPreviewing(bool previewing);
     // Counts what was heard since the last check and pauses if the stream
     // reached the sleep timer's stopping point; true when it did.

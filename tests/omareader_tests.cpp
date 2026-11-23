@@ -1539,7 +1539,7 @@ private slots:
         QVERIFY(!Tuning::find(Tuning::parameters(Engine::Kokoro), "temperature"));
         QVERIFY(!Tuning::find(Tuning::parameters(Engine::Qwen), "blend"));
         for (const QString &engine : Engine::all()) {
-            for (const char *shared : {"volume", "paragraphPause", "headingPause"})
+            for (const char *shared : {"volume", "sentencePause", "paragraphPause", "headingPause", "chapterPause"})
                 QVERIFY(Tuning::find(Tuning::parameters(engine), shared));
             for (const TuningParameter &p : Tuning::parameters(engine)) {
                 bool ok = false;
@@ -1915,12 +1915,59 @@ private slots:
         book.chapters[1].paragraphs.prepend({"Heading", 1});
         book.segment();
         VoiceSettings voice = VoiceSettings::recommended(Engine::Qwen);
+        QVERIFY(voice.set("sentencePause", 0.3));
         QVERIFY(voice.set("paragraphPause", 1.2));
         QVERIFY(voice.set("headingPause", 2));
-        QCOMPARE(Synthesis::pauseAfter(book, 0, voice), 0.0);   // "First." mid-paragraph
+        QVERIFY(voice.set("chapterPause", 3.5));
+        QCOMPARE(Synthesis::pauseAfter(book, 0, voice), 0.3);   // "First." mid-paragraph
         QCOMPARE(Synthesis::pauseAfter(book, 1, voice), 1.2);   // "Second." ends it
+        QCOMPARE(Synthesis::pauseAfter(book, 2, voice), 3.5);   // "Third." ends chapter One
         QCOMPARE(Synthesis::pauseAfter(book, 3, voice), 2.0);   // the heading
+        QCOMPARE(Synthesis::pauseAfter(book, 4, voice), 3.5);   // the book's end ends its last chapter
         QCOMPARE(Synthesis::pauseAfter(book, 99, voice), 0.0);
+        QCOMPARE(Synthesis::pauseAfter(book, -1, voice), 0.0);
+        QCOMPARE(Synthesis::pauseFramesAfter(book, 0, voice), qint64(0.3 * Synthesizer::SampleRate));
+        QCOMPARE(Synthesis::pauseFramesAfter(book, 2, voice), qint64(3.5 * Synthesizer::SampleRate));
+    }
+
+    void pausesSkipWhatTheVoiceDoesNotRead() {
+        VoiceSettings voice = VoiceSettings::recommended(Engine::Kokoro);
+        QVERIFY(voice.set("sentencePause", 0.3));
+        QVERIFY(voice.set("paragraphPause", 1.2));
+        QVERIFY(voice.set("chapterPause", 3.5));
+        Book book;
+        // A footnote closes chapter One and another sits between two
+        // paragraphs; neither is read, so neither hides the break it sits on.
+        book.chapters = {{"One", {{"Before the note.", 0}, {"1 A note.", 0, {}, true}, {"After it.", 0},
+                                  {"2 Last note.", 0, {}, true}}},
+                         {"Two", {{"Next chapter.", 0}}}};
+        book.segment();
+        QCOMPARE(book.sentenceCount(), 5);
+        QCOMPARE(Synthesis::pauseAfter(book, 0, voice), 1.2);
+        QCOMPARE(Synthesis::pauseAfter(book, 2, voice), 3.5);
+
+        // A sentence too long for the voice is broken at a comma, and the
+        // break is not a sentence's end, so it gets no sentence pause.
+        QString clause = "a clause that runs on and on with many words in it";
+        QString longSentence = clause;
+        while (longSentence.size() < 600)
+            longSentence += ", " + clause;
+        book.chapters = {{"One", {{longSentence + ". Short one. Last.", 0}}}};
+        book.segment();
+        QVERIFY(book.sentenceCount() > 3);
+        QCOMPARE(Synthesis::pauseAfter(book, 0, voice), 0.0);
+        const int shortOne = book.sentenceCount() - 2;
+        QCOMPARE(book.sentenceText(shortOne), QString("Short one."));
+        QCOMPARE(Synthesis::pauseAfter(book, shortOne - 1, voice), 0.3); // the long sentence's last piece
+        QCOMPARE(Synthesis::pauseAfter(book, shortOne, voice), 0.3);
+    }
+
+    void textKnowsWhereASentenceEnds() {
+        for (const char *ends : {"Done.", "Really?", "Stop!", "And then\u2026", "\u201cGo home.\u201d", "(As he said.)",
+                                 "Fim.  ", "\u7d42\u308f\u308a\u3002", "'Quoted.'"})
+            QVERIFY2(Text::endsSentence(QString::fromUtf8(ends)), ends);
+        for (const char *open : {"", "a clause,", "one; two;", "and so", "\u201cGo home,\u201d", "Note:"})
+            QVERIFY2(!Text::endsSentence(QString::fromUtf8(open)), open);
     }
 
     // Timing and the audio both engines deliver.
@@ -2486,6 +2533,41 @@ private slots:
         QCOMPARE(exporter.result(), dir.filePath("out/Sample (2).m4b"));
     }
 
+    void exportPausesBetweenSentencesParagraphsAndChapters() {
+        const QString ffprobe = QStandardPaths::findExecutable("ffprobe");
+        if (Exporter::findFfmpeg().isEmpty() || ffprobe.isEmpty())
+            QSKIP("ffmpeg is not installed");
+        QTemporaryDir dir;
+        Exporter exporter;
+        QSignalSpy finished(&exporter, &Exporter::finished);
+        Exporter::Options options;
+        options.synthesis.kokoro = fakeKoko(dir);
+        QVERIFY(options.synthesis.voice.set("sentencePause", 0.25));
+        QVERIFY(options.synthesis.voice.set("paragraphPause", 0.5));
+        QVERIFY(options.synthesis.voice.set("chapterPause", 1.5));
+        options.folder = dir.filePath("out");
+        options.format = Exporter::M4b;
+        QVERIFY(exporter.start(std::make_shared<Book>(sampleBook(dir.filePath("a.txt"))), options));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 20000);
+        QVERIFY2(finished.first().at(0).toBool(), qPrintable(finished.first().at(1).toString()));
+
+        // Each sentence the fake voice says is a few samples long, so a
+        // chapter lasts as long as its pauses: "First." (sentence),
+        // "Second." (paragraph) and "Third." (chapter), then "Fourth."
+        // (chapter), as the narrator would leave them.
+        QProcess probe;
+        probe.start(ffprobe, {"-v", "error", "-show_chapters", "-of", "json", exporter.result()});
+        QVERIFY(probe.waitForFinished());
+        const QJsonArray chapters = QJsonDocument::fromJson(probe.readAllStandardOutput()).object().value("chapters").toArray();
+        QCOMPARE(chapters.size(), 2);
+        auto length = [&](int i) {
+            const QJsonObject chapter = chapters.at(i).toObject();
+            return chapter.value("end_time").toString().toDouble() - chapter.value("start_time").toString().toDouble();
+        };
+        QVERIFY2(qAbs(length(0) - 2.25) < 0.01, qPrintable(QString::number(length(0))));
+        QVERIFY2(qAbs(length(1) - 1.5) < 0.01, qPrintable(QString::number(length(1))));
+    }
+
     void exportWritesAFolderWithAFilePerChapter() {
         if (Exporter::findFfmpeg().isEmpty())
             QSKIP("ffmpeg is not installed");
@@ -2595,6 +2677,7 @@ private slots:
         QVERIFY(options.synthesis.voice.set("speed", 1.5));
         QVERIFY(options.synthesis.voice.set("paragraphPause", 0.0));
         QVERIFY(options.synthesis.voice.set("headingPause", 0.0));
+        QVERIFY(options.synthesis.voice.set("chapterPause", 0.0));
         options.folder = dir.filePath("out");
         options.layout = Exporter::ChapterFiles;
         QVERIFY(exporter.start(std::make_shared<Book>(sampleBook(dir.filePath("a.txt"))), options));
@@ -5786,6 +5869,70 @@ private slots:
         app.grab("settings-focus");
         app.reader.closeBook();
         QSettings().remove("reader");
+    }
+
+    void settingsPanelDrawsEveryPause() {
+        QSettings().remove("voice");
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        QVERIFY(app.show({1100, 2600}));
+        QVERIFY(app.reader.addText("Settings", "Some text to read."));
+        QTRY_VERIFY(app.reader.hasBook());
+        QObject *panel = app.window->findChild<QObject *>("settingsPanel");
+        QVERIFY(panel);
+        QMetaObject::invokeMethod(panel, "open");
+        QTRY_VERIFY(panel->property("opened").toBool());
+
+        QQuickItem *advanced = nullptr;
+        std::function<void(QQuickItem *)> findToggle = [&](QQuickItem *item) {
+            if (item->isVisible() && item->metaObject()->indexOfProperty("expanded") >= 0
+                && item->property("text").toString().endsWith("Advanced"))
+                advanced = item;
+            for (QQuickItem *child : item->childItems())
+                findToggle(child);
+        };
+        findToggle(app.window->contentItem());
+        QVERIFY(advanced);
+        advanced->setProperty("expanded", true);
+
+        // The four pauses, in the order a listener meets them growing longer,
+        // each drawn with its value inside the panel.
+        const QStringList pauses{"Pause after a sentence", "Pause after a paragraph", "Pause after a heading",
+                                 "Pause after a chapter"};
+        QHash<QString, QQuickItem *> labels;
+        QTRY_VERIFY([&] {
+            labels.clear();
+            std::function<void(QQuickItem *)> walk = [&](QQuickItem *item) {
+                if (item->isVisible() && pauses.contains(item->property("text").toString()))
+                    labels.insert(item->property("text").toString(), item);
+                for (QQuickItem *child : item->childItems())
+                    walk(child);
+            };
+            walk(app.window->contentItem());
+            return labels.size() == pauses.size();
+        }());
+        const QImage image = app.grab("settings-pauses");
+        const QRect window(QPoint(0, 0), image.size());
+        qreal previous = -1;
+        for (const QString &pause : pauses) {
+            QQuickItem *label = labels.value(pause);
+            const qreal y = label->mapToScene(QPointF(0, 0)).y();
+            QVERIFY2(y > previous, qPrintable(pause + " is out of order"));
+            previous = y;
+            const QRect area = app.area(image, label);
+            QVERIFY2(window.contains(area), qPrintable(pause + " is off screen"));
+            QVERIFY2(brightPixels(image, area, 110) > 20, qPrintable(pause + " is not drawn"));
+            // Its value sits on the same row, at the right.
+            QQuickItem *row = label->parentItem();
+            QStringList texts;
+            for (QQuickItem *child : row->childItems())
+                if (child != label && child->isVisible())
+                    texts << child->property("text").toString();
+            QCOMPARE(texts.size(), 1);
+            QVERIFY2(texts.first().endsWith(" s"), qPrintable(texts.first()));
+        }
+        app.reader.closeBook();
+        QSettings().remove("voice");
     }
 
     void exportDialogOffersAudioFilesOnly() {
