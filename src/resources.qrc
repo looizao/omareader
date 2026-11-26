@@ -8,6 +8,7 @@
         <file alias="ReaderView.qml">ReaderView.qml</file>
         <file alias="BookParagraph.qml">BookParagraph.qml</file>
         <file alias="ReadingGlass.qml">ReadingGlass.qml</file>
+        <file alias="RsvpView.qml">RsvpView.qml</file>
         <file alias="NarrationBar.qml">NarrationBar.qml</file>
         <file alias="ContentsPanel.qml">ContentsPanel.qml</file>
         <file alias="NoteEditor.qml">NoteEditor.qml</file>

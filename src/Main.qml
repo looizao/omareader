@@ -55,7 +55,7 @@ ApplicationWindow {
             else if (!reader.hasBook)
                 libraryView.clearFilter()
             else
-                readerView.closePanels()
+                readerView.handleEscape()
         }
     }
 

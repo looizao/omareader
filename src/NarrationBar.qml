@@ -11,8 +11,13 @@ Rectangle {
     implicitHeight: 88
     color: Colors.surface
 
+    // RSVP paced by its own clock rather than the voice: the bar then
+    // shows its rate in place of the voice's speed, and no sleep timer.
+    readonly property bool silent: rsvp.active && !rsvp.aloud
+
     function openSleepMenu() {
-        sleepMenu.open()
+        if (!bar.silent)
+            sleepMenu.open()
     }
 
     // Minutes of listening left as m:ss.
@@ -65,7 +70,8 @@ Rectangle {
             }
             Label {
                 Layout.fillWidth: true
-                text: qsTr("%1% of the book · %n min left in chapter", "", reader.minutesLeftInChapter)
+                text: qsTr("%1% of the book · %n min left in chapter", "",
+                           rsvp.active ? rsvp.minutesLeftInChapter : reader.minutesLeftInChapter)
                           .arg(Math.round(reader.progress * 100).toLocaleString(Qt.locale(), 'f', 0))
                 color: Colors.muted
                 font.pixelSize: 12
@@ -80,9 +86,9 @@ Rectangle {
             ToolButton {
                 implicitWidth: 44
                 implicitHeight: 44
-                enabled: narrator.active
+                enabled: narrator.active || rsvp.active
                 contentItem: MediaIcon { kind: "previous"; color: parent.enabled ? Colors.text : Colors.muted }
-                onClicked: narrator.skip(-1)
+                onClicked: rsvp.active ? rsvp.skip(-1) : narrator.skip(-1)
                 ToolTip.visible: hovered && bar.enabled
                 ToolTip.text: qsTr("Previous sentence (,)")
             }
@@ -92,11 +98,15 @@ Rectangle {
                 id: play
                 implicitWidth: 60
                 implicitHeight: 60
-                enabled: narrator.available
+                objectName: "playButton"
+                // The silent clock needs no voice.
+                enabled: bar.silent || narrator.available
                 readonly property bool running: narrator.state === Narrator.Playing || narrator.state === Narrator.Preparing
-                onClicked: reader.togglePlay()
+                                                || rsvp.running
+                onClicked: rsvp.active ? rsvp.toggle() : reader.togglePlay()
                 ToolTip.visible: hovered && bar.enabled
-                ToolTip.text: narrator.available ? qsTr("Read aloud (Space)") : narrator.problem
+                ToolTip.text: bar.silent ? qsTr("Start or pause (Space)")
+                            : narrator.available ? qsTr("Read aloud (Space)") : narrator.problem
                 background: Rectangle {
                     radius: width / 2
                     color: !play.enabled ? Colors.line
@@ -125,9 +135,9 @@ Rectangle {
             ToolButton {
                 implicitWidth: 44
                 implicitHeight: 44
-                enabled: narrator.active
+                enabled: narrator.active || rsvp.active
                 contentItem: MediaIcon { kind: "next"; color: parent.enabled ? Colors.text : Colors.muted }
-                onClicked: narrator.skip(1)
+                onClicked: rsvp.active ? rsvp.skip(1) : narrator.skip(1)
                 ToolTip.visible: hovered && bar.enabled
                 ToolTip.text: qsTr("Next sentence (.)")
             }
@@ -141,11 +151,23 @@ Rectangle {
             Layout.fillWidth: true
             spacing: 4
             Item { Layout.fillWidth: true }
+            // In RSVP: whether the voice reads and paces the flashes.
+            Switch {
+                objectName: "rsvpAloudSwitch"
+                visible: rsvp.active
+                Layout.rightMargin: 4
+                text: qsTr("Read aloud")
+                checked: rsvp.aloud
+                onToggled: rsvp.aloud = checked
+                font.pixelSize: 13
+            }
             // The sleep timer: a moon, lit while it runs, beside what is
             // left of it.
             ToolButton {
                 id: sleepButton
                 objectName: "sleepButton"
+                // It counts only the voice.
+                visible: !bar.silent
                 implicitWidth: 40
                 implicitHeight: 40
                 onClicked: sleepMenu.opened ? sleepMenu.close() : sleepMenu.open()
@@ -196,7 +218,7 @@ Rectangle {
             }
             Label {
                 objectName: "sleepLabel"
-                visible: narrator.sleepTimerOn
+                visible: narrator.sleepTimerOn && !bar.silent
                 Layout.rightMargin: 8
                 text: narrator.sleepAtChapterEnd ? qsTr("End of chapter") : bar.clock(narrator.sleepSecondsLeft)
                 color: theme.accent
@@ -205,12 +227,19 @@ Rectangle {
             }
             ToolButton {
                 text: "−"
-                onClicked: narrator.speed = narrator.speed - 0.1
+                onClicked: {
+                    if (bar.silent)
+                        rsvp.wpm = rsvp.wpm - 25
+                    else
+                        narrator.speed = narrator.speed - 0.1
+                }
                 ToolTip.visible: hovered && bar.enabled
                 ToolTip.text: qsTr("Slower ([)")
             }
             Label {
-                text: qsTr("%1×").arg(narrator.speed.toLocaleString(Qt.locale(), 'f', 2))
+                objectName: "speedLabel"
+                text: bar.silent ? qsTr("%1 wpm").arg(rsvp.wpm)
+                                 : qsTr("%1×").arg(narrator.speed.toLocaleString(Qt.locale(), 'f', 2))
                 color: Colors.text
                 font.pixelSize: 13
                 font.features: { "tnum": 1 }
@@ -218,15 +247,21 @@ Rectangle {
             ToolButton {
                 objectName: "fasterButton"
                 text: "+"
-                onClicked: narrator.speed = narrator.speed + 0.1
+                onClicked: {
+                    if (bar.silent)
+                        rsvp.wpm = rsvp.wpm + 25
+                    else
+                        narrator.speed = narrator.speed + 0.1
+                }
                 ToolTip.visible: hovered && bar.enabled
                 ToolTip.text: qsTr("Faster (])")
             }
             Label {
                 objectName: "voiceName"
                 Layout.leftMargin: 8
-                // A narrow bar showing the sleep timer has no room for it.
-                visible: bar.width >= 820 || !narrator.sleepTimerOn
+                // A narrow bar showing the sleep timer has no room for it,
+                // and the silent clock reads with no voice.
+                visible: !bar.silent && (bar.width >= 820 || !narrator.sleepTimerOn)
                 text: {
                     const voices = narrator.voices
                     for (let i = 0; i < voices.length; ++i)

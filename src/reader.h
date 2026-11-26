@@ -166,6 +166,12 @@ public:
     // Starts reading aloud at a clicked character.
     Q_INVOKABLE void readFrom(int paragraph, int offset);
     Q_INVOKABLE void togglePlay();
+    // Where reading starts from: the reading position when it is in the
+    // chapter in view, otherwise the top of the chapter in view.
+    int startingSentence() const;
+    // Moves the reading position to a sentence, turning to its chapter, as
+    // RSVP does while it shows the sentence's words.
+    void showSentence(int sentence);
     Q_INVOKABLE void clearError();
     // Exports the open book as audio with the narrator's voice and speed and
     // the exporter's remembered layout, format and folder.

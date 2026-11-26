@@ -19,6 +19,7 @@
 #include "portalfilepicker.h"
 #include "pronunciation.h"
 #include "reader.h"
+#include "rsvp.h"
 #include "stats.h"
 #include "theme.h"
 #include "titleagent.h"
@@ -67,6 +68,7 @@ int main(int argc, char *argv[]) {
     annotations.setPicker(&picker);
     reader.setAnnotations(&annotations);
     reader.setStats(&stats);
+    Rsvp rsvp(&reader, &narrator, &stats);
     TitleAgent titleAgent;
     WebImport webImport;
     WordLookup lookup;
@@ -90,6 +92,7 @@ int main(int argc, char *argv[]) {
     engine.rootContext()->setContextProperty("lookup", &lookup);
     engine.rootContext()->setContextProperty("pronunciations", &pronunciations);
     engine.rootContext()->setContextProperty("stats", &stats);
+    engine.rootContext()->setContextProperty("rsvp", &rsvp);
     engine.load(QUrl("qrc:/Main.qml"));
     if (engine.rootObjects().isEmpty())
         return 1;

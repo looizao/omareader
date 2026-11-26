@@ -57,7 +57,9 @@ Popup {
     onClosed: {
         narrator.stopPreview()
         dialog.original = ""
-        if (dialog.resumeOnClose && narrator.state === Narrator.Paused)
+        if (dialog.resumeOnClose && rsvp.active && !rsvp.aloud)
+            rsvp.play()
+        else if (dialog.resumeOnClose && narrator.state === Narrator.Paused)
             narrator.resume()
         dialog.resumeOnClose = false
     }

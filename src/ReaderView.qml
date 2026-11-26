@@ -31,8 +31,13 @@ FocusScope {
     // come back for a while on any mouse movement or key.
     property bool awake: true
     readonly property bool controlsHidden: reader.focusMode && reader.hideControls && !root.awake
-                                           && narrator.state === Narrator.Playing
+                                           && (narrator.state === Narrator.Playing || rsvp.running)
                                            && !contents.opened && !settings.opened
+    // Whether a panel, card, menu or search mark is up, which Esc puts away
+    // before it leaves RSVP.
+    readonly property bool panelsOpen: card.opened || contents.opened || settings.opened || noteEditor.opened
+                                       || pronunciationEditor.opened || selectionMenu.opened
+                                       || reader.match.chapter !== undefined
 
     function wake() {
         // Moving the mouse or pressing a key is reading time.
@@ -69,6 +74,68 @@ FocusScope {
         event.accepted = false
     }
 
+    // Esc: what is open closes first, then RSVP gives way to the page.
+    function handleEscape() {
+        if (rsvp.active && !root.panelsOpen)
+            rsvp.active = false
+        else
+            root.closePanels()
+    }
+
+    // Pauses whatever is reading, for a card or an editor to open over it;
+    // true when something was.
+    function pauseReading() {
+        if (narrator.state === Narrator.Playing || narrator.state === Narrator.Preparing) {
+            narrator.pause()
+            return true
+        }
+        if (rsvp.running) {
+            rsvp.pause()
+            return true
+        }
+        return false
+    }
+
+    // Goes on reading after pauseReading(): the silent clock in RSVP, the voice otherwise.
+    function resumeReading() {
+        if (rsvp.active && !rsvp.aloud)
+            rsvp.play()
+        else if (narrator.state === Narrator.Paused)
+            narrator.resume()
+    }
+
+    // Looks up the word RSVP shows, in a card beside the flash.
+    function lookUpFlash() {
+        const word = rsvp.word
+        if (word === "")
+            return
+        card.wordRect = rsvpView.flashRect(page)
+        if (root.pauseReading())
+            card.resumeOnClose = true
+        resume.stop()
+        card.openedAt = list.contentY
+        lookup.lookUp(word)
+        card.open()
+    }
+
+    // Back on the page after RSVP: the last word flashed in view, a third
+    // of the way down, and the reading place kept there.
+    function revealFlash() {
+        const paragraph = rsvp.paragraph
+        if (paragraph < 0)
+            return
+        root.following = !narrator.active
+        list.positionViewAtIndex(paragraph, ListView.Beginning)
+        const item = list.itemAtIndex(paragraph)
+        if (item) {
+            const y = item.y + item.rectFor(Math.max(0, rsvp.start)).y
+            const maxY = list.originY + Math.max(0, list.contentHeight - list.height)
+            list.contentY = Math.max(list.originY, Math.min(maxY, y - list.height * 0.3))
+        }
+        root.holdPlace = true
+        root.heldParagraph = paragraph
+    }
+
     function closePanels() {
         reader.hideMatch()
         card.close()
@@ -91,10 +158,8 @@ FocusScope {
         const end = paragraph.rectFor(word.start + word.length)
         const at = paragraph.mapToItem(page, start.x, start.y)
         card.wordRect = Qt.rect(at.x, at.y, end.y === start.y ? Math.max(4, end.x - start.x) : 16, start.height)
-        if (narrator.state === Narrator.Playing || narrator.state === Narrator.Preparing) {
-            narrator.pause()
+        if (root.pauseReading())
             card.resumeOnClose = true
-        }
         resume.stop()
         scroll.stop()
         card.openedAt = list.contentY
@@ -127,6 +192,10 @@ FocusScope {
             card.close()
             return
         }
+        if (rsvp.active) {
+            root.lookUpFlash()
+            return
+        }
         const target = root.wordInFocus()
         if (target)
             root.lookUpAt(target.paragraph, target.position)
@@ -136,10 +205,8 @@ FocusScope {
     // it closes.
     function pronounce(text, resume) {
         let resumeOnClose = resume === true
-        if (narrator.state === Narrator.Playing || narrator.state === Narrator.Preparing) {
-            narrator.pause()
+        if (root.pauseReading())
             resumeOnClose = true
-        }
         pronunciationEditor.resumeOnClose = resumeOnClose
         pronunciationEditor.edit(text)
     }
@@ -148,6 +215,10 @@ FocusScope {
     function pronounceWord() {
         if (card.opened) {
             card.pronounceRequested(lookup.word)
+            return
+        }
+        if (rsvp.active) {
+            root.pronounce(rsvp.word)
             return
         }
         const target = root.wordInFocus()
@@ -237,6 +308,19 @@ FocusScope {
     }
 
     Connections {
+        target: rsvp
+        function onActiveChanged() {
+            card.close()
+            if (!rsvp.active)
+                Qt.callLater(root.revealFlash)
+        }
+        function onRunningChanged() {
+            if (rsvp.running)
+                root.wake()
+        }
+    }
+
+    Connections {
         target: reader
         function onFocusChanged() {
             root.wake()
@@ -278,24 +362,43 @@ FocusScope {
         }
     }
 
-    Shortcut { sequence: "Space"; enabled: root.keysEnabled; onActivated: reader.togglePlay() }
-    Shortcut { sequence: "Return"; enabled: root.keysEnabled; onActivated: reader.togglePlay() }
-    Shortcut { sequences: ["Down", "J"]; enabled: root.keysEnabled; onActivated: root.scrollBy(80) }
-    Shortcut { sequences: ["Up", "K"]; enabled: root.keysEnabled; onActivated: root.scrollBy(-80) }
-    Shortcut { sequence: "PgDown"; enabled: root.keysEnabled; onActivated: root.scrollBy(list.height * 0.9) }
-    Shortcut { sequence: "PgUp"; enabled: root.keysEnabled; onActivated: root.scrollBy(-list.height * 0.9) }
-    Shortcut { sequence: "Home"; enabled: root.keysEnabled; onActivated: { root.holdPlace = false; root.following = !narrator.active; list.positionViewAtBeginning() } }
-    Shortcut { sequence: "End"; enabled: root.keysEnabled; onActivated: { root.holdPlace = false; root.following = !narrator.active; list.positionViewAtEnd() } }
+    // In RSVP the reading keys act on the flash: Space on its clock, the
+    // arrows step through it, and the speed is its rate unless the voice reads.
+    Shortcut { sequence: "Space"; enabled: root.keysEnabled; onActivated: rsvp.active ? rsvp.toggle() : reader.togglePlay() }
+    Shortcut { sequence: "Return"; enabled: root.keysEnabled; onActivated: rsvp.active ? rsvp.toggle() : reader.togglePlay() }
+    Shortcut { sequences: ["Down", "J"]; enabled: root.keysEnabled; onActivated: rsvp.active ? rsvp.step(1) : root.scrollBy(80) }
+    Shortcut { sequences: ["Up", "K"]; enabled: root.keysEnabled; onActivated: rsvp.active ? rsvp.step(-1) : root.scrollBy(-80) }
+    Shortcut { sequence: "PgDown"; enabled: root.keysEnabled && !rsvp.active; onActivated: root.scrollBy(list.height * 0.9) }
+    Shortcut { sequence: "PgUp"; enabled: root.keysEnabled && !rsvp.active; onActivated: root.scrollBy(-list.height * 0.9) }
+    Shortcut { sequence: "Home"; enabled: root.keysEnabled && !rsvp.active; onActivated: { root.holdPlace = false; root.following = !narrator.active; list.positionViewAtBeginning() } }
+    Shortcut { sequence: "End"; enabled: root.keysEnabled && !rsvp.active; onActivated: { root.holdPlace = false; root.following = !narrator.active; list.positionViewAtEnd() } }
     Shortcut { sequences: ["Right", "L"]; enabled: root.keysEnabled; onActivated: reader.nextChapter() }
     Shortcut { sequences: ["Left", "H"]; enabled: root.keysEnabled; onActivated: reader.previousChapter() }
-    Shortcut { sequence: "."; enabled: root.keysEnabled; onActivated: narrator.skip(1) }
-    Shortcut { sequence: ","; enabled: root.keysEnabled; onActivated: narrator.skip(-1) }
-    Shortcut { sequence: "]"; enabled: root.keysEnabled; onActivated: narrator.speed = narrator.speed + 0.1 }
-    Shortcut { sequence: "["; enabled: root.keysEnabled; onActivated: narrator.speed = narrator.speed - 0.1 }
-    Shortcut { sequences: ["=", "+", StandardKey.ZoomIn]; enabled: root.keysEnabled; onActivated: reader.fontSize = reader.fontSize + 1 }
-    Shortcut { sequences: ["-", StandardKey.ZoomOut]; enabled: root.keysEnabled; onActivated: reader.fontSize = reader.fontSize - 1 }
+    Shortcut { sequence: "."; enabled: root.keysEnabled; onActivated: rsvp.active ? rsvp.skip(1) : narrator.skip(1) }
+    Shortcut { sequence: ","; enabled: root.keysEnabled; onActivated: rsvp.active ? rsvp.skip(-1) : narrator.skip(-1) }
+    Shortcut {
+        sequence: "]"
+        enabled: root.keysEnabled
+        onActivated: { if (rsvp.active && !rsvp.aloud) rsvp.wpm = rsvp.wpm + 25; else narrator.speed = narrator.speed + 0.1 }
+    }
+    Shortcut {
+        sequence: "["
+        enabled: root.keysEnabled
+        onActivated: { if (rsvp.active && !rsvp.aloud) rsvp.wpm = rsvp.wpm - 25; else narrator.speed = narrator.speed - 0.1 }
+    }
+    Shortcut {
+        sequences: ["=", "+", StandardKey.ZoomIn]
+        enabled: root.keysEnabled
+        onActivated: { if (rsvp.active) rsvp.fontSize = rsvp.fontSize + 4; else reader.fontSize = reader.fontSize + 1 }
+    }
+    Shortcut {
+        sequences: ["-", StandardKey.ZoomOut]
+        enabled: root.keysEnabled
+        onActivated: { if (rsvp.active) rsvp.fontSize = rsvp.fontSize - 4; else reader.fontSize = reader.fontSize - 1 }
+    }
+    Shortcut { sequence: "R"; enabled: root.keysEnabled; onActivated: rsvp.active = !rsvp.active }
     Shortcut { sequence: "F"; enabled: root.keysEnabled; onActivated: root.follow() }
-    Shortcut { sequence: "S"; enabled: root.keysEnabled; onActivated: narrator.stop() }
+    Shortcut { sequence: "S"; enabled: root.keysEnabled; onActivated: { narrator.stop(); rsvp.pause() } }
     Shortcut { sequence: "C"; enabled: root.keysEnabled; onActivated: narrationBar.openSleepMenu() }
     Shortcut { sequence: "Z"; enabled: root.keysEnabled; onActivated: reader.focusMode = !reader.focusMode }
     Shortcut { sequence: "D"; enabled: root.keysEnabled; onActivated: root.lookUpWord() }
@@ -411,6 +514,16 @@ FocusScope {
                     }
                 }
                 ToolButton {
+                    objectName: "rsvpButton"
+                    text: "RSVP"
+                    font.pixelSize: 11
+                    font.weight: Font.DemiBold
+                    highlighted: rsvp.active
+                    onClicked: rsvp.active = !rsvp.active
+                    ToolTip.visible: hovered && enabled
+                    ToolTip.text: rsvp.active ? qsTr("RSVP is on (R)") : qsTr("RSVP: one word at a time (R)")
+                }
+                ToolButton {
                     objectName: "focusButton"
                     text: "◎"
                     font.pixelSize: 18
@@ -436,6 +549,8 @@ FocusScope {
             ListView {
                 id: list
                 objectName: "chapterList"
+                // RSVP takes the page's place; the page stays where it was.
+                visible: !rsvp.active
                 // A paragraph asks for the word at a character to be looked up.
                 signal lookUpRequested(Item paragraph, int position)
                 onLookUpRequested: (paragraph, position) => root.lookUpAt(paragraph, position)
@@ -574,6 +689,9 @@ FocusScope {
                 id: visibleTimer
                 interval: 400
                 onTriggered: {
+                    // RSVP moves the reading place itself.
+                    if (rsvp.active)
+                        return
                     // However the view got away from the match (a key, the
                     // wheel, the scroll bar), the place follows it again.
                     if (root.holdPlace) {
@@ -586,6 +704,12 @@ FocusScope {
                     if (index >= 0)
                         reader.setVisibleParagraph(index)
                 }
+            }
+
+            RsvpView {
+                id: rsvpView
+                anchors.fill: parent
+                visible: rsvp.active
             }
 
             // The word being looked up, outlined while its card is open.
@@ -632,8 +756,7 @@ FocusScope {
                 interval: 250
                 onTriggered: {
                     card.resumeOnClose = false
-                    if (narrator.state === Narrator.Paused)
-                        narrator.resume()
+                    root.resumeReading()
                 }
             }
 
@@ -641,7 +764,7 @@ FocusScope {
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.bottom: parent.bottom
                 anchors.bottomMargin: 16
-                visible: narrator.active && !root.following
+                visible: narrator.active && !root.following && !rsvp.active
                 text: qsTr("Back to the voice (F)")
                 onClicked: root.follow()
             }

@@ -42,6 +42,7 @@
 #include "audioplayer.h"
 #include "book.h"
 #include "bookloader.h"
+#include "cli.h"
 #include "dictionary.h"
 #include "exporter.h"
 #include "filepicker.h"
@@ -56,6 +57,7 @@
 #include "ocr.h"
 #include "qwen.h"
 #include "reader.h"
+#include "rsvp.h"
 #include "speech.h"
 #include "stats.h"
 #include "synthesizer.h"
@@ -94,6 +96,7 @@ public:
         context->setContextProperty("lookup", &lookup);
         context->setContextProperty("pronunciations", &pronunciations);
         context->setContextProperty("stats", &stats);
+        context->setContextProperty("rsvp", &rsvp);
     }
 
     bool show(QSize size = {1100, 720}) {
@@ -150,6 +153,7 @@ public:
     WordLookup lookup;
     Pronunciations pronunciations;
     ReadingStats stats;
+    Rsvp rsvp{&reader, &narrator, &stats};
     QQmlApplicationEngine engine;
     QQuickWindow *window = nullptr;
 };
@@ -3195,6 +3199,245 @@ private slots:
         QVERIFY(exporter.error().contains("omareader setup"));
     }
 
+    // RSVP: the book one flash at a time.
+
+    void rsvpFlashesShowTheVoicesWordsWithTheirPunctuation() {
+        Book book;
+        book.chapters = {{"One", {{"“Hello,” she said — softly. It failed.[12] See https://example.org/a now.", 0, {}},
+                                  {"A well—known self-contained idea.", 0, {}}}}};
+        book.segment();
+        QStringList shown;
+        for (const Flash &flash : Flashes::of(book, 1))
+            shown << Flashes::text(book, flash);
+        // The citation and the link are left out as the voice leaves them
+        // out; a dash between words goes with the first of them.
+        QCOMPARE(shown, (QStringList{"“Hello,”", "she", "said", "softly.", "It", "failed.", "See", "now.", "A", "well—",
+                                     "known", "self-contained", "idea."}));
+    }
+
+    void rsvpFlashesGroupWithinSentencesAndSpeech() {
+        Book book;
+        book.chapters = {{"One", {{"The quick brown fox jumps over the lazy dog, and then it sleeps.", 0, {}},
+                                  {"One two. Three four five six.", 0, {}},
+                                  {"He said “come here now please” and left.", 0, {}},
+                                  {"She said — quietly — no more.", 0, {}}}}};
+        book.segment();
+        auto flashes = [&](int size) {
+            QStringList shown;
+            for (const Flash &flash : Flashes::of(book, size))
+                shown << Flashes::text(book, flash);
+            return shown;
+        };
+        // Punctuation, a sentence's end and the start or end of speech
+        // each close a flash early; a flash never holds more words than asked.
+        QCOMPARE(flashes(3), (QStringList{"The quick brown", "fox jumps over", "the lazy dog,", "and then it", "sleeps.",
+                                          "One two.", "Three four five", "six.",
+                                          "He said", "“come here now", "please”", "and left.",
+                                          "She said", "quietly", "no more."}));
+        QCOMPARE(flashes(2).mid(0, 3), (QStringList{"The quick", "brown fox", "jumps over"}));
+        QCOMPARE(flashes(1).size(), 32);
+    }
+
+    void rsvpRecognitionPointFollowsTheLengthOfTheFlash() {
+        QCOMPARE(Flashes::recognitionPoint("a"), 0);
+        QCOMPARE(Flashes::recognitionPoint("it"), 1);
+        QCOMPARE(Flashes::recognitionPoint("hello"), 1);
+        QCOMPARE(Flashes::recognitionPoint("reading"), 2);
+        QCOMPARE(Flashes::recognitionPoint("recognition"), 3);
+        QCOMPARE(Flashes::recognitionPoint("extraordinarily"), 4);
+        // Leading punctuation isn't counted, and a group counts as one long word.
+        QCOMPARE(Flashes::recognitionPoint("“Hello”"), 2);
+        QCOMPARE(Flashes::recognitionPoint("— Olá"), 3);
+        QCOMPARE(Flashes::recognitionPoint("the lazy dog,"), 4);
+        QCOMPARE(Flashes::recognitionPoint("—"), -1);
+        QCOMPARE(Flashes::recognitionPoint(""), -1);
+    }
+
+    void rsvpPacesLongWordsAndPausesAndKeepsTheRate() {
+        Book book;
+        book.chapters = {{"One", {{"Short words here, then extraordinarily long. Next.", 0, {}}, {"Para two.", 0, {}}}},
+                         {"Two", {{"End.", 0, {}}}}};
+        book.segment();
+        const QList<Flash> flashes = Flashes::of(book, 1);
+        QList<double> weights;
+        for (const Flash &flash : flashes)
+            weights << flash.weight;
+        // A comma half again, a long word a third more, the end of a
+        // sentence twice, of a paragraph two and a half times, and the
+        // chapter's end twice a paragraph's.
+        QCOMPARE(weights, (QList<double>{1, 1, 1.5, 1, 1.3, 2, 2.5, 1, 5, 5}));
+
+        // The rate is the average, pauses and all.
+        const double unit = Flashes::unitMs(flashes, 300);
+        double total = 0;
+        for (const Flash &flash : flashes)
+            total += Flashes::durationMs(flash, unit, Flashes::RampLength);
+        QVERIFY2(qAbs(total - 10 * 200) <= 10, qPrintable(QString::number(total)));
+        // Groups share the same pauses, so their rate is the same.
+        QVERIFY(qFuzzyCompare(Flashes::unitMs(Flashes::of(book, 2), 300), unit));
+
+        // The first flashes after a start ease in, from half the rate.
+        const Flash &first = flashes.first();
+        const int full = Flashes::durationMs(first, unit, Flashes::RampLength);
+        QCOMPARE(Flashes::durationMs(first, unit, 0), 2 * full);
+        QVERIFY(Flashes::durationMs(first, unit, 1) < 2 * full);
+        QVERIFY(Flashes::durationMs(first, unit, Flashes::RampLength - 1) > full);
+    }
+
+    void rsvpCommandChecksItsOptions() {
+        QCOMPARE(Cli::run({"omareader", "rsvp", "book.epub", "--wpm", "50"}), 1);
+        QCOMPARE(Cli::run({"omareader", "rsvp", "book.epub", "--size", "4"}), 1);
+        QCOMPARE(Cli::run({"omareader", "rsvp"}), 1);
+        QVERIFY(Cli::isCommand("rsvp"));
+    }
+
+    // Two chapters of a few sentences, for RSVP to read through.
+    static Book rsvpSample(const QString &path) {
+        write(path, "sample");
+        Book book;
+        book.path = path;
+        book.title = "Sample";
+        book.format = "txt";
+        book.chapters = {{"One", {{"First words of the book. Then a second sentence.", 0, {}}, {"A new paragraph.", 0, {}}}},
+                         {"Two", {{"Another chapter begins here. The end.", 0, {}}}}};
+        book.segment();
+        return book;
+    }
+
+    void rsvpClockReadsOnAndMovesTheReadingPlace() {
+        QSettings().remove("rsvp");
+        QTemporaryDir dir;
+        Library library(dir.filePath("library.json"), dir.filePath("covers"));
+        Narrator narrator;
+        Reader reader(&library, &narrator, nullptr);
+        Rsvp rsvp(&reader, &narrator, nullptr);
+        rsvp.setActive(true); // no book, no RSVP
+        QVERIFY(!rsvp.active());
+        reader.openBook(std::make_shared<Book>(rsvpSample(dir.filePath("a.txt"))));
+        rsvp.setActive(true);
+        QVERIFY(rsvp.active());
+        QCOMPARE(rsvp.text(), QString("First"));
+        QCOMPARE(rsvp.before(), QString("F"));
+        QCOMPARE(rsvp.pivot(), QString("i"));
+        QCOMPARE(rsvp.after(), QString("rst"));
+        QCOMPARE(rsvp.context().size(), 5);
+
+        // The silent clock reads on, across the chapter, and stops at the end.
+        rsvp.setWpm(1000);
+        rsvp.play();
+        QVERIFY(rsvp.running());
+        QTRY_VERIFY(reader.sentence() >= 1);
+        QTRY_COMPARE_WITH_TIMEOUT(rsvp.running(), false, 15000);
+        QCOMPARE(rsvp.index(), int(rsvp.flashes().size()) - 1);
+        QCOMPARE(rsvp.text(), QString("end."));
+        QCOMPARE(reader.chapter(), 1);
+
+        // Moving by sentence and by flash, and a jump of the reading place.
+        rsvp.skip(-1);
+        QCOMPARE(rsvp.text(), QString("Another"));
+        rsvp.step(1);
+        QCOMPARE(rsvp.text(), QString("chapter"));
+        reader.goToChapter(0);
+        QCOMPARE(rsvp.text(), QString("First"));
+        rsvp.skip(1);
+        QCOMPARE(rsvp.text(), QString("Then"));
+        QCOMPARE(reader.sentence(), 1);
+        rsvp.step(2);
+        QCOMPARE(rsvp.text(), QString("second"));
+
+        // A bigger flash keeps the word on screen.
+        rsvp.setSize(3);
+        QCOMPARE(rsvp.text(), QString("Then a second"));
+        // and a smaller one its first word.
+        rsvp.setSize(1);
+        QCOMPARE(rsvp.text(), QString("Then"));
+
+        // Leaving saves the place, and a book always opens on the page.
+        rsvp.skip(1);
+        rsvp.setActive(false);
+        QCOMPARE(library.entry(reader.path()).sentence, 2);
+        rsvp.setActive(true);
+        QCOMPARE(rsvp.text(), QString("A"));
+        reader.closeBook();
+        QVERIFY(!rsvp.active());
+        QSettings().remove("rsvp");
+    }
+
+    void rsvpFollowsTheVoiceAndHandsOverToTheClock() {
+        QSettings().remove("rsvp");
+        QTemporaryDir dir;
+        Library library(dir.filePath("library.json"), dir.filePath("covers"));
+        Narrator narrator;
+        Reader reader(&library, &narrator, nullptr);
+        Rsvp rsvp(&reader, &narrator, nullptr);
+        reader.openBook(std::make_shared<Book>(rsvpSample(dir.filePath("a.txt"))));
+        rsvp.setSize(2);
+        // The voice reads the third word of the second sentence: RSVP
+        // starts there, and the switch says the voice paces it.
+        narrator.showForTests(Narrator::Playing, 1, 2);
+        rsvp.setActive(true);
+        QVERIFY(rsvp.aloud());
+        QCOMPARE(rsvp.text(), QString("second sentence."));
+        QCOMPARE(rsvp.word(), QString("second"));
+        // A flash appears with its first word and stays for the rest.
+        narrator.showForTests(Narrator::Playing, 1, 0);
+        QCOMPARE(rsvp.text(), QString("Then a"));
+        narrator.showForTests(Narrator::Playing, 1, 1);
+        QCOMPARE(rsvp.text(), QString("Then a"));
+        QCOMPARE(rsvp.word(), QString("a"));
+        narrator.showForTests(Narrator::Playing, 2, 0);
+        QCOMPARE(rsvp.text(), QString("A new"));
+        QVERIFY(!rsvp.running());
+        // Switching the voice off goes on silently from the same flash.
+        rsvp.setAloud(false);
+        QVERIFY(!narrator.active());
+        QVERIFY(rsvp.running());
+        QCOMPARE(rsvp.text(), QString("A new"));
+        rsvp.pause();
+        QVERIFY(!rsvp.running());
+        reader.closeBook();
+        QSettings().remove("rsvp");
+    }
+
+    void rsvpSilentReadingCountsAsReadTime() {
+        QSettings().remove("rsvp");
+        QTemporaryDir dir;
+        QDateTime clock(QDate(2026, 11, 23), QTime(15, 0));
+        Library library(dir.filePath("library.json"), dir.filePath("covers"));
+        Narrator narrator;
+        Reader reader(&library, &narrator, nullptr);
+        ReadingStats stats(dir.filePath("stats.json"));
+        stats.setClock([&] { return clock; });
+        stats.setActive(true);
+        reader.setStats(&stats);
+        Rsvp rsvp(&reader, &narrator, &stats);
+        Book long_;
+        long_.path = dir.filePath("long.txt");
+        write(long_.path, "long");
+        QString words;
+        for (int i = 0; i < 400; ++i)
+            words += "word ";
+        long_.chapters = {{"One", {{words.trimmed() + ".", 0, {}}}}};
+        long_.segment();
+        reader.openBook(std::make_shared<Book>(long_));
+        rsvp.setActive(true);
+        rsvp.setWpm(1000);
+        rsvp.play();
+        // Four minutes with no key or mouse, twice over: the flashes keep
+        // it counting past the five that end an idle stretch.
+        for (int i = 0; i < 2; ++i) {
+            clock = clock.addSecs(240);
+            const int at = rsvp.index();
+            QTRY_VERIFY(rsvp.index() > at);
+        }
+        rsvp.pause();
+        stats.checkpoint();
+        QCOMPARE(stats.book(long_.path).reading, 480000);
+        QCOMPARE(stats.book(long_.path).listening, 0);
+        reader.closeBook();
+        QSettings().remove("rsvp");
+    }
+
     // Reading statistics.
 
     void statsCountReadingAndListeningPerBookAndDay() {
@@ -5102,6 +5345,96 @@ private slots:
     }
 
     // The real window, offscreen.
+
+    // RSVP in the window: R swaps the page for the flash, whose recognition
+    // point is drawn in the accent on the same spot whatever the word.
+    void rsvpPinsTheRecognitionPointInOnePlace() {
+        QSettings().remove("rsvp");
+        QSettings().remove("reader");
+        QTemporaryDir dir;
+        AppWindow app(dir.path());
+        QVERIFY(app.show());
+        QVERIFY(app.reader.addText("Flashes", "I read extraordinarily wonderful books. Then a second sentence follows it."));
+        QTRY_COMPARE(app.items("bookParagraph").size(), 1);
+        QTest::mouseMove(app.window, QPoint(550, 600));
+        QTest::keyClick(app.window, Qt::Key_R);
+        QTRY_VERIFY(app.rsvp.active());
+        QTRY_COMPARE(app.items("rsvpView").size(), 1);
+        QCOMPARE(app.items("chapterList").size(), 0);
+        QCOMPARE(app.items("rsvpContext").size(), 1);
+        QQuickItem *flash = app.items("rsvpFlash").first();
+
+        const QColor accent(app.theme.accent());
+        // The box of the accent's pixels in the flash, in window pixels.
+        auto pivotBox = [&](const QString &name) {
+            const QImage shot = app.grab(name);
+            const QRect area = app.area(shot, flash);
+            QRect box;
+            for (int y = area.top(); y <= area.bottom(); ++y)
+                for (int x = area.left(); x <= area.right(); ++x) {
+                    const QColor c = shot.pixelColor(x, y);
+                    if (qAbs(c.red() - accent.red()) + qAbs(c.green() - accent.green()) + qAbs(c.blue() - accent.blue()) < 60)
+                        box |= QRect(x, y, 1, 1);
+                }
+            return box;
+        };
+        auto brightBetween = [&](const QImage &shot, int from, int to) {
+            const QRect area = app.area(shot, flash);
+            int count = 0;
+            for (int y = area.top(); y <= area.bottom(); ++y)
+                for (int x = qMax(0, from); x < qMin(to, shot.width()); ++x)
+                    count += qGray(shot.pixel(x, y)) > 150;
+            return count;
+        };
+
+        QCOMPARE(app.rsvp.text(), QString("I"));
+        const QRect one = pivotBox("rsvp-short");
+        QVERIFY2(one.isValid(), "no recognition point drawn");
+        app.rsvp.step(2);
+        QCOMPARE(app.rsvp.text(), QString("extraordinarily"));
+        const QImage longShot = app.grab("rsvp-long");
+        const QRect two = pivotBox("rsvp-long");
+        QVERIFY(two.isValid());
+        if (!qEnvironmentVariableIsEmpty("OMAREADER_SCREENSHOTS"))
+            longShot.copy(app.area(longShot, flash)).save(qEnvironmentVariable("OMAREADER_SCREENSHOTS") + "/rsvp-long-flash.png");
+        const double drift = QRectF(one).center().x() - QRectF(two).center().x();
+        QVERIFY2(qAbs(drift) <= 3, qPrintable(QString("the point moved %1 px between words").arg(drift)));
+        // The rest of the word sits either side of it.
+        QVERIFY(brightBetween(longShot, two.left() - 200, two.left() - 2) > 100);
+        QVERIFY(brightBetween(longShot, two.right() + 2, two.right() + 400) > 100);
+
+        // Space reads on silently, hiding the sentence, and pauses again.
+        QTest::keyClick(app.window, Qt::Key_Space);
+        QVERIFY(app.rsvp.running());
+        QTRY_COMPARE(app.items("rsvpContext").size(), 0);
+        QTRY_VERIFY(app.rsvp.index() > 3);
+        QTest::keyClick(app.window, Qt::Key_Space);
+        QVERIFY(!app.rsvp.running());
+        QTRY_COMPARE(app.items("rsvpContext").size(), 1);
+        // The bar shows the rate in place of the voice's speed, and [ ] change it.
+        QCOMPARE(app.items("speedLabel").first()->property("text").toString(), QString("300 wpm"));
+        QTest::keyClick(app.window, Qt::Key_BracketRight);
+        QCOMPARE(app.rsvp.wpm(), 325);
+        app.rsvp.setWpm(300);
+        QCOMPARE(app.items("sleepButton").size(), 0);
+        // Up and down step through the flashes.
+        const int at = app.rsvp.index();
+        QTest::keyClick(app.window, Qt::Key_Up);
+        QCOMPARE(app.rsvp.index(), at - 1);
+
+        // Esc puts the settings away first, then goes back to the page.
+        QTest::keyClick(app.window, Qt::Key_A);
+        QObject *settings = app.window->findChild<QObject *>("settingsPanel");
+        QTRY_VERIFY(settings->property("opened").toBool());
+        QTest::keyClick(app.window, Qt::Key_Escape);
+        QTRY_VERIFY(!settings->property("opened").toBool());
+        QVERIFY(app.rsvp.active());
+        QTest::keyClick(app.window, Qt::Key_Escape);
+        QTRY_VERIFY(!app.rsvp.active());
+        QTRY_COMPARE(app.items("chapterList").size(), 1);
+        app.reader.closeBook();
+        QSettings().remove("rsvp");
+    }
 
     void libraryRemoveButtonDrawsItsCrossCentred() {
         QTemporaryDir dir;

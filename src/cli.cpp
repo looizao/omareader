@@ -9,6 +9,7 @@
 #include "library.h"
 #include "pronunciation.h"
 #include "qwen.h"
+#include "rsvp.h"
 #include "synthesizer.h"
 #include "voicesettings.h"
 #include "webimport.h"
@@ -390,6 +391,80 @@ int text(const QStringList &arguments) {
         if (c + 1 < to)
             out() << Qt::endl;
     }
+    return 0;
+}
+
+int rsvp(const QStringList &arguments) {
+    Command command("rsvp", "Print the flashes RSVP shows a book in, one per line: how long each stays up, in "
+                            "milliseconds, and its text with the recognition point in brackets.");
+    command.parser.addPositionalArgument("book", "The book file");
+    command.parser.addOption({"chapter", "Only this chapter, counting from 1", "number"});
+    command.parser.addOption({"wpm", QString("Words a minute, from %1 to %2 (the window's by default)")
+                                         .arg(Rsvp::MinWpm).arg(Rsvp::MaxWpm),
+                              "number"});
+    command.parser.addOption({"size", QString("Words in a flash, at most, from 1 to %1 (the window's by default)")
+                                          .arg(Rsvp::MaxSize),
+                              "number"});
+    command.json();
+    if (!command.parse(arguments))
+        return command.parser.isSet("help") ? 0 : 1;
+    const QStringList positional = command.parser.positionalArguments();
+    if (positional.size() != 1)
+        return fail("Use: omareader rsvp <book> [--chapter N] [--wpm N] [--size N] [--json]");
+
+    const QSettings settings;
+    bool ok = true;
+    const int wpm = command.parser.isSet("wpm") ? command.parser.value("wpm").toInt(&ok)
+                                                : qBound(Rsvp::MinWpm, settings.value("rsvp/wpm", Rsvp::DefaultWpm).toInt(), Rsvp::MaxWpm);
+    if (!ok || wpm < Rsvp::MinWpm || wpm > Rsvp::MaxWpm)
+        return fail(QString("The rate is %1 to %2 words a minute.").arg(Rsvp::MinWpm).arg(Rsvp::MaxWpm));
+    const int size = command.parser.isSet("size") ? command.parser.value("size").toInt(&ok)
+                                                  : qBound(1, settings.value("rsvp/size", 1).toInt(), Rsvp::MaxSize);
+    if (!ok || size < 1 || size > Rsvp::MaxSize)
+        return fail(QString("A flash holds 1 to %1 words.").arg(Rsvp::MaxSize));
+
+    const auto book = loadBook(positional.first());
+    if (!book)
+        return 1;
+    int chapter = -1;
+    if (command.parser.isSet("chapter")) {
+        chapter = command.parser.value("chapter").toInt(&ok) - 1;
+        if (!ok || chapter < 0 || chapter >= book->chapters.size())
+            return fail(QString("The book has chapters 1 to %1.").arg(book->chapters.size()));
+    }
+
+    // Timed over the whole book, so a chapter reads as it does in the window.
+    const QList<Flash> flashes = Flashes::of(*book, size);
+    const double unit = Flashes::unitMs(flashes, wpm);
+    const bool json = command.parser.isSet("json");
+    QJsonArray list;
+    int shown = 0;
+    for (const Flash &flash : flashes) {
+        const Sentence &sentence = book->sentences.at(flash.sentence);
+        if (chapter >= 0 && sentence.chapter != chapter)
+            continue;
+        const QString text = Flashes::text(*book, flash);
+        const int point = Flashes::recognitionPoint(text);
+        // The clock starts at the first one shown, slowly.
+        const int ms = Flashes::durationMs(flash, unit, shown++);
+        if (json) {
+            list.append(QJsonObject{{"text", text},
+                                    {"recognition", point},
+                                    {"ms", ms},
+                                    {"chapter", sentence.chapter + 1},
+                                    {"sentence", flash.sentence}});
+            continue;
+        }
+        QString marked = text;
+        if (point >= 0) {
+            const int length = text.at(point).isHighSurrogate() ? 2 : 1;
+            marked = text.left(point) + '[' + text.mid(point, length) + ']' + text.mid(point + length);
+        }
+        out() << ms << "  " << marked << '\n';
+    }
+    if (json)
+        printJson({{"title", book->title}, {"wpm", wpm}, {"size", size}, {"flashes", list}});
+    out().flush();
     return 0;
 }
 
@@ -900,6 +975,7 @@ QString usage() {
            "  open [book]                     Open the window (the default)\n"
            "  info <book> [--json]            Show a book's metadata, language and chapters\n"
            "  text <book> [--chapter N]       Print a book's text as omareader shows it, or --spoken as heard\n"
+           "  rsvp <book> [--wpm N]           Print the flashes RSVP shows, with how long each stays up\n"
            "  notes <book> [--json]           List a book's bookmarks, highlights and notes\n"
            "  export <book> [--split]         Read a book aloud into MP3 or M4B files\n"
            "  fetch <url> [--json]            Print the article a web page adds (uses the network)\n"
@@ -915,7 +991,7 @@ QString usage() {
 }
 
 bool isCommand(const QString &word) {
-    return QStringList{"info", "text", "notes", "export", "fetch", "doctor", "setup", "voices", "lookup", "dictionaries", "pronounce", "skill", "help", "--help", "-h", "version", "--version"}
+    return QStringList{"info", "text", "rsvp", "notes", "export", "fetch", "doctor", "setup", "voices", "lookup", "dictionaries", "pronounce", "skill", "help", "--help", "-h", "version", "--version"}
         .contains(word);
 }
 
@@ -924,6 +1000,7 @@ int run(const QStringList &arguments) {
     const QStringList rest = QStringList{arguments.value(0) + " " + command} + arguments.mid(2);
     if (command == "info") return info(rest);
     if (command == "text") return text(rest);
+    if (command == "rsvp") return rsvp(rest);
     if (command == "notes") return notes(rest);
     if (command == "export") return exportAudio(rest);
     if (command == "fetch") return fetchPage(rest);

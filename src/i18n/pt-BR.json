@@ -478,5 +478,19 @@
   "Recognising the text of this scanned book…": "Reconhecendo o texto deste livro digitalizado…",
   "Page %1 of %2. This happens once: the text is kept, and stopping keeps the pages done.": "Página %1 de %2. Isto acontece uma vez só: o texto fica guardado, e parar mantém as páginas já feitas.",
   "%1 took too long.": "%1 demorou demais.",
-  "%1 failed.": "%1 falhou."
+  "%1 failed.": "%1 falhou.",
+  "RSVP": "RSVP",
+  "RSVP (R)": "RSVP (R)",
+  "RSVP is on (R)": "RSVP ligado (R)",
+  "RSVP: one word at a time (R)": "RSVP: uma palavra por vez (R)",
+  "RSVP: one word at a time": "RSVP: uma palavra por vez",
+  "In RSVP: previous / next word": "No RSVP: palavra anterior / seguinte",
+  "One word at a time, always in the same place, so your eyes never have to move. The voice paces it, or a rate of words a minute.": "Uma palavra por vez, sempre no mesmo lugar, para que seus olhos nunca precisem se mover. A voz dá o ritmo, ou uma velocidade em palavras por minuto.",
+  "Words per minute %1": "Palavras por minuto %1",
+  "Words at a time": "Palavras de cada vez",
+  "One word": "Uma palavra",
+  "Up to two words": "Até duas palavras",
+  "Up to three words": "Até três palavras",
+  "Start or pause (Space)": "Iniciar ou pausar (Espaço)",
+  "%1 wpm": "%1 ppm"
 }

@@ -21,6 +21,8 @@ Rectangle {
         ["C", qsTr("Sleep timer: stop reading aloud after a while")],
         ["F", qsTr("Back to the voice after scrolling")],
         ["Z", qsTr("Focus mode")],
+        ["R", qsTr("RSVP: one word at a time")],
+        ["↑ / ↓", qsTr("In RSVP: previous / next word")],
         ["← / →", qsTr("Previous / next chapter")],
         ["↑ ↓ PgUp PgDn", qsTr("Scroll")],
         ["T", qsTr("Contents")],

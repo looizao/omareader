@@ -39,6 +39,7 @@ HEADERS += \
     src/pronunciation.h \
     src/qwen.h \
     src/reader.h \
+    src/rsvp.h \
     src/speech.h \
     src/stats.h \
     src/synthesizer.h \
@@ -69,6 +70,7 @@ SOURCES += \
     src/pronunciation.cpp \
     src/qwen.cpp \
     src/reader.cpp \
+    src/rsvp.cpp \
     src/speech.cpp \
     src/stats.cpp \
     src/synthesizer.cpp \

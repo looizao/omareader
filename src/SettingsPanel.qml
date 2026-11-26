@@ -538,6 +538,68 @@ Drawer {
                 onToggled: reader.hideControls = checked
             }
 
+            Label {
+                Layout.margins: 16
+                Layout.topMargin: 24
+                Layout.bottomMargin: 4
+                text: qsTr("RSVP")
+                font.pixelSize: 20
+                font.family: "serif"
+                color: Colors.text
+            }
+            Label {
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                text: qsTr("One word at a time, always in the same place, so your eyes never have to move. The voice paces it, or a rate of words a minute.")
+                wrapMode: Text.Wrap
+                font.pixelSize: 12
+                color: Colors.muted
+            }
+
+            Switch {
+                objectName: "rsvpSwitch"
+                Layout.leftMargin: 8
+                text: qsTr("RSVP (R)")
+                enabled: reader.hasBook
+                checked: rsvp.active
+                onToggled: rsvp.active = checked
+            }
+
+            Switch {
+                objectName: "rsvpSettingsAloud"
+                Layout.leftMargin: 8
+                text: qsTr("Read aloud")
+                checked: rsvp.aloud
+                onToggled: rsvp.aloud = checked
+            }
+
+            Label { Layout.leftMargin: 16; text: qsTr("Words per minute %1").arg(rsvp.wpm); color: Colors.body }
+            Slider {
+                objectName: "rsvpWpm"
+                Layout.fillWidth: true
+                Layout.leftMargin: 8
+                Layout.rightMargin: 8
+                from: 100; to: 1000; stepSize: 25
+                value: rsvp.wpm
+                onMoved: rsvp.wpm = value
+            }
+
+            Label { Layout.leftMargin: 16; Layout.topMargin: 6; text: qsTr("Words at a time"); color: Colors.body }
+            ChoiceBox {
+                objectName: "rsvpSize"
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                model: [
+                    { id: 1, label: qsTr("One word") },
+                    { id: 2, label: qsTr("Up to two words") },
+                    { id: 3, label: qsTr("Up to three words") }
+                ]
+                selected: rsvp.size
+                onChosen: value => rsvp.size = value
+            }
+
             Item { Layout.preferredHeight: 24 }
         }
     }

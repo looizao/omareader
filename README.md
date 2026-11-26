@@ -288,7 +288,38 @@ Choose which of these focus mode turns on under Focus in the settings (A).
 The Page settings also choose what the highlight marks (the word, the
 sentence or both) and how strongly, with or without focus mode.
 
-## Looking words up
+## RSVP
+
+RSVP (rapid serial visual presentation) shows the book one word at a time,
+always in the same place, so your eyes never move along a line. Press R (or
+the RSVP button in the title bar) and the page gives way to a single word.
+One of its letters, about a third of the way in, is tinted in the accent and
+pinned to the spot between two small ticks, whatever the length of the word.
+Press R or Esc to go back to the page, at the last word shown.
+
+The words are the ones the voice reads, each with its punctuation, so
+citation markers, links and PDF footnotes are skipped here too. Space starts
+and pauses, and the Read aloud switch in the bar below chooses what sets the
+pace:
+
+- **Off**, words flash silently at a rate you set, from 100 to 1000 words a
+  minute (`[` and `]` change it in steps of 25). Long words and punctuation
+  get a little longer, the end of a sentence or a paragraph longer still, and
+  the rate counts those pauses, so 300 words a minute really reads 300. The
+  first few words after you press play run slower, so you don't miss them.
+- **On**, each word appears as the voice says it, with the narration's own
+  speed and voice. Switching it on or off while reading carries on from the
+  same place.
+
+While paused, the sentence shows faintly beneath the word; click any of its
+words to move there. ↑ and ↓ (or the mouse wheel) step one word at a time,
+`,` and `.` a sentence, ← and → a chapter, and `+` and `−` change the size
+of the word. D looks the word up, P fixes how it's said and M bookmarks it,
+as on the page. Under RSVP in the settings (A) you can show up to two or
+three words at a time; a group never runs past punctuation, the end of a
+sentence or the start of a character's speech. Silent RSVP counts as reading
+time in the statistics, and the sleep timer counts only the voice.
+
 
 Right-click a word to look it up, or press D for the word the voice is
 reading (or, with the voice stopped, the one under the mouse). A card opens
@@ -412,6 +443,8 @@ it was read on keep theirs.
 | C | Sleep timer: stop reading aloud after a while |
 | F | Back to the voice after scrolling |
 | Z | Focus mode |
+| R | RSVP: one word at a time, in one place |
+| ↑ / ↓ | In RSVP: previous / next word |
 | ← / → (or H / L) | Previous / next chapter |
 | ↑ ↓ (or K / J), PgUp, PgDn | Scroll |
 | T | Contents |
@@ -447,6 +480,7 @@ exits 0 or 1 with errors on stderr, and `--json` prints one JSON object.
 omareader info book.epub --json          # metadata, language and chapters
 omareader text book.epub --chapter 3     # the text as omareader shows it
 omareader text book.pdf --spoken         # as the voice reads it, clutter left out
+omareader rsvp book.epub --wpm 400       # RSVP's flashes, with how long each stays up
 omareader pronounce SQL sequel           # say SQL as "sequel"; no arguments lists them
 omareader notes book.epub --json         # its bookmarks, highlights and notes
 omareader fetch https://example.com/post # a web page's article, without adding it
@@ -501,6 +535,9 @@ omareader skill install                  # agent skill for ~/.claude/skills
   page; `src/article.cpp` parses it without running anything, scores its
   blocks as Mozilla's Readability does to find the article, and writes it
   out as the Markdown pasted text is kept in.
+- `src/rsvp.cpp` cuts the book's spoken words into RSVP's flashes, finds
+  each one's recognition point and weighs how long it stays up, then shows
+  them one by one on a clock of its own or following the voice's word.
 - `src/dictionary.cpp` reads StarDict and dictd dictionaries itself,
   inflating only the chunk of a dictzip file an article sits in, and turns
   their HTML into plain lines, so a dictionary can never load an image or

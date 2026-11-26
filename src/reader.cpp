@@ -453,15 +453,35 @@ void Reader::readFrom(int paragraph, int offset) {
     m_narrator->play(sentence);
 }
 
+int Reader::startingSentence() const {
+    if (!m_book)
+        return -1;
+    int from = m_sentence;
+    if (from >= m_book->sentenceCount() || m_book->sentences.at(from).chapter != m_chapter)
+        from = qMax(0, m_book->sentenceAt(m_chapter, m_anchorParagraph));
+    return from;
+}
+
 void Reader::togglePlay() {
     if (!m_book || !m_narrator)
         return;
     // Starting fresh reads from the saved place when it's on this chapter,
     // otherwise from the top of the chapter in view.
-    int from = m_sentence;
-    if (from >= m_book->sentenceCount() || m_book->sentences.at(from).chapter != m_chapter)
-        from = qMax(0, m_book->sentenceAt(m_chapter, m_anchorParagraph));
-    m_narrator->toggle(from);
+    m_narrator->toggle(startingSentence());
+}
+
+void Reader::showSentence(int sentence) {
+    if (!m_book || sentence < 0 || sentence >= m_book->sentenceCount())
+        return;
+    const Sentence &s = m_book->sentences.at(sentence);
+    if (sentence == m_sentence && s.chapter == m_chapter)
+        return;
+    m_sentence = sentence;
+    if (s.chapter != m_chapter)
+        setChapter(s.chapter, s.paragraph);
+    m_anchorParagraph = s.paragraph;
+    emit progressChanged();
+    m_saveTimer.start();
 }
 
 void Reader::followNarrator() {
